@@ -9,7 +9,7 @@ runs one thing at a time and reports medians, so speed claims can be reproduced.
 - build: median of --builds builds with uv's (and the tools') caches warm.
 
 Usage:
-    uv run gauntlet/bench.py                          # 03 and 13 on Python 3.12
+    uv run gauntlet/bench.py                          # 03, 13 and 21 on Python 3.12
     uv run gauntlet/bench.py --python 3.9 03 --tool bundleup --tool venv
 """
 
@@ -103,7 +103,7 @@ def bench(tool, project, version, runs, cold_runs, builds) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("only", nargs="*", default=["03", "13"], help="project id prefixes")
+    parser.add_argument("only", nargs="*", default=["03", "13", "21"], help="project id prefixes")
     parser.add_argument("--tool", action="append", choices=TOOLS)
     parser.add_argument("--python", action="append", choices=list(rb.PYTHONS))
     parser.add_argument("--runs", type=int, default=20)

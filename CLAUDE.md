@@ -40,8 +40,8 @@ Do these **as you go**, not only at the end:
 
 ## Current state
 
-- Done: research (2 rounds), mission/vision, gauntlet of 21 projects, baseline of pex/shiv/zipapps
-  ([findings](docs/findings/2026-10-03-baseline.md)).
+- Done: research (2 rounds), mission/vision, gauntlet of 22 projects (21 is the large pure-Python
+  performance check), baseline of pex/shiv/zipapps ([findings](docs/findings/2026-10-03-baseline.md)).
 - Named `bundleup` ([ADR-0009](docs/adr/0009-name-bundleup.md)); repo github.com/funkyfunc/bundleup.
   PyPI has only the 0.0.1 placeholder; the working bundler isn't released yet.
 - **Milestone 1 done (2026-10-04):** `bundleup <project-dir | script.py>` builds `dist/<name>.pyz`
@@ -53,9 +53,15 @@ Do these **as you go**, not only at the end:
   [ADR-0010](docs/adr/0010-bundle-format-and-loader.md) (format, loader, cache) and
   [ADR-0011](docs/adr/0011-cli-and-build-pipeline.md) (CLI, pipeline), both **Proposed**: awaiting
   the user's review.
-- Next: user review of ADR-0010/0011; Linux runs (CI); cross-platform and multi-platform bundles;
-  the build-time analyzer (`bundleup check`); `pylock.toml` input; cache cleanup. See the
-  findings' "Gaps and next steps".
+- bundleup depends on the `uv` package (bundled binary) but prefers a uv ≥ 0.9 on `PATH`
+  (ADR-0011, at the user's request).
+- Build speed on large projects is no better than pex (gauntlet 21: 5.2 vs 5.5 s); fixes are in
+  Python (threaded compression, per-wheel `.pyc` cache). Rust stays reserved for the analyzer's
+  scanner, which a parse-only proxy puts at ADR-0008's trigger
+  ([findings](docs/findings/2026-10-04-large-project-and-rust.md)).
+- Next: user review of ADR-0010/0011; faster large builds (above); Linux runs (CI); cross-platform
+  and multi-platform bundles; the build-time analyzer (`bundleup check`); `pylock.toml` input;
+  cache cleanup.
 
 ## Layout
 

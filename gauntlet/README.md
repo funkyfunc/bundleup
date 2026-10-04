@@ -43,7 +43,7 @@ with `--tool`, `--python` and id prefixes. Scratch output goes to `gauntlet/.wor
 ## Measuring speed
 
 ```bash
-uv run gauntlet/bench.py                                   # 03 and 13 on 3.12: venv, bundleup, shiv, pex
+uv run gauntlet/bench.py                                   # 03, 13, 21 on 3.12: venv, bundleup, shiv, pex
 uv run gauntlet/bench.py 03 --python 3.9 --tool bundleup --out <name>
 ```
 
@@ -81,6 +81,7 @@ Latest analysis: [docs/findings/2026-10-04-milestone-1.md](../docs/findings/2026
 | `18-sdist-only-dep` | docopt has no wheel, only an sdist | pass |
 | `19-subprocess-sys-executable` | Child `sys.executable -c "import click"` must see the bundle's dependencies | pass |
 | `20-heavy-ml` | PyTorch + NumPy; size reporting. Marked `heavy`, skipped by default | pass |
+| `21-large-pure-python` | ~8,000 files / 44 MB of pure-Python source (sympy, Django, boto3, networkx): the performance check for compile, zip, extract and analysis; Django locale and botocore model data files | pass |
 
 ## `gauntlet.toml`
 

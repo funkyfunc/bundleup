@@ -6,6 +6,18 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-04** · build · On a large pure-Python project (21: 44 MB of source) bundleup's build is
+  no faster than pex (5.2 vs 5.5 s): zip 3.1 s and bytecode compile 1.3 s dominate; uv's install is
+  0.2 s. zlib releases the GIL, so threads cut compression 2–5×; compiling must be done by the
+  target Python, so the fix there is caching per wheel, not another language. Evidence:
+  [large project](findings/2026-10-04-large-project-and-rust.md).
+- **2026-10-04** · analyzer · Just `ast.parse` + walking every node takes 5.2 s for 21 and 10.5 s
+  for PyTorch's 98 MB of source in one process (0.8 s / 1.6 s on 8 processes): a pure-Python
+  scanner sits at ADR-0008's Rust trigger before doing any analysis. Evidence:
+  [large project](findings/2026-10-04-large-project-and-rust.md#experiment-2-what-would-the-analyzers-scan-cost).
+- **2026-10-04** · ecosystem · Django finds its translation catalogs through its package directory,
+  so it fails inside a zip (*"No translation files found for default language en"*) with zipapps
+  and plain zipapp. Evidence: gauntlet 21.
 - **2026-10-04** · environment · `/usr/bin/python3` on macOS is an `xcrun` shim: ~5 ms slower to
   start than the interpreter it launches (16.5 vs 11 ms for `-c pass`). A venv's console script
   skips it; `python3 app.pyz` can't. Compare start-up with the same binary. Evidence:

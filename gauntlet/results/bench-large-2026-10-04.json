@@ -1,0 +1,38 @@
+[
+  {
+    "tool": "venv",
+    "project": "21-large-pure-python",
+    "python": "3.12",
+    "build_ms": null,
+    "first_run_ms": null,
+    "warm_ms": 353.3,
+    "warm_min_ms": 344.9
+  },
+  {
+    "tool": "bundleup",
+    "project": "21-large-pure-python",
+    "python": "3.12",
+    "build_ms": 5188.4,
+    "first_run_ms": 1403.5,
+    "warm_ms": 352.4,
+    "warm_min_ms": 349.5
+  },
+  {
+    "tool": "shiv",
+    "project": "21-large-pure-python",
+    "python": "3.12",
+    "build_ms": 7749.0,
+    "first_run_ms": 2591.5,
+    "warm_ms": 415.7,
+    "warm_min_ms": 408.6
+  },
+  {
+    "tool": "pex",
+    "project": "21-large-pure-python",
+    "python": "3.12",
+    "build_ms": 5451.4,
+    "first_run_ms": 3689.2,
+    "warm_ms": 1139.2,
+    "warm_min_ms": 1130.6
+  }
+]

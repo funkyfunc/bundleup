@@ -1,0 +1,7 @@
+id = "21-large-pure-python"
+title = "A lot of pure-Python code"
+tier = 6
+exercises = "About 8,000 files and 44 MB of Python source (sympy, Django, boto3/botocore, networkx), all pure Python. The performance check for anything that scales with the amount of code: compiling, zipping, extracting, and the future analyzer's scan. Also needs data files: Django's translation catalogs and botocore's service models."
+entry = "g21_large:main"
+expect = "pass"
+notes = "Unlike 20-heavy-ml (big native binaries, a large download, skipped by default), this one downloads ~35 MB and runs everywhere, including macOS's Python 3.9. The universal lock forks: Django 4.2 and an older networkx on 3.9."
