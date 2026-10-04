@@ -89,12 +89,29 @@ def run(cmd: list[str], cwd: Path | None = None, what: str = "") -> str:
     return proc.stdout
 
 
+MIN_UV = (0, 9)  # oldest uv whose CLI we rely on (export --no-editable, python find --script)
+
+
 def find_uv() -> str:
-    uv = shutil.which("uv")
-    if not uv:
-        raise BuildError("bundleup needs uv to resolve and install dependencies.\n"
-                         "Install it: https://docs.astral.sh/uv/getting-started/installation/")
-    return uv
+    """The user's own uv if it's recent enough (it wrote their uv.lock), else the one bundleup depends on."""
+    on_path = shutil.which("uv")
+    if on_path:
+        try:
+            out = subprocess.run([on_path, "--version"], capture_output=True, text=True, timeout=10).stdout
+            if tuple(int(x) for x in out.split()[1].split(".")[:2]) >= MIN_UV:
+                return on_path
+        except (OSError, ValueError, IndexError, subprocess.TimeoutExpired):
+            pass
+    try:
+        from uv import find_uv_bin
+
+        return find_uv_bin()
+    except (ImportError, FileNotFoundError):
+        pass
+    if on_path:
+        return on_path  # too old or unrecognised, but better than nothing; uv's own errors will say why
+    raise BuildError("bundleup needs uv to resolve and install dependencies, and couldn't find it.\n"
+                     "Reinstall bundleup, or install uv: https://docs.astral.sh/uv/getting-started/installation/")
 
 
 def load_source(path: Path) -> Source:

@@ -182,3 +182,14 @@ def test_cli_explains_missing_project(tmp_path, capsys):
 def test_script_metadata_parsing():
     assert b.script_metadata(PROBE) == {"requires-python": ">=3.9", "dependencies": []}
     assert b.script_metadata("print('no block')") == {}
+
+
+def test_builds_without_uv_on_path(tmp_path):
+    """bundleup depends on the `uv` package, so it works where uv was never installed (pipx, plain pip)."""
+    src = tmp_path / "probe.py"
+    src.write_text(PROBE)
+    bundleup = Path(sys.executable).with_name("bundleup")
+    r = subprocess.run([str(bundleup), str(src), "-o", str(tmp_path / "p.pyz"), "--python", sys.executable, "-q"],
+                       env={"PATH": "/usr/bin:/bin", "HOME": os.environ["HOME"]}, capture_output=True, text=True)
+    assert r.returncode == 0, r.stderr
+    assert probe(tmp_path / "p.pyz", env_for(tmp_path))["argv"] == []

@@ -20,6 +20,7 @@ classifiers = [
 dependencies = [
     "packaging>=23",
     "tomli>=1.1; python_version < '3.11'",
+    "uv>=0.9",
 ]
 
 [project.urls]

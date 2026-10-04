@@ -2,7 +2,8 @@
 
 - **Status:** Proposed
 - **Date:** 2026-10-04
-- **Deciders:** an agent (milestone 1), awaiting the user
+- **Deciders:** an agent (milestone 1); the user asked for uv as a dependency (2026-10-04). The rest
+  awaits the user's review
 
 ## Context
 
@@ -51,9 +52,12 @@ the output path, size, target and package count, then the time taken.
 5. Write the payload and the bundle ([ADR-0010](0010-bundle-format-and-loader.md)); the output is
    written to a temporary file and renamed, so a failed build never leaves a half-written bundle.
 
-**Dependencies.** bundleup depends on `packaging` (specifiers, name normalisation) and `tomli` on
-Python < 3.11. uv is found on `PATH` and is not a Python dependency; a missing uv is a plain error
-with an install link. bundleup itself still runs on Python ≥ 3.9.
+**Dependencies.** bundleup depends on `packaging` (specifiers, name normalisation), `tomli` on
+Python < 3.11, and **`uv`**: the PyPI package that ships uv's binary, the way esbuild ships its
+binary through npm. So `pipx install bundleup` or `pip install bundleup` works on a machine that
+never had uv. Which uv runs: **the user's own uv on `PATH` if it's at least 0.9** (it's the one that
+wrote and maintains their `uv.lock`, with their configuration), otherwise the bundled one. bundleup
+itself still runs on Python ≥ 3.9.
 
 ## Consequences
 
@@ -62,8 +66,10 @@ with an install link. bundleup itself still runs on Python ≥ 3.9.
 - Projects with several console scripts need `-e`. Projects with none need `-e`, or a
   `[project.scripts]` entry.
 - `pylock.toml` and `requirements.txt` inputs (ADR-0006) aren't wired up yet.
-- Depending on uv on `PATH` means pipx users without uv get an error. Depending on the `uv` PyPI
-  package instead is possible later if that turns out to be common.
+- Installing bundleup downloads a ~35 MB uv binary even for people who already have uv. Accepted:
+  "works on any machine" matters more than download size for a build tool.
+- Two uv versions can be in play. Preferring the user's keeps their lockfile and config consistent;
+  the bundled one is a floor, not a pin. `uv --version` costs one fast subprocess per build.
 
 ## Alternatives considered
 
@@ -73,6 +79,10 @@ with an install link. bundleup itself still runs on Python ≥ 3.9.
   the project; uv's choice respects `.python-version` and `requires-python`.
 - **Always `--locked`:** stricter, but surprising for people used to `uv run` re-locking; offered
   as a flag instead.
+- **uv only from `PATH`** (the first version of this ADR): a smaller install, but anyone without uv
+  gets an error before anything else, which isn't "dead simple".
+- **Always the bundled uv:** fully predictable, but a lockfile written by a newer uv on `PATH` might
+  not be readable by an older bundled one.
 - **`uv sync` into a temporary venv and copy site-packages:** more moving parts than `--target`
   and harder to point at a different interpreter.
 
