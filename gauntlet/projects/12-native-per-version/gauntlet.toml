@@ -1,0 +1,6 @@
+id = "12-native-per-version"
+title = "Native extension built per Python version"
+tier = 5
+exercises = "pydantic-core ships a separate Rust extension for each CPython minor version (cp39, cp310, ...). A bundle needs one wheel per Python version per platform."
+entry = "g12_perversion:main"
+expect = "pass"

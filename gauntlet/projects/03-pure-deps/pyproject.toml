@@ -1,0 +1,12 @@
+[project]
+name = "g03-puredeps"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = ["click>=8", "attrs>=23", "packaging>=23", "tomli-w>=1"]
+
+[project.scripts]
+g03 = "g03_puredeps:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

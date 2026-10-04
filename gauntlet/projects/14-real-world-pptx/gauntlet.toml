@@ -1,0 +1,6 @@
+id = "14-real-world-pptx"
+title = "Real world: generate a PowerPoint file"
+tier = 6
+exercises = "The case that started this project. python-pptx loads its default template via __file__ and depends on lxml and Pillow (both native). Mixes data files and native code."
+entry = "g14_pptx:main"
+expect = "pass"

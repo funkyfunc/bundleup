@@ -1,0 +1,6 @@
+id = "00-hello-script"
+title = "Single file, standard library only"
+tier = 0
+exercises = "The happy path: one PEP 723 script with no dependencies."
+script = "hello.py"
+expect = "pass"

@@ -1,0 +1,12 @@
+[project]
+name = "g17-modern"
+version = "0.1.0"
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+g17 = "g17_modern:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

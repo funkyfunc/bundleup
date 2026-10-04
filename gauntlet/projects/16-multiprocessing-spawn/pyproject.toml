@@ -1,0 +1,12 @@
+[project]
+name = "g16-spawn"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = []
+
+[project.scripts]
+g16 = "g16_spawn:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

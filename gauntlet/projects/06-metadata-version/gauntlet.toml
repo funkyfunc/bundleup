@@ -1,0 +1,6 @@
+id = "06-metadata-version"
+title = "Reading package versions at runtime"
+tier = 2
+exercises = "importlib.metadata.version() for the project itself and for a dependency. Needs the .dist-info directories to survive bundling."
+entry = "g06_metadata:main"
+expect = "pass"

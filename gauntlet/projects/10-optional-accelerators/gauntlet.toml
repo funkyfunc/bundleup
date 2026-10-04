@@ -1,0 +1,7 @@
+id = "10-optional-accelerators"
+title = "Optional compiled speedups with pure-Python fallbacks"
+tier = 4
+exercises = "PyYAML (optional LibYAML C loader) and charset-normalizer (mypyc-compiled wheels on most platforms). Both must work whether or not the compiled path loads; the program reports which path it got."
+entry = "g10_accel:main"
+expect = "pass"
+notes = "A bundle that silently loses the compiled path still passes, but should be reported: it is a performance regression."

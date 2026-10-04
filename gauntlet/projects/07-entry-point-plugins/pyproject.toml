@@ -1,0 +1,18 @@
+[project]
+name = "g07-host"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = ["g07-plugin-shout"]
+
+[project.scripts]
+g07 = "g07_host:main"
+
+[tool.uv.sources]
+g07-plugin-shout = { workspace = true }
+
+[tool.uv.workspace]
+members = ["packages/*"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

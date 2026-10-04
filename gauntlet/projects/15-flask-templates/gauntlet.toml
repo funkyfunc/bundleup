@@ -1,0 +1,7 @@
+id = "15-flask-templates"
+title = "Web framework serving templates and static files from disk"
+tier = 6
+exercises = "Flask finds templates/ and static/ relative to the package's root path and reads them with a filesystem loader. Frameworks are a known zip-safety problem."
+entry = "g15_flask:main"
+expect = "pass"
+notes = "Uses Flask's test client, so no server or network is needed."

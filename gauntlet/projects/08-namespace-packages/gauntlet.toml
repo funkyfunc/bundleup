@@ -1,0 +1,6 @@
+id = "08-namespace-packages"
+title = "One namespace package split across two distributions"
+tier = 2
+exercises = "PEP 420 namespace packages: acme.core and acme.extras come from different distributions and neither ships acme/__init__.py."
+entry = "g08_app:main"
+expect = "pass"

@@ -1,0 +1,7 @@
+id = "16-multiprocessing-spawn"
+title = "multiprocessing with the spawn start method"
+tier = 7
+exercises = "Spawned workers start a fresh interpreter that must re-import the program's modules. Inside a bundle, the child has to find the same code the parent did."
+entry = "g16_spawn:main"
+expect = "pass"
+notes = "spawn is the default start method on macOS and Windows."

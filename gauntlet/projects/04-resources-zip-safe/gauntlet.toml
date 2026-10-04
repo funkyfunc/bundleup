@@ -1,0 +1,6 @@
+id = "04-resources-zip-safe"
+title = "Data files read the zip-safe way"
+tier = 2
+exercises = "importlib.resources for first-party data, and certifi's CA bundle (which certifi exposes as a real file path)."
+entry = "g04_resources:main"
+expect = "pass"

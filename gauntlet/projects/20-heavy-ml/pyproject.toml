@@ -1,0 +1,12 @@
+[project]
+name = "g20-torch"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = ["torch>=2.2", "numpy"]
+
+[project.scripts]
+g20 = "g20_torch:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

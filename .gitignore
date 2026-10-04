@@ -218,3 +218,13 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# --- bundleup ---
+.DS_Store
+
+# Bundles produced while testing
+*.pyz
+*.pex
+
+# Gauntlet build/run scratch space
+gauntlet/.work/

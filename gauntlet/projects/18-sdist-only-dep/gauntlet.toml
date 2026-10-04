@@ -1,0 +1,8 @@
+id = "18-sdist-only-dep"
+title = "A dependency published only as source"
+tier = 7
+exercises = "docopt 0.6.2 has no wheel on PyPI, only an sdist. It has to be built before it can be bundled, and a bundler that only downloads wheels for other platforms will not find one."
+entry = "g18_sdist:main"
+args = ["ship", "--speed=10"]
+expect = "pass"
+notes = "Pure Python, so building it on any host is safe. A native sdist-only dependency could not be built for other platforms and should be refused."

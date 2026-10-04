@@ -1,0 +1,6 @@
+id = "03-pure-deps"
+title = "Several pure-Python dependencies"
+tier = 1
+exercises = "A small dependency tree with no native code: the case every bundler should handle."
+entry = "g03_puredeps:main"
+expect = "pass"

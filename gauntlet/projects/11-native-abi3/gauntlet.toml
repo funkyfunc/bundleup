@@ -1,0 +1,6 @@
+id = "11-native-abi3"
+title = "Native extension built against the stable ABI (abi3)"
+tier = 5
+exercises = "cryptography ships Rust extensions as abi3 wheels: one wheel per platform covers every CPython version. Native code must be extracted to disk."
+entry = "g11_abi3:main"
+expect = "pass"

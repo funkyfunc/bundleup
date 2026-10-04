@@ -1,0 +1,7 @@
+id = "07-entry-point-plugins"
+title = "Plugins discovered through entry points"
+tier = 2
+exercises = "A host app finds plugins via importlib.metadata.entry_points(). The plugin is a separate local distribution (a uv workspace member)."
+entry = "g07_host:main"
+expect = "pass"
+notes = "If .dist-info/entry_points.txt is dropped, discovery silently returns nothing."

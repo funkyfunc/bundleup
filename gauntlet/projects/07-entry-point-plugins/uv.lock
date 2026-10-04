@@ -1,0 +1,25 @@
+version = 1
+revision = 3
+requires-python = ">=3.9"
+
+[manifest]
+members = [
+    "g07-host",
+    "g07-plugin-shout",
+]
+
+[[package]]
+name = "g07-host"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "g07-plugin-shout" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "g07-plugin-shout", editable = "packages/g07-plugin-shout" }]
+
+[[package]]
+name = "g07-plugin-shout"
+version = "0.1.0"
+source = { editable = "packages/g07-plugin-shout" }

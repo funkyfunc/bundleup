@@ -1,0 +1,12 @@
+[project]
+name = "g19-subproc"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = ["click>=8"]
+
+[project.scripts]
+g19 = "g19_subproc:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

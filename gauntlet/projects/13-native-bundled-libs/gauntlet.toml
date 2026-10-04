@@ -1,0 +1,6 @@
+id = "13-native-bundled-libs"
+title = "Native extension that loads its own shared libraries"
+tier = 6
+exercises = "NumPy wheels vendor OpenBLAS and other shared libraries (numpy/.dylibs, numpy.libs) found through relative rpaths. Extraction must preserve the directory layout."
+entry = "g13_numpy:main"
+expect = "pass"

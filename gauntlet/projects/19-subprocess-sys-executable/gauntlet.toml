@@ -1,0 +1,6 @@
+id = "19-subprocess-sys-executable"
+title = "Child processes that import the program's dependencies"
+tier = 7
+exercises = "Running [sys.executable, '-m', ...] or [sys.executable, '-c', ...] starts a new interpreter that does not inherit the bundle's sys.path. Common in tools that shell out to themselves."
+entry = "g19_subproc:main"
+expect = "pass"

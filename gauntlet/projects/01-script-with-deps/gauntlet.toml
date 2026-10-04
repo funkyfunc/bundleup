@@ -1,0 +1,7 @@
+id = "01-script-with-deps"
+title = "Single file with inline dependencies"
+tier = 1
+exercises = "A PEP 723 script whose dependencies are declared inline rather than in a pyproject.toml."
+script = "greet.py"
+args = ["--name", "gauntlet"]
+expect = "pass"

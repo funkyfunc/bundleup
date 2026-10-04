@@ -1,0 +1,12 @@
+[project]
+name = "g18-sdist"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = ["docopt==0.6.2"]
+
+[project.scripts]
+g18 = "g18_sdist:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

@@ -1,0 +1,7 @@
+id = "05-dunder-file-data"
+title = "Data files located with __file__"
+tier = 2
+exercises = "The most common zip-unsafe pattern: Path(__file__).parent / 'templates'. Also pytz, which tries __file__ first and falls back to importlib.resources."
+entry = "g05_dunderfile:main"
+expect = "pass"
+notes = "Fails inside an unextracted zip. A bundler must either extract this package or warn."

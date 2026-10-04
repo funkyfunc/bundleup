@@ -1,0 +1,8 @@
+id = "20-heavy-ml"
+title = "Heavy ML dependency"
+tier = 8
+exercises = "PyTorch: hundreds of MB per platform, and on Linux the default PyPI build pulls CUDA libraries. Tests size reporting and whether the tool asks before producing a huge artifact."
+entry = "g20_torch:main"
+expect = "pass"
+heavy = true
+notes = "Skipped by default. The interesting output is the size report and how the tool handles platform-specific extras, not just pass/fail."

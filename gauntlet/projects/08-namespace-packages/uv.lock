@@ -1,0 +1,35 @@
+version = 1
+revision = 3
+requires-python = ">=3.9"
+
+[manifest]
+members = [
+    "acme-core",
+    "acme-extras",
+    "g08-app",
+]
+
+[[package]]
+name = "acme-core"
+version = "0.1.0"
+source = { editable = "packages/acme-core" }
+
+[[package]]
+name = "acme-extras"
+version = "0.1.0"
+source = { editable = "packages/acme-extras" }
+
+[[package]]
+name = "g08-app"
+version = "0.1.0"
+source = { editable = "." }
+dependencies = [
+    { name = "acme-core" },
+    { name = "acme-extras" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "acme-core", editable = "packages/acme-core" },
+    { name = "acme-extras", editable = "packages/acme-extras" },
+]

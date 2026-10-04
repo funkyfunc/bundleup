@@ -1,0 +1,7 @@
+id = "09-dynamic-imports"
+title = "Modules imported by name at runtime"
+tier = 3
+exercises = "importlib.import_module() with a computed name (first-party), and Pygments, which loads lexers lazily by name. Import tracing alone misses these."
+entry = "g09_dynamic:main"
+args = ["csv"]
+expect = "pass"

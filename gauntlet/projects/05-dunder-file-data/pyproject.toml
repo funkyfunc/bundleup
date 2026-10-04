@@ -1,0 +1,12 @@
+[project]
+name = "g05-dunderfile"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = ["pytz"]
+
+[project.scripts]
+g05 = "g05_dunderfile:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

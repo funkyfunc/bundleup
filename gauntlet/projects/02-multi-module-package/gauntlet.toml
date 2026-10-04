@@ -1,0 +1,6 @@
+id = "02-multi-module-package"
+title = "First-party package with relative imports, no dependencies"
+tier = 1
+exercises = "src layout, subpackages, relative imports, a __main__ module and a console-script entry point."
+entry = "g02_multimodule.cli:main"
+expect = "pass"

@@ -1,0 +1,8 @@
+id = "17-modern-syntax"
+title = "Code that needs Python 3.12"
+tier = 7
+exercises = "PEP 695 generics and type aliases, and PEP 701 f-strings. requires-python is >=3.12."
+entry = "g17_modern:main"
+expect = "pass"
+expect_refuse_below = "3.12"
+notes = "A bundler asked to target an older Python must refuse at build time, not fail with a SyntaxError on the user's machine."
