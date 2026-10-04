@@ -33,12 +33,28 @@ uv run gauntlet/run_bundlers.py --conditions --out <name>
 uv run gauntlet/report.py gauntlet/results/<name>.json > gauntlet/results/<name>.md
 ```
 
-Builds every project with pex, shiv, zipapps and a naive `pip --target` + `zipapp`, for Python 3.9
-and 3.12, then runs each bundle with network blocked from an empty directory. `--conditions` adds
+Builds every project with bundleup (this repo's, via `uv sync`), pex, shiv, zipapps and a naive
+`pip --target` + `zipapp`, for Python 3.9 and 3.12, then runs each bundle with network blocked from an
+empty directory. bundleup is given the project directory itself; the other tools get pre-exported
+requirements and a pre-built wheel, so bundleup's build time includes work theirs doesn't. `--conditions` adds
 the hostile runs (spaces in path, read-only cwd, read-only HOME, simultaneous first runs). Filter
 with `--tool`, `--python` and id prefixes. Scratch output goes to `gauntlet/.work/` (git-ignored).
 
-Latest analysis: [docs/findings/2026-10-03-baseline.md](../docs/findings/2026-10-03-baseline.md).
+## Measuring speed
+
+```bash
+uv run gauntlet/bench.py                                   # 03 and 13 on 3.12: venv, bundleup, shiv, pex
+uv run gauntlet/bench.py 03 --python 3.9 --tool bundleup --out <name>
+```
+
+`run_bundlers.py` runs builds in parallel, so its timings are noisy. `bench.py` runs one thing at a
+time and reports medians: build (warm caches), first run (fresh `HOME`, so nothing cached) and warm
+start, with an installed venv as the floor. Use it for any speed claim, and compare tools from the
+same run.
+
+Latest analysis: [docs/findings/2026-10-04-milestone-1.md](../docs/findings/2026-10-04-milestone-1.md)
+(bundleup) and [docs/findings/2026-10-03-baseline.md](../docs/findings/2026-10-03-baseline.md)
+(existing tools).
 
 ## Projects
 

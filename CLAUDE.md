@@ -43,16 +43,26 @@ Do these **as you go**, not only at the end:
 - Done: research (2 rounds), mission/vision, gauntlet of 21 projects, baseline of pex/shiv/zipapps
   ([findings](docs/findings/2026-10-03-baseline.md)).
 - Named `bundleup` ([ADR-0009](docs/adr/0009-name-bundleup.md)); repo github.com/funkyfunc/bundleup.
-- Placeholder package `bundleup` 0.0.1 (`src/bundleup/`, uv_build): the CLI only prints a
-  pre-alpha notice. It exists to claim the PyPI name; the real bundler replaces `cli.py`.
-- Next: close coverage gaps (Linux/cross-platform runs), then prototype the build-time analyzer
-  and the bundler.
+  PyPI has only the 0.0.1 placeholder; the working bundler isn't released yet.
+- **Milestone 1 done (2026-10-04):** `bundleup <project-dir | script.py>` builds `dist/<name>.pyz`
+  for the current platform and one Python version. Passes every gauntlet project on 3.9 and 3.12
+  (incl. 19, child processes) and every hostile condition; first run faster than shiv; warm start
+  equal to an installed venv (on 3.9, only when both use the same binary: `/usr/bin/python3`'s
+  xcrun shim adds ~5 ms); builds 1.8–6× faster than pex
+  ([findings](docs/findings/2026-10-04-milestone-1.md)). Design in
+  [ADR-0010](docs/adr/0010-bundle-format-and-loader.md) (format, loader, cache) and
+  [ADR-0011](docs/adr/0011-cli-and-build-pipeline.md) (CLI, pipeline), both **Proposed**: awaiting
+  the user's review.
+- Next: user review of ADR-0010/0011; Linux runs (CI); cross-platform and multi-platform bundles;
+  the build-time analyzer (`bundleup check`); `pylock.toml` input; cache cleanup. See the
+  findings' "Gaps and next steps".
 
 ## Layout
 
 ```
 MISSION.md              goal and scope
-pyproject.toml, src/bundleup/  the bundleup package (placeholder CLI for now)
+pyproject.toml, src/bundleup/  the bundleup package: cli.py, build.py, _loader.py (bundle's __main__)
+tests/                  pytest: loader/CLI edge cases the gauntlet doesn't reach
 docs/roadmap.md         possible future directions (each needs an ADR first)
 docs/adr/               decisions (ADRs)
 docs/learnings.md       lessons log
@@ -60,7 +70,8 @@ docs/findings/          experiment write-ups
 docs/research/          research reports, prompts, verification notes
 gauntlet/projects/      test projects, one failure mode each (gauntlet.toml describes each)
 gauntlet/check_native.py  control group: projects run installed normally
-gauntlet/run_bundlers.py  build + run with existing bundlers, hostile conditions
+gauntlet/run_bundlers.py  build + run with bundleup and existing bundlers, hostile conditions
+gauntlet/bench.py       sequential speed benchmark (build, first run, warm start) vs venv/shiv/pex
 gauntlet/report.py      results JSON -> markdown
 gauntlet/results/       committed results
 gauntlet/.work/         scratch (git-ignored)
@@ -72,6 +83,10 @@ gauntlet/.work/         scratch (git-ignored)
 uv run gauntlet/check_native.py                       # control group: must all pass
 uv run gauntlet/run_bundlers.py --conditions --out <name>
 uv run gauntlet/report.py gauntlet/results/<name>.json > gauntlet/results/<name>.md
+uv run gauntlet/run_bundlers.py --tool bundleup --conditions --out <name>   # just bundleup
+uv run gauntlet/bench.py 03 13 --python 3.12 --python 3.9                   # speed claims
+uv run pytest -q tests                                                      # loader/CLI edge cases
+uv run bundleup <project-or-script> [-p 3.9] [-o out.pyz]                   # try it
 ```
 
 ## Working rules

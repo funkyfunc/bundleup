@@ -1,0 +1,146 @@
+[
+  {
+    "tool": "venv",
+    "project": "03-pure-deps",
+    "python": "3.12",
+    "build_ms": null,
+    "first_run_ms": null,
+    "warm_ms": 29.0,
+    "warm_min_ms": 28.0
+  },
+  {
+    "tool": "bundleup",
+    "project": "03-pure-deps",
+    "python": "3.12",
+    "build_ms": 245.4,
+    "first_run_ms": 47.4,
+    "warm_ms": 28.7,
+    "warm_min_ms": 28.1
+  },
+  {
+    "tool": "shiv",
+    "project": "03-pure-deps",
+    "python": "3.12",
+    "build_ms": 585.2,
+    "first_run_ms": 104.6,
+    "warm_ms": 41.6,
+    "warm_min_ms": 38.9
+  },
+  {
+    "tool": "pex",
+    "project": "03-pure-deps",
+    "python": "3.12",
+    "build_ms": 1469.1,
+    "first_run_ms": 858.2,
+    "warm_ms": 396.5,
+    "warm_min_ms": 378.7
+  },
+  {
+    "tool": "venv",
+    "project": "03-pure-deps",
+    "python": "3.9",
+    "build_ms": null,
+    "first_run_ms": null,
+    "warm_ms": 34.7,
+    "warm_min_ms": 34.0
+  },
+  {
+    "tool": "bundleup",
+    "project": "03-pure-deps",
+    "python": "3.9",
+    "build_ms": 360.7,
+    "first_run_ms": 220.7,
+    "warm_ms": 42.5,
+    "warm_min_ms": 40.1
+  },
+  {
+    "tool": "shiv",
+    "project": "03-pure-deps",
+    "python": "3.9",
+    "build_ms": 1240.3,
+    "first_run_ms": 281.9,
+    "warm_ms": 51.7,
+    "warm_min_ms": 50.7
+  },
+  {
+    "tool": "pex",
+    "project": "03-pure-deps",
+    "python": "3.9",
+    "build_ms": 1853.3,
+    "first_run_ms": 924.9,
+    "warm_ms": 256.0,
+    "warm_min_ms": 245.1
+  },
+  {
+    "tool": "venv",
+    "project": "13-native-bundled-libs",
+    "python": "3.12",
+    "build_ms": null,
+    "first_run_ms": null,
+    "warm_ms": 38.6,
+    "warm_min_ms": 37.0
+  },
+  {
+    "tool": "bundleup",
+    "project": "13-native-bundled-libs",
+    "python": "3.12",
+    "build_ms": 994.5,
+    "first_run_ms": 591.0,
+    "warm_ms": 39.9,
+    "warm_min_ms": 37.1
+  },
+  {
+    "tool": "shiv",
+    "project": "13-native-bundled-libs",
+    "python": "3.12",
+    "build_ms": 1685.7,
+    "first_run_ms": 666.0,
+    "warm_ms": 52.2,
+    "warm_min_ms": 49.7
+  },
+  {
+    "tool": "pex",
+    "project": "13-native-bundled-libs",
+    "python": "3.12",
+    "build_ms": 1823.9,
+    "first_run_ms": 1463.9,
+    "warm_ms": 424.5,
+    "warm_min_ms": 418.3
+  },
+  {
+    "tool": "venv",
+    "project": "13-native-bundled-libs",
+    "python": "3.9",
+    "build_ms": null,
+    "first_run_ms": null,
+    "warm_ms": 45.2,
+    "warm_min_ms": 43.5
+  },
+  {
+    "tool": "bundleup",
+    "project": "13-native-bundled-libs",
+    "python": "3.9",
+    "build_ms": 1236.2,
+    "first_run_ms": 944.8,
+    "warm_ms": 50.2,
+    "warm_min_ms": 48.7
+  },
+  {
+    "tool": "shiv",
+    "project": "13-native-bundled-libs",
+    "python": "3.9",
+    "build_ms": 2171.6,
+    "first_run_ms": 1026.8,
+    "warm_ms": 66.7,
+    "warm_min_ms": 64.6
+  },
+  {
+    "tool": "pex",
+    "project": "13-native-bundled-libs",
+    "python": "3.9",
+    "build_ms": 2405.1,
+    "first_run_ms": 1710.5,
+    "warm_ms": 296.5,
+    "warm_min_ms": 289.8
+  }
+]

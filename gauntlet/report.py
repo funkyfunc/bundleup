@@ -26,7 +26,7 @@ def mb(n):
 def main(path: str) -> None:
     rows = json.load(open(path))
     base = [r for r in rows if r["condition"] == "base"]
-    tools = sorted({r["tool"] for r in rows}, key=["pex", "shiv", "zipapps", "zipapp-naive"].index)
+    tools = sorted({r["tool"] for r in rows}, key=["bundleup", "pex", "shiv", "zipapps", "zipapp-naive"].index)
     pythons = sorted({r["python"] for r in rows}, key=lambda v: tuple(map(int, v.split("."))))
     projects = sorted({r["project"] for r in rows})
 

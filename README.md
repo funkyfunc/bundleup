@@ -6,8 +6,24 @@ And it tells you *before* you ship what won't survive the trip.
 
 Dead simple to use, but also powerful and fast: esbuild's experience, for Python.
 
-> **Status: pre-alpha.** Research, positioning and the test suite are done; the bundler itself
-> isn't written yet. Nothing is published on PyPI.
+> **Status: pre-alpha.** The bundler works for the machine you build on (one platform, one Python
+> version per bundle) and passes the [gauntlet](https://github.com/funkyfunc/bundleup/blob/main/gauntlet/README.md)
+> on macOS. The PyPI release (0.0.1) is still a placeholder; run it from a checkout for now.
+
+## Usage
+
+```bash
+bundleup                        # the project in this directory -> dist/<name>.pyz
+bundleup path/to/script.py      # a PEP 723 script with inline dependencies
+bundleup --python 3.9           # build for another Python (a bundle runs on one Python version)
+python dist/<name>.pyz          # run it: no install, no network
+```
+
+bundleup reads `pyproject.toml` + `uv.lock` (or the script's `# /// script` block) and needs
+[uv](https://docs.astral.sh/uv/) at build time; the bundle needs only Python. On first run it
+unpacks to a cache (`~/Library/Caches/bundleup`, `~/.cache/bundleup`, or a temp directory if
+those aren't writable), so later runs start as fast as an installed virtualenv. If it's started
+with the wrong Python or on the wrong platform, it says so in one sentence.
 
 ## Why
 

@@ -1,7 +1,8 @@
 """Build every gauntlet project with each existing bundler, run the result, and record what happens.
 
-Every tool gets the same inputs: the project's locked dependencies exported from uv.lock (or the
-PEP 723 header) plus the project itself built as a wheel. Each bundle is built with the target
+Every existing tool gets the same inputs: the project's locked dependencies exported from uv.lock (or
+the PEP 723 header) plus the project itself built as a wheel. bundleup is given the project directory
+(or script) directly, so its build time also includes the export and the project build. Each bundle is built with the target
 Python, then run with that Python from an empty directory, a fresh HOME, and network access denied
 (macOS sandbox-exec), cold and then warm.
 
@@ -39,7 +40,9 @@ PROJECTS = ROOT / "projects"
 WORK = ROOT / ".work"
 RESULTS = ROOT / "results"
 
-TOOLS = {"pex": "pex==2.103.4", "shiv": "shiv==1.0.8", "zipapps": "zipapps==2026.4.17", "zipapp-naive": None}
+TOOLS = {"pex": "pex==2.103.4", "shiv": "shiv==1.0.8", "zipapps": "zipapps==2026.4.17", "zipapp-naive": None,
+         "bundleup": None}
+BUNDLEUP = ROOT.parent / ".venv" / "bin" / "bundleup"  # this repo's bundleup, installed by `uv sync`
 PYTHONS = {"3.9": "/usr/bin/python3", "3.12": None}  # None = ask uv
 NO_NETWORK = "(version 1)(allow default)(deny network*)"
 BUILD_TIMEOUT = 900
@@ -179,15 +182,19 @@ def one(tool: str, project: Path, version: str, conditions: bool) -> list[Result
     shutil.rmtree(stage, ignore_errors=True)
     out = stage / ("app.pex" if tool == "pex" else "app.pyz")
 
-    try:
-        reqs, wheels, script_dir = prepare(project, meta, stage / "inputs")
-    except subprocess.CalledProcessError as e:
-        res.outcome, res.detail = "build-fail", f"input preparation failed: {e}"
-        return [res]
+    if tool != "bundleup":
+        try:
+            reqs, wheels, script_dir = prepare(project, meta, stage / "inputs")
+        except subprocess.CalledProcessError as e:
+            res.outcome, res.detail = "build-fail", f"input preparation failed: {e}"
+            return [res]
 
     start = time.perf_counter()
     try:
-        if tool == "zipapp-naive":
+        if tool == "bundleup":
+            src = project / meta["script"] if "script" in meta else project
+            b = sh([str(BUNDLEUP), str(src), "--python", py, "-o", str(out), "--quiet"])
+        elif tool == "zipapp-naive":
             b = build_naive(py, reqs, wheels, script_dir, meta["entry"], out, stage)
         else:
             b = sh(build_command(tool, py, reqs, wheels, script_dir, meta["entry"], out))
@@ -286,6 +293,8 @@ def main() -> int:
             continue
         projects.append(p)
 
+    if "bundleup" in (opts.tool or TOOLS):
+        sh(["uv", "sync", "--quiet"], cwd=ROOT.parent).check_returncode()
     jobs = [(t, p, v) for t in (opts.tool or TOOLS) for p in projects for v in (opts.python or PYTHONS)]
     results: list[Result] = []
     with cf.ThreadPoolExecutor(opts.jobs) as pool:

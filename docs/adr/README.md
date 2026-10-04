@@ -18,3 +18,5 @@ and change only the old one's status line.
 | [0007](0007-gauntlet-is-the-contract.md) | The gauntlet is the acceptance test, and claims must be measured | Accepted |
 | [0008](0008-prototype-in-python.md) | Build in Python first, with a measured path to Rust | Accepted |
 | [0009](0009-name-bundleup.md) | Name the project `bundleup` | Accepted |
+| [0010](0010-bundle-format-and-loader.md) | Bundle format, loader and cache layout | Proposed |
+| [0011](0011-cli-and-build-pipeline.md) | CLI shape and build pipeline | Proposed |
