@@ -1,0 +1,32 @@
+[project]
+name = "bundleup"
+version = "0.0.1"
+description = "Bundle up your Python app with everything it needs: one .pyz that runs on plain Python, no install step. Pre-alpha."
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.9"
+authors = [{ name = "funkyfunc" }]
+keywords = ["bundler", "pyz", "zipapp", "packaging", "distribution", "cli"]
+classifiers = [
+    "Development Status :: 1 - Planning",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Topic :: Software Development :: Build Tools",
+    "Topic :: System :: Software Distribution",
+]
+dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/funkyfunc/bundleup"
+Repository = "https://github.com/funkyfunc/bundleup"
+Issues = "https://github.com/funkyfunc/bundleup/issues"
+
+[project.scripts]
+bundleup = "bundleup.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"

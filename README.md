@@ -21,17 +21,17 @@ Python has three ways to hand a program to someone else, and the middle one is m
 
 pex, shiv and zipapps can do parts of this. bundleup's bet is a much better experience on top of
 the same correct approach: no flags to get it fast, plain-language errors, and a pre-ship check.
-See [docs/vision.md](docs/vision.md).
+See [docs/vision.md](https://github.com/funkyfunc/bundleup/blob/main/docs/vision.md).
 
 ## Where to start reading
 
-- [MISSION.md](MISSION.md): goal, scope, what "done" means
-- [docs/vision.md](docs/vision.md): where bundleup fits and who it's for
-- [docs/roadmap.md](docs/roadmap.md): where it could go next
-- [docs/python-primer.md](docs/python-primer.md): Python packaging explained for JavaScript developers
-- [docs/adr/](docs/adr/README.md): decisions and why they were made
-- [docs/findings/2026-10-03-baseline.md](docs/findings/2026-10-03-baseline.md): how pex, shiv and zipapps fare today
-- [gauntlet/](gauntlet/README.md): the test projects every bundler is measured against
+- [MISSION.md](https://github.com/funkyfunc/bundleup/blob/main/MISSION.md): goal, scope, what "done" means
+- [docs/vision.md](https://github.com/funkyfunc/bundleup/blob/main/docs/vision.md): where bundleup fits and who it's for
+- [docs/roadmap.md](https://github.com/funkyfunc/bundleup/blob/main/docs/roadmap.md): where it could go next
+- [docs/python-primer.md](https://github.com/funkyfunc/bundleup/blob/main/docs/python-primer.md): Python packaging explained for JavaScript developers
+- [docs/adr/](https://github.com/funkyfunc/bundleup/blob/main/docs/adr/README.md): decisions and why they were made
+- [docs/findings/2026-10-03-baseline.md](https://github.com/funkyfunc/bundleup/blob/main/docs/findings/2026-10-03-baseline.md): how pex, shiv and zipapps fare today
+- [gauntlet/](https://github.com/funkyfunc/bundleup/blob/main/gauntlet/README.md): the test projects every bundler is measured against
 
 ## Gauntlet
 
@@ -43,4 +43,4 @@ uv run gauntlet/report.py gauntlet/results/run.json > gauntlet/results/run.md
 
 ## License
 
-[MIT](LICENSE)
+[MIT](https://github.com/funkyfunc/bundleup/blob/main/LICENSE)

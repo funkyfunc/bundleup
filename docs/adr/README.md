@@ -16,5 +16,5 @@ and change only the old one's status line.
 | [0005](0005-extract-to-cache-by-default.md) | Use the standard importer and extract to a cache by default | Accepted (cache details Proposed) |
 | [0006](0006-delegate-to-uv-and-existing-files.md) | Delegate resolution and installation to uv; read the files people already have | Accepted |
 | [0007](0007-gauntlet-is-the-contract.md) | The gauntlet is the acceptance test, and claims must be measured | Accepted |
-| [0008](0008-prototype-in-python.md) | Prototype in Python, not Rust | Proposed |
+| [0008](0008-prototype-in-python.md) | Build in Python first, with a measured path to Rust | Accepted |
 | [0009](0009-name-bundleup.md) | Name the project `bundleup` | Accepted |
