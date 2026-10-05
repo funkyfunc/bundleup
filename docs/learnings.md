@@ -6,6 +6,45 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-04** · platforms · AWS Lambda: only `/tmp` is writable, the handler is
+  `module.function`, and Lambda already unzips the package, so a `.pyz` would re-extract on every
+  cold start. A native Lambda zip is the right output. Limits: 50 MB zipped / 250 MB unzipped incl.
+  layers. Evidence: [verification notes](research/verification-notes.md).
+- **2026-10-04** · platforms · Host applications (Splunk, Blender, QGIS) want a vendored directory
+  or wheels built for *their* Python and platform, not a zipapp. Evidence:
+  [round 4 synthesis](research/round-4-synthesis.md).
+- **2026-10-04** · platforms · Some platforms now build from `uv.lock` themselves (Vercel; Cloud Run
+  from Python 3.14), so bundleup adds little there. Evidence:
+  [round 4 synthesis](research/round-4-synthesis.md).
+- **2026-10-04** · design · A `.pyz` carrying a PEP 723 header would run different dependency sets
+  under `python` (locked wheels) and `uv run` (fresh resolve). Never make that the default.
+  Evidence: [round 4 synthesis](research/round-4-synthesis.md).
+- **2026-10-04** · agents · Claude API Skills have no network and no runtime installs (Python 3.11,
+  Linux x86_64), but the Agent Skills guide recommends PEP 723 + `uv run`, which needs network. That
+  contradiction is bundleup's clearest agent use case. Evidence:
+  [round 3 synthesis](research/round-3-and-2b-synthesis.md).
+- **2026-10-04** · agents · MCPB (MCP Bundles) gave up vendoring Python: compiled deps like
+  pydantic can't be bundled portably, so it added a host-side `uv` server type. A `.pyz` has the
+  same limit unless the target platform is known in advance. Evidence:
+  [verification notes](research/verification-notes.md).
+- **2026-10-04** · ecosystem · uv has turned bundling requests away: #13503 closed as not planned,
+  #5802 labelled wish; #12035 (Lambda) was closed by its own author, not implemented. Evidence:
+  [verification notes](research/verification-notes.md).
+- **2026-10-04** · research · Re-running round 2 without round 1 attached reached the same
+  conclusions, so they weren't an artifact of anchoring. Evidence:
+  [round 3/2b synthesis](research/round-3-and-2b-synthesis.md).
+- **2026-10-04** · ecosystem · Astral on bundling (uv#7419, 2024-10-08): "definitely something we're
+  interested in doing someday. I'm not sure zipapp is the ideal format for us." Still open,
+  labelled `wish`. Evidence: [verification notes](research/verification-notes.md).
+- **2026-10-04** · environment · macOS's `/usr/bin/python3` is a stub until the Xcode Command Line
+  Tools are installed; with them it's Python 3.9.6. "Use whatever python3 exists" is solid for
+  developers, servers, CI, Lambda and agents, weak for non-technical end users. Evidence:
+  [round 1b synthesis](research/round-1b-synthesis.md).
+- **2026-10-04** · positioning · Lead with what bundleup literally does (self-contained Python
+  files); use cases are examples, never the definition, so nobody concludes "not for me".
+  Evidence: [ADR-0012](adr/0012-lead-with-what-it-does.md).
+- **2026-10-04** · research · Check which brief is pasted before running a deep-research job: the
+  "round 3" run re-used the round 1 brief. Evidence: [round 1b synthesis](research/round-1b-synthesis.md).
 - **2026-10-04** · build · On a large pure-Python project (21: 44 MB of source) bundleup's build is
   no faster than pex (5.2 vs 5.5 s): zip 3.1 s and bytecode compile 1.3 s dominate; uv's install is
   0.2 s. zlib releases the GIL, so threads cut compression 2–5×; compiling must be done by the

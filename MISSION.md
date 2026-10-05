@@ -36,7 +36,9 @@ A bundler in the spirit of esbuild: **one fast command, sensible defaults, one a
 - **In:** a project that already declares its dependencies: `pyproject.toml` + `uv.lock` or
   `pylock.toml` (PEP 751), or a single PEP 723 script.
 - **Out:** one `.pyz` per target platform (or one multi-platform `.pyz`). Runs with
-  `python app.pyz`. No install, no network.
+  `python app.pyz`. No install, no network. Planned thin variants from the same resolved files: a
+  vendored directory for host apps and a native AWS Lambda zip
+  ([ADR-0014](docs/adr/0014-output-formats-and-target-presets.md), Proposed).
 - **Check:** a report of everything that will break once packed, *before* you ship: `__file__`
   reads, `importlib.metadata` lookups, dynamic imports, targets with no matching wheel, dependencies
   that only ship source, code that needs a newer Python than you target.
@@ -111,16 +113,23 @@ how Pipenv, Yarn 2, PyOxidizer and stickytape failed:
 - **Metadata:** `importlib.metadata.version()` and plugin discovery need the `.dist-info`
   directories.
 - **Dynamic imports** limit how much static analysis can promise.
-- **Which Python the user has:** macOS's `/usr/bin/python3` is 3.9; Windows' `python` may be a
+- **Which Python the user has:** macOS's `/usr/bin/python3` is 3.9 (or only a stub until the
+  Command Line Tools are installed); Windows' `python` may be a
   Store stub; Linux distros vary.
 - **Concurrency and environment hostility:** two processes extracting at once, read-only
   filesystems, no `HOME`, paths with spaces.
 
 ## Risks
 
-- **uv ships `uv bundle`.** Mitigation: the analyzer keeps its value regardless (it can check any
-  bundle), and we stay compatible with uv's files so we can become the engine rather than the
-  competitor.
+- **uv ships `uv bundle`.** Astral (now joining OpenAI) is the most prominent Python toolchain
+  vendor, and could build this. Evidence so far says not soon: they've said they're "focused on
+  core functionality outside of bundling" (uv#7419, Oct 2024), labelled `uv bundle` a wish
+  (#5802), and closed PyInstaller output as not planned (#13503). Mitigation: the analyzer and
+  target profiles keep their value regardless, and we stay compatible with uv's files so we can
+  become the engine rather than the competitor.
+  **We build anyway, deliberately** (the user's call, 2026-10-04): the gap exists today. If uv
+  later ships something better, users win, and bundleup remains a worthwhile project: a learning
+  experience and public, measured work.
 - **pex improves its ergonomics.** Overlapping with pex on capability is expected; the bet is on a
   simpler, faster experience. Mitigation: measure against pex continuously and keep the lead on
   setup, error messages, speed and up-front diagnostics.

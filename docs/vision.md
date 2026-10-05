@@ -5,7 +5,13 @@ existing ways to ship Python, who it's for, and why the bet is on experience rat
 capability. New to Python packaging? Read the [primer](python-primer.md) first. Where it could go next:
 [roadmap.md](roadmap.md).
 
-## The problem in one sentence
+## What it does
+
+bundleup makes **self-contained Python files**: your code and its dependencies in one `.pyz` that
+runs with plain `python`, no install step, no network ([ADR-0012](adr/0012-lead-with-what-it-does.md):
+lead with what it does; use cases are examples).
+
+## The problem it solves
 
 You have Python code with dependencies, and you want to hand it to a machine that **has Python but
 nothing else**: no uv, no pip setup, maybe no network. Today there's no easy, reliable way to do
@@ -87,14 +93,18 @@ If something can't work, you find out at **build** time, not from a user:
 4. **A clear message instead of a stack trace.** The bundle checks the Python version and platform
    first and explains the problem if they don't match.
 
-## Who it's for
+## What people use it for
 
-People shipping small-to-medium Python programs to machines they don't control:
-- CLI tools and internal scripts;
-- agent skills and plugins;
-- serverless functions;
-- scripts for locked-down or offline servers;
-- anything that runs in a sandbox with no network.
+Examples, not the definition (from [round 4 research](research/round-4-synthesis.md)):
+- **Works today:** internal tools and CLIs, CI scripts, push-and-run ops and incident-response
+  scripts, HPC jobs on offline compute nodes, air-gapped servers, Raspberry Pi, course tools and
+  graders, agent sandboxes and skills (e.g. Claude API Skills, which have no network), and Docker
+  images built by copying one `app.pyz`.
+- **Coming:** mixed fleets and customers' machines (cross-platform builds), AWS Lambda (a native
+  Lambda zip), plugins for apps with Python built in such as Splunk and QGIS (`--format dir`).
+  See [ADR-0014](adr/0014-output-formats-and-target-presets.md).
+- **Not for:** desktop apps for people who don't have Python, Cloudflare Workers/Pyodide, Python in
+  Excel, projects that depend on system libraries or CUDA.
 
 ## What we're not
 
@@ -109,7 +119,9 @@ All the building blocks became available in 2024–2025:
 - uv resolves dependencies quickly and correctly;
 - lockfiles finally have a standard (`pylock.toml`, PEP 751);
 - almost every package ships prebuilt wheels;
-- uv has publicly put bundling off its immediate roadmap (astral-sh/uv#5802, labelled "wish").
+- uv has publicly put bundling off its immediate roadmap: "focused on core functionality outside
+  of bundling" (uv#7419), `uv bundle` labelled a wish (#5802), PyInstaller output closed as not
+  planned (#13503).
 
 ## What the baseline run is for
 

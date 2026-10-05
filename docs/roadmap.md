@@ -1,13 +1,85 @@
 # Roadmap
 
-Where bundleup could go. **These are possibilities, not commitments.** Each direction needs its
-own ADR before work starts, and everything here has to respect the accepted ADRs (in particular
+**Agents: start with "Next up". It's the ordered work list.** Take the first unfinished item,
+check its ADR, and mark it done here (with a link to the findings or commit) when it's finished.
+Everything below "Next up" is a possibility, not a commitment: each direction needs its own ADR
+before work starts, and everything has to respect the accepted ADRs (in particular
 [ADR-0002](adr/0002-target-the-runtime-only-tier.md) on scope and
 [ADR-0006](adr/0006-delegate-to-uv-and-existing-files.md) on staying out of uv's territory).
+
+## Next up
+
+In order. Items marked *Proposed* need the user's confirmation of the ADR before the work is
+merged; ask if unsure.
+
+1. **Engineering tooling** ([ADR-0015](adr/0015-engineering-tooling.md)): Ruff (format + lint,
+   `target-version = "py39"`), pyright, a `pre-commit`-compatible hook config (format, lint, type
+   check on commit; tests on push). Land it as one checkpoint commit that also reformats existing
+   code. Follow [python-for-js-reviewers.md](python-for-js-reviewers.md) when fixing what the
+   checks flag.
+2. **CI on GitHub Actions** ([ADR-0015](adr/0015-engineering-tooling.md)): lint, type check and
+   tests on every push; the gauntlet on macOS and Linux, Python 3.9 / 3.11 / 3.12. Closes the
+   "no Linux runs" gap.
+3. **User review of [ADR-0010](adr/0010-bundle-format-and-loader.md) and
+   [ADR-0011](adr/0011-cli-and-build-pipeline.md)** (still Proposed). Summarize each for the user
+   in JavaScript terms and ask for a decision.
+4. **Cross-target builds** (`--python`, `--platform`; [ADR-0014](adr/0014-output-formats-and-target-presets.md),
+   Proposed): build a Linux bundle from a Mac. Gauntlet coverage for at least
+   manylinux x86_64 + CPython 3.11.
+5. **Runtime hardening:** `BUNDLEUP_CACHE` override, cache order, per-build locks, stale-cache
+   cleanup, isolated `sys.path`.
+6. **Faster large builds:** threaded compression, per-wheel `.pyc` cache
+   ([findings](findings/2026-10-04-large-project-and-rust.md)).
+7. **`bundleup check`**, the pre-ship analyzer, including the compatibility pre-check
+   (native code that doesn't match the target).
+8. **`--format dir`** and **`--target lambda`** ([ADR-0014](adr/0014-output-formats-and-target-presets.md), Proposed).
+9. **`pylock.toml` input** ([ADR-0006](adr/0006-delegate-to-uv-and-existing-files.md)): a hedge against depending on uv's own lockfile.
+
+Before writing code in an unfamiliar area, look at [references.md](references.md) for projects
+that solved similar problems.
 
 The common thread: **every direction is a form of bundling something for a destination.** That's
 why the name is `bundleup` and not something tied to zip files or Python
 ([ADR-0009](adr/0009-name-bundleup.md)).
+
+## What it does, and what people use it for
+
+**What it does:** bundleup makes **self-contained Python files**. Your code and all its
+dependencies go into one `.pyz` that runs with plain `python`: no install step, no uv, no network.
+Lead with that, literally ([ADR-0012](adr/0012-lead-with-what-it-does.md)).
+
+**What people use it for** (examples, never the definition):
+
+- **Simplicity:** one file to hand over or keep, instead of a project plus setup instructions.
+- **Easier distribution:** internal tools and CLIs for colleagues or customers, scripts shared
+  between machines.
+- **Places you can't set things up:**
+  - AI agents and sandboxes: skills and scripts in sandboxes with no network, such as Claude API
+    Skills (see "Agents" below);
+  - serverless: AWS Lambda and similar, where you upload an artifact and can't run installers;
+  - CI runners and build machines you don't own;
+  - locked-down or air-gapped servers where outbound network or `pip install` isn't allowed.
+
+Nobody should read the description and conclude "this isn't for me". The engine stays general;
+destinations are outputs and examples.
+
+## Gaps in today's tools, and what answers them
+
+Measured in the [baseline](findings/2026-10-03-baseline.md) against pex, shiv, zipapps and a naive
+zipapp. Each gap maps to work in this roadmap.
+
+| Gap today | Evidence | Answered by |
+|---|---|---|
+| pex adds ~210 ms to every start unless you know two flags (which then break with the wrong `python3` on `PATH`) | baseline: 273 ms vs 59 ms installed venv | Fast-by-default loader (Now) |
+| Builds take 1.8–12 s (pex drives an old pip on 3.9) | baseline build times | uv-driven builds (Now), per-wheel analysis cache (Near) |
+| No tool warns before shipping; every failure appeared at run time | baseline: zero build-time warnings | `bundleup check` (Near) |
+| Errors are pip logs or "Pip install failed!" | baseline: refusal messages for project 17 | Plain-language errors (Now), machine-readable output (Near) |
+| Child `sys.executable` processes can't see the bundle's packages (pex, shiv) | gauntlet 19 | Loader sets up child processes (Now) |
+| shiv fails 100% with an unwritable `HOME`; zipapps writes into the working directory and races on simultaneous first runs | baseline hostile conditions | Cache fallback chain + atomic extraction (Now, [ADR-0005](adr/0005-extract-to-cache-by-default.md)) |
+| A naive zipapp silently drops compiled speedups | gauntlet 10 | `check` warnings (Near) |
+| Every tool needed requirements exported and wheels built by hand | baseline setup | Reads `uv.lock` / `pylock.toml` / PEP 723 directly (Now) |
+| No tool targets other machines from one machine with a check that it will work | baseline: no cross-platform coverage | Multi-platform bundles (Near) |
+| Skill scripts with dependencies can't run in no-network sandboxes: Claude API Skills have "no network access and no runtime package installation", yet the Agent Skills guide recommends `uv run` | [round 3 synthesis](research/round-3-and-2b-synthesis.md) | Target profiles + skill output (Near) |
 
 ## Now: the first version
 
@@ -25,21 +97,29 @@ What [MISSION.md](../MISSION.md) defines as done:
 | Idea | What it is | Why |
 |---|---|---|
 | **`bundleup check`** | The pre-ship analyzer as its own command, runnable in CI on any project: "will this survive bundling?" | Useful even to people who bundle with something else; the most defensible part of the tool |
-| **Multi-platform bundles** | One `.pyz` that runs on several OS/CPU/Python combinations, or one per target from a single machine | Build once on a Mac, ship to Linux servers |
+| **Multi-platform bundles** | One `.pyz` that runs on several OS/CPU/Python combinations, or one per target from a single machine (`--python`, `--platform`) | Build once on a Mac, ship to Linux servers. Round 4's #1 priority: it unlocks most strong-fit use cases ([ADR-0014](adr/0014-output-formats-and-target-presets.md), Proposed) |
+| **Cache override and runtime hardening** | `BUNDLEUP_CACHE`, cache order (env → user cache → temp), per-build locks, stale-cache cleanup, isolated `sys.path` | Lambda's read-only filesystem, read-only roots, HPC node-local scratch, 1,000 jobs starting at once |
+| **`--format dir`** | A vendored directory built for a host application's Python and platform | Splunk, QGIS, Maya/Houdini, Azure Functions' `.python_packages` all hand-roll `pip install --target --platform` today ([ADR-0014](adr/0014-output-formats-and-target-presets.md), Proposed) |
+| **Target profiles** | Named targets for environments with a fixed, known Python and platform, starting with `claude-api` (CPython 3.11, manylinux x86_64, no network) | Known targets make compiled wheels (pydantic, numpy) shippable; the most agent-specific feature ([ADR-0013](adr/0013-agent-sandboxes-as-headline-use-case.md), Proposed) |
+| **Skill output** | `scripts/<tool>.pyz` plus a ready `SKILL.md` stanza and an honest `compatibility` line | No platform offers skill scripts with dependencies that run offline ([ADR-0013](adr/0013-agent-sandboxes-as-headline-use-case.md), Proposed) |
 | **Size and contents report** | What's in the bundle, what's heavy, why (like webpack-bundle-analyzer / esbuild's metafile) | Native wheels dominate size; people need to see it |
 | **Python API** | Call bundleup as a library from uv, Hatch, Pants, CI scripts | Be the component others call, the way Vite calls esbuild |
+| **Machine-readable output** | `--json` for build results and `check` findings | CI systems and agents can act on results without parsing prose |
+| **Bundle manifest** | A list of exactly what's inside each bundle, with hashes and versions | Trust and supply-chain review: the reviewed artifact is the executed artifact. Secondary: doesn't address malicious skill instructions |
+| **Tested offline guarantee** | State, and test on every gauntlet run, that a bundle never touches the network | Makes "runs offline" a promise rather than a hope (the harness already blocks network) |
 | **Opt-in pruning** | Drop whole distributions that are provably unreachable | Smaller bundles without the risk of function-level tree-shaking |
 
 ## Middle: the same bundle, different destinations
 
 | Destination | What we'd produce | Why it's a real gap |
 |---|---|---|
-| **Serverless** (AWS Lambda etc.) | The provider's zip or layer format | uv issue #12035 asks for exactly this |
-| **Container images** | A minimal image built straight from the bundle, no Dockerfile | Go has `ko`, Java has `jib`; Python has nothing comparable |
+| **AWS Lambda** | `--target lambda`: a native Lambda zip or layer (not a `.pyz`: Lambda already unzips, and only `/tmp` is writable), with a size report against the 250 MB limit | Most common serverless request; hand-built packages often ship Mac wheels ([ADR-0014](adr/0014-output-formats-and-target-presets.md), Proposed) |
+| **Container images (docs only)** | Document the 3-line Dockerfile that copies `app.pyz` onto `python:3.x-slim` | Round 4 recommends against building images ourselves; Dockerfile + uv already works |
 | **Standalone executables** | Bundle + a portable Python via pex's `scie` | Out of scope for the core ([ADR-0002](adr/0002-target-the-runtime-only-tier.md)) because of code signing; possible later as an opt-in output |
 | **"No Python installed"** | A tiny launcher that downloads a Python on first run, then runs the bundle | The "user has no usable Python" problem ([primer](python-primer.md) §3) |
-| **Agent skills and plugins** | Output shaped for skill/plugin packaging (apm etc.) | The use case that started the project |
-| **Notebooks** | Turn a Jupyter notebook into a runnable bundle | A common data-science request |
+| **MCP servers (deferred)** | A bundled MCP server that starts with `python server.pyz` | Only for offline or single-platform cases: MCPB already moved Python to a host-side `uv` server type, and compiled deps (pydantic) can't be bundled portably for unknown desktops |
+| **Agents as operators (hypothesis)** | A bundleup skill so an agent can bundle a script it wrote (build where there's network, run in an offline sandbox) | Plausible and unserved, but no evidence of demand found yet; validate with users first |
+| **Notebooks (docs only)** | Document the recipe: `nbconvert` → PEP 723 script → bundleup | Magics and display calls break automatic conversion; a recipe is enough |
 
 ## Far: bigger bets
 
@@ -50,6 +130,23 @@ What [MISSION.md](../MISSION.md) defines as done:
   Java's Shade) so they can't conflict with the user's versions.
 - **Other languages:** skills ship Python *and* Node scripts. One tool that bundles either (driving
   esbuild for Node) is plausible; nothing in the name says Python.
+
+## Agents (answered by round 3 research)
+
+Agents are a **use case, not the category** ([round 3 synthesis](research/round-3-and-2b-synthesis.md)).
+The one concrete, documented gap is no-network sandboxes, above all Claude API Skills (Python 3.11,
+Linux x86_64, no network, no installs), where the officially recommended `uv run` can't work.
+Elsewhere (cloud coding agents, desktop MCP) the ecosystem already installs dependencies at setup
+time with uv.
+
+The answer to "what do you mean it's for agents?":
+
+> Agent sandboxes are the most common place you can't install anything, so bundleup turns a
+> skill's script and its locked dependencies into one file that runs there with plain `python`.
+
+Features: target profiles and skill output (Near), compatibility pre-check (part of `check`),
+agent-operable CLI (machine-readable output). See
+[ADR-0013](adr/0013-agent-sandboxes-as-headline-use-case.md) (Proposed).
 
 ## Not our territory
 

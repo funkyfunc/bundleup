@@ -14,9 +14,13 @@ If it isn't written down, the next agent won't know it.
    accepted ADR without writing a new one that supersedes it.**
 3. [docs/learnings.md](docs/learnings.md): lessons and gotchas already discovered.
 4. Latest file in [docs/findings/](docs/findings/): most recent measurements.
+5. [docs/roadmap.md](docs/roadmap.md) **"Next up"**: the ordered work list. Pick the first
+   unfinished item.
+6. Writing code? [docs/python-for-js-reviewers.md](docs/python-for-js-reviewers.md) has the code
+   style rules (the owner reviews as a JS developer), and [docs/references.md](docs/references.md)
+   lists projects to learn from before building something new.
 
-Also: [docs/vision.md](docs/vision.md) (positioning), [docs/roadmap.md](docs/roadmap.md) (possible
-future directions, not commitments), [docs/python-primer.md](docs/python-primer.md)
+Also: [docs/vision.md](docs/vision.md) (positioning and use cases), [docs/python-primer.md](docs/python-primer.md)
 (Python packaging for JS developers), [docs/research/](docs/research/README.md) (background; the
 "gemini" reports are unreliable, see the README there).
 
@@ -40,7 +44,7 @@ Do these **as you go**, not only at the end:
 
 ## Current state
 
-- Done: research (2 rounds), mission/vision, gauntlet of 22 projects (21 is the large pure-Python
+- Done: research (4 rounds, see [docs/research/](docs/research/README.md)), mission/vision, gauntlet of 22 projects (21 is the large pure-Python
   performance check), baseline of pex/shiv/zipapps ([findings](docs/findings/2026-10-03-baseline.md)).
 - Named `bundleup` ([ADR-0009](docs/adr/0009-name-bundleup.md)); repo github.com/funkyfunc/bundleup.
   PyPI has only the 0.0.1 placeholder; the working bundler isn't released yet.
@@ -59,9 +63,8 @@ Do these **as you go**, not only at the end:
   Python (threaded compression, per-wheel `.pyc` cache). Rust stays reserved for the analyzer's
   scanner, which a parse-only proxy puts at ADR-0008's trigger
   ([findings](docs/findings/2026-10-04-large-project-and-rust.md)).
-- Next: user review of ADR-0010/0011; faster large builds (above); Linux runs (CI); cross-platform
-  and multi-platform bundles; the build-time analyzer (`bundleup check`); `pylock.toml` input;
-  cache cleanup.
+- Next: see [docs/roadmap.md](docs/roadmap.md) "Next up" (engineering tooling first, per
+  [ADR-0015](docs/adr/0015-engineering-tooling.md)).
 
 ## Layout
 
@@ -69,11 +72,13 @@ Do these **as you go**, not only at the end:
 MISSION.md              goal and scope
 pyproject.toml, src/bundleup/  the bundleup package: cli.py, build.py, _loader.py (bundle's __main__)
 tests/                  pytest: loader/CLI edge cases the gauntlet doesn't reach
-docs/roadmap.md         possible future directions (each needs an ADR first)
+docs/roadmap.md         "Next up" work list, then possible future directions
+docs/python-for-js-reviewers.md  code style rules + review guide for the JS-fluent owner
+docs/references.md      open-source projects to learn from, by area
 docs/adr/               decisions (ADRs)
 docs/learnings.md       lessons log
 docs/findings/          experiment write-ups
-docs/research/          research reports, prompts, verification notes
+docs/research/          research reports, syntheses, verification notes; prompts/ = one brief per round
 gauntlet/projects/      test projects, one failure mode each (gauntlet.toml describes each)
 gauntlet/check_native.py  control group: projects run installed normally
 gauntlet/run_bundlers.py  build + run with bundleup and existing bundlers, hostile conditions

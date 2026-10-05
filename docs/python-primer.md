@@ -56,8 +56,8 @@ managed" (PEP 668), and `pip install` refuses with an error. That pushes everyon
 
 Node users mostly have one Node, maybe switched with nvm. Python users often have several without
 realising it. A typical Mac has:
-- `/usr/bin/python3`: Apple's copy (3.9.6 with current Command Line Tools), installed with the Xcode Command Line
-  Tools. Don't install things into it.
+- `/usr/bin/python3`: Apple's copy. Until the Xcode Command Line Tools are installed it's only a
+  stub that offers to install them; with them it's Python 3.9.6. Don't install things into it.
 - Homebrew's Python, python.org installers, and/or Pythons downloaded by uv or pyenv.
 
 The version matters more than in Node, because compiled packages are built for a specific Python
@@ -112,6 +112,19 @@ PyTorch. This is why:
 - **abi3** (the "stable ABI") lets a package publish one wheel per platform that works on all
   Python versions. It's roughly Python's version of Node-API, but only some packages use it;
 - compiled code can't be loaded from inside a zip file, which is the core problem for any bundler.
+
+**Rust packages are just wheels too.** pydantic-core, orjson, polars and parts of cryptography are
+written in Rust and built with maturin/PyO3. They're published as ordinary compiled wheels, so to
+Python (and to a bundler) a Rust package is indistinguishable from a C one: a `.so`/`.pyd` file
+inside a platform-tagged wheel.
+
+**Why a wheel built on your Mac fails on a Linux server.** Installing on a Mac downloads
+`macosx_*_arm64` wheels. Copy that environment to Linux (or AWS Lambda) and every compiled package
+fails to import. You need the wheels for the *target*: the right OS, CPU, Python version and
+**glibc** version. For example, Lambda's python3.12+ runtimes run on Amazon Linux 2023, while
+python3.10/3.11 run on the older Amazon Linux 2. A `manylinux2014` wheel (built for glibc 2.17) runs
+on both, but some newer `manylinux_2_28` wheels won't run on Amazon Linux 2. Picking the right
+wheels for a target machine is exactly what bundleup's cross-target builds do.
 
 ## 6. Project files: `pyproject.toml` ≈ `package.json`
 
@@ -184,6 +197,10 @@ parent package"); `-m` doesn't. There's no Node equivalent. JS developers trip o
   those tools.
 - **Desktop apps or non-developers:** freezers such as PyInstaller and Nuitka produce an executable
   that includes Python. That brings platform builds, code signing and antivirus issues.
+- **Serverless (AWS Lambda):** a zip of your code plus the Linux wheels for Lambda's Python, or a
+  container image when it's over 250 MB unzipped or needs system libraries.
+- **Plugins for apps with Python built in** (Blender, Splunk, QGIS): dependencies vendored into a
+  folder, built for *that app's* Python and platform.
 - **"One file, needs only Python":** zipapp, shiv and pex. That's the tier with no good default,
   the way esbuild became the default for Node. See [MISSION.md](../MISSION.md).
 

@@ -55,3 +55,75 @@ is known to hallucinate, so claims that drive decisions were checked by hand.
 - Node type-stripping "stable" version differs between reports (v24.12 vs v25.2); irrelevant here.
 - Recommends a self-contained-executable output mode. That reintroduces code signing and
   notarization, the problem that started this project. Treat as out of scope for the core tool.
+
+## Round 1b (a second run of the round 1 brief, 2026-10-04)
+
+### Claims checked
+
+| Claim | Source | Result | Evidence |
+|---|---|---|---|
+| Astral said bundling is something they're "interested in doing someday" and "not sure zipapp is the ideal format" | round-1b-compass | ✅ Zanie Blue (Astral member), 2024-10-08; issue still open, labelled `enhancement`, `wish`. This resolves the "unverified quote" from round 1 | https://github.com/astral-sh/uv/issues/7419 |
+
+### round-1b-landscape-gemini.md
+- Calls **shiv "Active"**; its last release was Nov 2024 (maintenance mode, as Compass says).
+- **Invented audience sizes** again: "3 to 4 million", "6 to 8 million", "approximately 2 million",
+  "roughly 1.5 million", "approximately 3 million". No sources.
+- **Hypothesis 5 "confirmed"** again while ignoring vermin, which checks minimum versions.
+- Says PyOxidizer went on hiatus "in late 2023"; Szorc wrote it "fell into a state of neglect" by
+  early 2023 (status post March 2024).
+- Recommends building in Rust and a downleveler as opportunity #2; both conflict with measured
+  evidence (see the synthesis).
+- First citation is an unrelated agency blog (wajusoft.com).
+
+### round-1b-landscape-compass.md
+- pex version slightly stale (2.103.2 vs 2.103.4 on 2026-10-03). Otherwise consistent with
+  earlier verification.
+- Lists "python-build-standalone moved to Astral" as unverified; it was verified in round 1
+  (Astral blog, Dec 2024).
+
+## Round 3 (agents) and round 2b (unanchored evolution), 2026-10-04
+
+### Claims checked
+
+| Claim | Source | Result | Evidence |
+|---|---|---|---|
+| Claude API Skills run "in a sandboxed container with no network access and no runtime package installation"; claude.ai network varies by settings; Claude Code has full network | round-3-compass | ✅ quoted from the docs | https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview |
+| The Agent Skills guide recommends PEP 723 + `uv run` for scripts with dependencies | round-3-compass | ✅ "Run with uv (recommended) … `uv run` creates an isolated environment, installs the declared dependencies". No mention of offline environments | https://agentskills.io/skill-creation/using-scripts |
+| MCPB README: Python bundles "Cannot portably bundle compiled dependencies (e.g., pydantic…)"; recommends Node; newer `uv` server type has the host install deps | round-3-compass | ✅ | https://github.com/modelcontextprotocol/mcpb |
+| goodreads-mcp #89: a `.mcpb` that only runs on Linux x86_64 / CPython 3.11 due to vendored compiled wheels | round-3-compass | ✅ issue exists (closed) | https://github.com/Danathar/goodreads-mcp/issues/89 |
+| uv #13503 (PyInstaller output) closed as not planned | round-2b-compass | ✅ `state_reason: not_planned` | https://github.com/astral-sh/uv/issues/13503 |
+| uv #12035 (single-file Lambda bundling) | round-2b-compass | ⚠️ Closed 2025-05-20 **by its own author** as "completed", with no maintainer comments and no implementation. Not evidence that uv shipped it | https://github.com/astral-sh/uv/issues/12035 |
+
+### round-3-agents-gemini.md
+- **Truncated**: only the executive verdict and the beginning of Part 1 survived. Its verdict
+  ("agent-washing" if positioned as exclusively agent tech; position as a general bundler with
+  agents among primary targets) agrees with Compass.
+
+### round-3-agents-compass.md
+- Marks Devin, Windsurf, Daytona and Modal as unverified, and some details (claude.ai on gVisor,
+  Claude Code cloud GA date) as third-party. Don't quote those externally without checking.
+
+### round-2b-evolution-compass-unanchored.md
+- Run without round 1 attached; conclusions match round 2. Several JS/other-ecosystem details are
+  explicitly from background knowledge, as the report itself says.
+
+## Round 4 (use cases and output formats), 2026-10-04
+
+### Claims checked
+
+| Claim | Source | Result | Evidence |
+|---|---|---|---|
+| Lambda: 50 MB zipped (direct upload), 250 MB unzipped incl. layers, 5 layers, `/tmp` 512–10,240 MB, container images 10 GB | both | ✅ AWS quotas page | https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html |
+| Lambda Python runtimes | both | ✅ python3.10–3.14 supported (3.10 deprecates 2026-10-31), python3.15 in public preview, python3.9 deprecated 2025-12-15; all runtimes support x86_64 and arm64. **Gemini's "3.10–3.13" is out of date** | https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html |
+| Splunk: install deps into `bin/lib/` with `--platform manylinux2014_aarch64 --only-binary=:all:`, matching "the platform Splunk is built and ran on, NOT the one you're writing your App on" | round-4-compass | ✅ quoted from the SDK README | https://github.com/splunk/splunk-sdk-python |
+
+### round-4-use-cases-gemini.md
+- Platform Python ranges are stale (Lambda "3.10–3.13", Cloud Run "3.10–3.12", Azure
+  "3.10–3.12"; Compass, citing official docs, lists 3.14 on all three).
+- Over-rates fit: Cloud Run, Ray and PySpark "strong" and a flat zip "for Spark", although
+  `--py-files` can't load compiled code and Cloud Run builds from source with uv.
+- Unverified specifics: Azure "30s init timeout, 0.8 GB /tmp", Blender "embedded 3.11".
+
+### round-4-use-cases-compass.md
+- Lists its own unverified areas (HPC centre docs, GitHub Actions/pre-commit docs, Ray, Airflow,
+  Maya/Houdini/KNIME/ArcGIS, CLI behaviours of other tools). Check before quoting in docs.
