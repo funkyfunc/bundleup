@@ -24,3 +24,4 @@ and change only the old one's status line.
 | [0013](0013-agent-sandboxes-as-headline-use-case.md) | Agent sandboxes as the headline use case, served by target profiles and skill output | Accepted (positioning); features Proposed |
 | [0014](0014-output-formats-and-target-presets.md) | `.pyz` stays the product; add `dir` and Lambda outputs and printable target presets | Proposed |
 | [0015](0015-engineering-tooling.md) | Enforce code quality with Ruff, a type checker, git hooks and CI | Accepted (direction); tool choices Proposed |
+| [0016](0016-cli-and-api-conventions.md) | CLI and Python API follow the style guide | Proposed |

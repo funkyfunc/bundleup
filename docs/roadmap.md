@@ -20,20 +20,38 @@ merged; ask if unsure.
 2. **CI on GitHub Actions** ([ADR-0015](adr/0015-engineering-tooling.md)): lint, type check and
    tests on every push; the gauntlet on macOS and Linux, Python 3.9 / 3.11 / 3.12. Closes the
    "no Linux runs" gap.
-3. **User review of [ADR-0010](adr/0010-bundle-format-and-loader.md) and
-   [ADR-0011](adr/0011-cli-and-build-pipeline.md)** (still Proposed). Summarize each for the user
-   in JavaScript terms and ask for a decision.
-4. **Cross-target builds** (`--python`, `--platform`; [ADR-0014](adr/0014-output-formats-and-target-presets.md),
-   Proposed): build a Linux bundle from a Mac. Gauntlet coverage for at least
-   manylinux x86_64 + CPython 3.11.
-5. **Runtime hardening:** `BUNDLEUP_CACHE` override, cache order, per-build locks, stale-cache
+3. **User review of [ADR-0010](adr/0010-bundle-format-and-loader.md),
+   [ADR-0011](adr/0011-cli-and-build-pipeline.md) and [ADR-0016](adr/0016-cli-and-api-conventions.md)**
+   (all Proposed). Summarize each for the user in JavaScript terms and ask for decisions,
+   including the **command shape** (verbs vs default action; see
+   [cli-style-guide.md](cli-style-guide.md) "Open decision").
+4. **Correctness verification beyond the gauntlet.** The gauntlet proves bundles *run and behave*
+   for 22 hand-written projects; nothing yet proves a bundle contains *exactly* the right files.
+   In order of value:
+   - **Lockfile vs bundle check:** every locked runtime distribution present at the locked
+     version; nothing extra (no dev dependencies); a build-time error if not.
+   - **Wheel integrity:** every extracted file matches the sha256 in its wheel's `RECORD`.
+   - **Differential test vs an installed venv:** for any project, compare the bundle with
+     `uv sync` (same distributions and versions via `importlib.metadata`, every top-level module
+     importable, same entry points).
+   - **Breadth smoke test (nightly CI):** bundle the top few hundred PyPI packages and import
+     each one's top-level modules; turn every failure into a gauntlet project or a learning.
+   - **Real-world suites:** run a few real projects' own test suites against their bundles.
+5. **Align the CLI with the style guide** ([cli-style-guide.md](cli-style-guide.md),
+   [ADR-0016](adr/0016-cli-and-api-conventions.md)) once item 3 is decided: stderr/stdout split,
+   `error:`/`hint:` messages, exit codes, `--json`, library API (`build()`, `BuildOptions`,
+   `BundleupError`), snapshot tests.
+6. **Cross-target builds** (`--python`, `--python-platform` in uv's vocabulary;
+   [ADR-0014](adr/0014-output-formats-and-target-presets.md), Proposed): build a Linux bundle from
+   a Mac. Gauntlet coverage for at least manylinux x86_64 + CPython 3.11.
+7. **Runtime hardening:** `BUNDLEUP_CACHE` override, cache order, per-build locks, stale-cache
    cleanup, isolated `sys.path`.
-6. **Faster large builds:** threaded compression, per-wheel `.pyc` cache
+8. **Faster large builds:** threaded compression, per-wheel `.pyc` cache
    ([findings](findings/2026-10-04-large-project-and-rust.md)).
-7. **`bundleup check`**, the pre-ship analyzer, including the compatibility pre-check
+9. **`bundleup check`**, the pre-ship analyzer, including the compatibility pre-check
    (native code that doesn't match the target).
-8. **`--format dir`** and **`--target lambda`** ([ADR-0014](adr/0014-output-formats-and-target-presets.md), Proposed).
-9. **`pylock.toml` input** ([ADR-0006](adr/0006-delegate-to-uv-and-existing-files.md)): a hedge against depending on uv's own lockfile.
+10. **`--format dir`** and **`--target lambda`** ([ADR-0014](adr/0014-output-formats-and-target-presets.md), Proposed).
+11. **`pylock.toml` input** ([ADR-0006](adr/0006-delegate-to-uv-and-existing-files.md)): a hedge against depending on uv's own lockfile.
 
 Before writing code in an unfamiliar area, look at [references.md](references.md) for projects
 that solved similar problems.

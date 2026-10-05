@@ -6,6 +6,13 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-04** · testing · The gauntlet proves bundles *run and behave*; nothing yet proves a
+  bundle contains *exactly* the locked files. Planned: lock-vs-bundle check, wheel `RECORD` hash
+  verification, differential test against a `uv sync` venv, a top-PyPI import smoke test. Evidence:
+  [roadmap](roadmap.md) "Next up" item 4.
+- **2026-10-04** · research · Deep-research tools don't always receive attachments (round 5's
+  Compass report didn't); check the report's own "assumptions" section before trusting
+  project-specific details. Evidence: [round 5 synthesis](research/round-5-synthesis.md).
 - **2026-10-04** · platforms · AWS Lambda: only `/tmp` is writable, the handler is
   `module.function`, and Lambda already unzips the package, so a `.pyz` would re-extract on every
   cold start. A native Lambda zip is the right output. Limits: 50 MB zipped / 250 MB unzipped incl.

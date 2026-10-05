@@ -18,7 +18,8 @@ If it isn't written down, the next agent won't know it.
    unfinished item.
 6. Writing code? [docs/python-for-js-reviewers.md](docs/python-for-js-reviewers.md) has the code
    style rules (the owner reviews as a JS developer), and [docs/references.md](docs/references.md)
-   lists projects to learn from before building something new.
+   lists projects to learn from before building something new. Changing the CLI or public API?
+   Follow [docs/cli-style-guide.md](docs/cli-style-guide.md).
 
 Also: [docs/vision.md](docs/vision.md) (positioning and use cases), [docs/python-primer.md](docs/python-primer.md)
 (Python packaging for JS developers), [docs/research/](docs/research/README.md) (background; the
@@ -75,6 +76,7 @@ tests/                  pytest: loader/CLI edge cases the gauntlet doesn't reach
 docs/roadmap.md         "Next up" work list, then possible future directions
 docs/python-for-js-reviewers.md  code style rules + review guide for the JS-fluent owner
 docs/references.md      open-source projects to learn from, by area
+docs/cli-style-guide.md CLI and library API rules (ADR-0016, Proposed)
 docs/adr/               decisions (ADRs)
 docs/learnings.md       lessons log
 docs/findings/          experiment write-ups

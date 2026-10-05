@@ -9,4 +9,4 @@ Each file says which part to paste. Kept so the research can be re-run later and
 | 2 | [How tools evolved, and what to learn](prompts/round-2-evolution.md) | Run twice (2 with round 1 attached, 2b without) | `round-2-*`, `round-2b-*` |
 | 3 | [Is there an authentic agent-specific angle?](prompts/round-3-agents.md) | Run | `round-3-*` |
 | 4 | [Use cases, input shapes and output formats](prompts/round-4-use-cases-and-outputs.md) | Run | `round-4-*` |
-| 5 | [CLI and library design for developer tools](prompts/round-5-cli-and-library-design.md) | **Not run yet** | – |
+| 5 | [CLI and library design for developer tools](prompts/round-5-cli-and-library-design.md) | Run | `round-5-*` |

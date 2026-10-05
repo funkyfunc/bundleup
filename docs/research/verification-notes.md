@@ -107,6 +107,17 @@ is known to hallucinate, so claims that drive decisions were checked by hand.
 - Run without round 1 attached; conclusions match round 2. Several JS/other-ecosystem details are
   explicitly from background knowledge, as the report itself says.
 
+## Round 5 (CLI and library design), 2026-10-04
+
+| Claim | Source | Result | Evidence |
+|---|---|---|---|
+| argparse gained `suggest_on_error` and `color` in Python 3.14; `allow_abbrev` exists | round-5-compass | ✅ `suggest_on_error` default False, `color` default True (3.14); `allow_abbrev` since 3.5 | https://docs.python.org/3/library/argparse.html |
+
+- round-5-gemini: startup numbers not credible ("argparse 0.00 ms"; Cyclopts 12–16 ms, faster
+  than Click). Don't cite.
+- round-5-compass: did not receive the attachments; its bundleup-specific examples (preset names,
+  platform strings, versions) are placeholders.
+
 ## Round 4 (use cases and output formats), 2026-10-04
 
 ### Claims checked

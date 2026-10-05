@@ -1,6 +1,6 @@
 # Round 5: CLI and library design for developer tools
 
-Not run yet. Written 2026-10-04. Attach `MISSION.md`, `docs/vision.md`, `docs/roadmap.md` and
+Run 2026-10-04 (reports: `round-5-*`; Compass did not receive the attachments). Attach `MISSION.md`, `docs/vision.md`, `docs/roadmap.md` and
 `docs/adr/0011-cli-and-build-pipeline.md`, plus the current output of `uv run bundleup --help`.
 Don't attach earlier research reports.
 

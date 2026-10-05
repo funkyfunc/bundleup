@@ -20,5 +20,8 @@ Start with the [primer](../python-primer.md).
 | [round-4-use-cases-compass.md](round-4-use-cases-compass.md) | Round 4: who needs self-contained Python, what each platform requires, which output formats to offer | High |
 | [round-4-use-cases-gemini.md](round-4-use-cases-gemini.md) | Same brief, from Gemini | Low (stale platform facts, over-rated fits) |
 | [round-4-synthesis.md](round-4-synthesis.md) | Use-case lists, platform needs, output strategy | — |
+| [round-5-cli-compass.md](round-5-cli-compass.md) | Round 5: CLI and library API style guide (attachments didn't arrive; bundleup specifics assumed) | High |
+| [round-5-cli-gemini.md](round-5-cli-gemini.md) | Same brief, from Gemini | Medium (agrees on rules; startup numbers not credible) |
+| [round-5-synthesis.md](round-5-synthesis.md) | Points to the resulting [CLI style guide](../cli-style-guide.md) | — |
 | [verification-notes.md](verification-notes.md) | Claims checked by hand, and known errors in each report | — |
 | [prompts.md](prompts.md) | Index of the research briefs, one file per round in [prompts/](prompts/) | — |
