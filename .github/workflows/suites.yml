@@ -1,0 +1,35 @@
+# Real projects' own test suites against their bundles (roadmap item 4; gauntlet/suites.toml).
+# Runs third-party code, so only on GitHub's ephemeral runners, with no secrets (ADR-0017).
+name: Nightly test suites
+
+on:
+  schedule:
+    - cron: "7 7 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  suites:
+    name: Suites (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0 # publishes exact versions only, no floating v10 tag
+      - run: uv sync --locked --python 3.12
+      - run: uv python install 3.12
+      - name: Run each suite in a venv and from its bundle, compare
+        run: uv run gauntlet/suites.py --python 3.12 --check --out suites
+      - name: Keep the results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: suites-${{ matrix.os }}
+          path: gauntlet/results/suites.json
+          if-no-files-found: ignore

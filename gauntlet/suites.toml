@@ -1,0 +1,37 @@
+# Real projects' own test suites, run against their bundled code (roadmap item 4, "real-world
+# suites"). Each entry: the PyPI release and the repository tag with the same code. The suite runs
+# twice: in a normal venv (the control) and from a bundle whose entry point is pytest, so the
+# package under test, pytest and the test dependencies all run from the bundle's cache. Runs
+# third-party code: GitHub's runners only (ADR-0017), via .github/workflows/corpus.yml.
+
+[[suite]]
+name = "click"
+package = "click==8.5.0"
+module = "click"
+repo = "https://github.com/pallets/click"
+tag = "8.5.0"
+test_deps = ["pytest"]
+
+[[suite]]
+name = "packaging"
+package = "packaging==26.3"
+module = "packaging"
+repo = "https://github.com/pypa/packaging"
+tag = "26.3"
+test_deps = ["pytest", "pretend", "hypothesis", "tomli_w", "pip", "tomli; python_version < '3.11'"]
+
+[[suite]]
+name = "markupsafe"  # compiled speedups: the native path runs from the cache
+package = "markupsafe==3.0.4"
+module = "markupsafe"
+repo = "https://github.com/pallets/markupsafe"
+tag = "3.0.4"
+test_deps = ["pytest"]
+
+[[suite]]
+name = "itsdangerous"
+package = "itsdangerous==2.2.0"
+module = "itsdangerous"
+repo = "https://github.com/pallets/itsdangerous"
+tag = "2.2.0"
+test_deps = ["pytest", "freezegun"]
