@@ -216,6 +216,44 @@ def _write(
             out.write(chunk)
 
 
+LOCK_TIMEOUT = 120.0  # seconds to wait for another process's unpack before doing our own
+
+
+def _lock(root: str) -> "BinaryIO | None":
+    """Wait for, then hold, this bundle's unpack lock in `root`, so that simultaneous first runs
+    (say, 1,000 cluster jobs) unpack once instead of each writing a full copy.
+
+    Best effort: if locking isn't possible, or takes longer than LOCK_TIMEOUT, carry on without
+    it; the atomic rename in _extract() is what keeps results correct. The operating system
+    releases the lock if its holder dies.
+    """
+    import time
+
+    try:
+        # Returned open on purpose: the open file is the lock, released by closing it.
+        handle = open(os.path.join(root, ".lock-" + DIRNAME), "a+b")  # noqa: SIM115
+    except OSError:
+        return None
+    deadline = time.time() + LOCK_TIMEOUT
+    while True:
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return handle
+        except OSError:
+            if time.time() > deadline:
+                handle.close()
+                return None
+            time.sleep(0.05)
+
+
 def _extract() -> str:
     """Extract into a temporary directory, then rename it into place atomically.
 
@@ -231,15 +269,22 @@ def _extract() -> str:
                 raise OSError("not private to this user")
             if os.path.isdir(final):
                 return final
-            _unpack(tmp, final)
+            lock = _lock(root)
             try:
-                os.rename(tmp, final)
-            except OSError:
-                if not os.path.isdir(final):
-                    raise
-                import shutil
+                if os.path.isdir(final):  # another process unpacked it while we waited
+                    return final
+                _unpack(tmp, final)
+                try:
+                    os.rename(tmp, final)
+                except OSError:
+                    if not os.path.isdir(final):
+                        raise
+                    import shutil
 
-                shutil.rmtree(tmp, ignore_errors=True)
+                    shutil.rmtree(tmp, ignore_errors=True)
+            finally:
+                if lock is not None:
+                    lock.close()  # releases the lock
             return final
         except OSError as e:
             problems.append("  %s: %s" % (root, e.strerror or e))

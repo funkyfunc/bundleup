@@ -6,6 +6,11 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-05** · runtime · Without a lock, 16 simultaneous first runs of the NumPy bundle each
+  unpacked a full copy (3.2 s wall, 28 s CPU; correct thanks to the atomic rename, but wasteful). A
+  best-effort lock file in the cache root (flock / msvcrt, released by the OS if the holder dies,
+  120 s timeout) makes one process unpack while the rest wait: 0.55 s wall, 1.1 s CPU. Evidence:
+  `src/bundleup/_loader.py` `_lock()`; measured with two bundles built from consecutive commits.
 - **2026-10-05** · build · `zipfile.writestr(ZipInfo, ...)` ignores the archive's `compresslevel`, so
   "level 1" payloads were really level 6. `pathlib.Path.relative_to()` costs ~60 µs a call (over a
   second for 18,000 files); use `os.walk` strings in hot loops. Set literals make `.pyc` bytes
