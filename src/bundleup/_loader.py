@@ -307,8 +307,9 @@ def _site_packages_index() -> int:
 
 
 def _activate(site: str) -> None:
-    """Put the payload on sys.path where a venv's site-packages would be, and on PYTHONPATH so
-    child interpreters (sys.executable -c/-m, multiprocessing) see the same packages."""
+    """Put the payload on sys.path where a venv's site-packages would be, in place of the
+    machine's own packages (unless BUNDLEUP_INHERIT_PATH=1), and on PYTHONPATH so child
+    interpreters (sys.executable -c/-m, multiprocessing) see the same packages."""
     if sys.path and sys.path[0] and os.path.abspath(sys.path[0]) == _ARCHIVE:
         del sys.path[0]
     # A bundle started from another bundle inherits the parent's PYTHONPATH: drop its packages.
@@ -318,7 +319,13 @@ def _activate(site: str) -> None:
     ]
     if parent and parent != site:
         sys.path[:] = [p for p in sys.path if p != parent]
-    sys.path.insert(_site_packages_index(), site)
+    index = _site_packages_index()
+    if os.environ.get("BUNDLEUP_INHERIT_PATH", "").lower() not in ("1", "true", "yes"):
+        # Isolation (ADR-0021): drop the machine's own packages (user and system site-packages,
+        # and whatever their .pth files added), so nothing outside the bundle is imported by
+        # accident. Children still see them: PYTHONPATH can only add to a path.
+        del sys.path[index:]
+    sys.path.insert(index, site)
     os.environ["PYTHONPATH"] = os.pathsep.join([site] + [p for p in pythonpath if p != site])
     os.environ["BUNDLEUP_SITE"] = site
 

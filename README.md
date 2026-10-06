@@ -24,7 +24,9 @@ python dist/<name>.pyz          # run it: no install, no network
 bundleup reads `pyproject.toml` + `uv.lock` (or the script's `# /// script` block) and needs
 [uv](https://docs.astral.sh/uv/) at build time; the bundle needs only Python. On first run it
 unpacks to a cache (`~/Library/Caches/bundleup`, `~/.cache/bundleup`, or a temp directory if
-those aren't writable), so later runs start as fast as an installed virtualenv. If it's started
+those aren't writable), so later runs start as fast as an installed virtualenv. A bundle only sees
+its own packages and the standard library; set `BUNDLEUP_INHERIT_PATH=1` to also let it use
+packages installed on the machine. If it's started
 with the wrong Python or on the wrong platform, it says so in one sentence.
 
 ## Why

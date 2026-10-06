@@ -34,6 +34,7 @@ import sys
 import tempfile
 import time
 import tomllib
+import zipfile
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
@@ -465,6 +466,27 @@ def compare_snapshots(normal: dict[str, Any], bundled: dict[str, Any]) -> list[s
     return differences
 
 
+def plant_shadows(py: str, bundle: Path, home: Path) -> None:
+    """Put a broken copy of each of the bundle's top-level modules in the user's site-packages."""
+    where = sh([py, "-c", "import site; print(site.getusersitepackages())"], env=run_env(home))
+    user_site = Path(where.stdout.strip())
+    with zipfile.ZipFile(bundle) as zf:
+        files = json.loads(zf.read("manifest.json"))["files"]
+    names = {
+        name.split("/")[0].split(".")[0]
+        for name in files
+        if name.endswith((".py", ".so", ".pyd"))
+        and not name.split("/")[0].endswith(".dist-info")
+        and not name.startswith("__bundleup_script__")
+    }
+    for name in names:
+        package = user_site / name
+        package.mkdir(parents=True, exist_ok=True)
+        (package / "__init__.py").write_text(
+            "raise ImportError('a stale copy in the user site-packages was imported')\n"
+        )
+
+
 def hostile(
     tool: str, meta: Meta, *, py: str, version: str, bundle: Path, stage: Path
 ) -> list[Result]:
@@ -499,6 +521,17 @@ def hostile(
             pool.map(lambda _: run_bundle(py, bundle, args=args, home=home, cwd=cwd), range(2))
         )
     record("concurrent-first-run", next((r for r in runs if not passed(r)), runs[0]))
+
+    # A broken copy of every top-level package in the user's site-packages (like an old
+    # `pip install --user`), with the machine's packages visible: the bundle's must still win.
+    if tool == "bundleup":
+        home, cwd = fresh_dirs(stage, "usersite")
+        plant_shadows(py, bundle, home)
+        inherit = {"BUNDLEUP_INHERIT_PATH": "1"}
+        record(
+            "user-site-conflict",
+            run_bundle(py, bundle, args=args, home=home, cwd=cwd, extra_env=inherit),
+        )
 
     if WINDOWS:  # Windows ignores the read-only attribute on directories: nothing to test
         return out

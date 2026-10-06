@@ -111,7 +111,7 @@ merged; ask if unsure.
    a Mac. Gauntlet coverage for at least manylinux x86_64 + CPython 3.11.
 8. **Runtime hardening:** `BUNDLEUP_CACHE` override and cache order (done in milestone 1); per-build
    unpack lock (**done 2026-10-05**: 16 simultaneous first runs 3.2 s → 0.55 s); stale-cache cleanup
-   and isolated `sys.path` (**waiting for the owner's decision**: both change default behaviour).
+   (waiting) and isolated `sys.path` (**done 2026-10-05**, [ADR-0021](adr/0021-isolate-from-machine-packages.md)).
 9. ~~**Faster large builds**~~ **Done 2026-10-05** ([findings](findings/2026-10-05-faster-builds.md),
    [ADR-0020](adr/0020-parallel-zip-and-bytecode-cache.md)). Was: threaded compression, per-wheel `.pyc` cache
    ([findings](findings/2026-10-04-large-project-and-rust.md)).

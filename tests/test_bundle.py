@@ -271,3 +271,43 @@ def test_reproducible_with_and_without_the_bytecode_cache(
         assert main(["build", str(src), "-o", str(out), "--python", sys.executable, "-q"]) == 0
         outputs.append(out.read_bytes())
     assert outputs[0] == outputs[1] == outputs[2]
+
+
+def base_python() -> str:
+    """A plain interpreter of the test's Python version (the test runs in a venv, and venvs
+    hide the user's site-packages, which would make an isolation test pass vacuously)."""
+    return getattr(sys, "_base_executable", sys.executable)
+
+
+def plant_user_module(env: dict[str, str], tmp_path: Path) -> None:
+    """Install a module into the user's site-packages, the way `pip install --user` would."""
+    env["PYTHONUSERBASE"] = str(tmp_path / "userbase")
+    where = subprocess.run(
+        [base_python(), "-c", "import site; print(site.getusersitepackages())"],
+        env=env,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    Path(where).mkdir(parents=True)
+    (Path(where) / "bundleup_planted.py").write_text("PLANTED = True\n")
+
+
+@pytest.mark.parametrize(("inherit", "visible"), [(None, False), ("1", True)])
+def test_machine_packages_are_hidden_unless_inherited(
+    tmp_path: Path, inherit: str | None, visible: bool
+) -> None:
+    script = tmp_path / "isolation.py"
+    script.write_text(
+        '# /// script\n# requires-python = ">=3.9"\n# dependencies = []\n# ///\n'
+        "import importlib.util\n"
+        "print(importlib.util.find_spec('bundleup_planted') is not None)\n"
+    )
+    out = tmp_path / "isolation.pyz"
+    assert main(["build", str(script), "-o", str(out), "--python", sys.executable, "-q"]) == 0
+    env = env_for(tmp_path)
+    plant_user_module(env, tmp_path)
+    if inherit:
+        env["BUNDLEUP_INHERIT_PATH"] = inherit
+    r = run(out, env, python=base_python())
+    assert r.returncode == 0, r.stderr
+    assert r.stdout.strip() == str(visible)

@@ -158,10 +158,10 @@ Latest analysis: [docs/findings/2026-10-04-milestone-1.md](../docs/findings/2026
 
 Each bundle should also be run under hostile conditions, because these break bundles that pass in
 a normal shell. Covered by `run_bundlers.py`: no network, macOS's system Python 3.9, paths with
-spaces and non-ASCII characters, read-only cwd, read-only `HOME`, simultaneous first runs, Linux
-and Windows (CI). Still to do:
+spaces and non-ASCII characters, read-only cwd, read-only `HOME`, simultaneous first runs, a
+broken copy of every bundled package in the user's site-packages (`user-site-conflict`, bundleup
+only), Linux and Windows (CI). Still to do:
 
 - Read-only bundle location, and a read-only or missing cache directory
 - No `HOME` / unusual `HOME`
-- An older, conflicting version of a dependency already installed in the user's site-packages
 - Built on one platform, run on another (cross-target builds, roadmap item 7)
