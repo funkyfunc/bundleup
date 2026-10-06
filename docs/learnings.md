@@ -6,6 +6,11 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-05** · build · `zipfile.writestr(ZipInfo, ...)` ignores the archive's `compresslevel`, so
+  "level 1" payloads were really level 6. `pathlib.Path.relative_to()` costs ~60 µs a call (over a
+  second for 18,000 files); use `os.walk` strings in hot loops. Set literals make `.pyc` bytes
+  depend on the hash seed: compile with `PYTHONHASHSEED=0` for reproducible builds. Evidence:
+  [findings](findings/2026-10-05-faster-builds.md).
 - **2026-10-05** · cross-target · `uv pip install --target --python-platform X` installs another
   platform's wheels from any machine, and builds pure-Python sdists fine. A compiled sdist is
   built for *this* machine: uv itself rejects the result ("not compatible with the target"), and

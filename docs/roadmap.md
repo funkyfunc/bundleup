@@ -111,7 +111,8 @@ merged; ask if unsure.
    a Mac. Gauntlet coverage for at least manylinux x86_64 + CPython 3.11.
 8. **Runtime hardening:** `BUNDLEUP_CACHE` override, cache order, per-build locks, stale-cache
    cleanup, isolated `sys.path`.
-9. **Faster large builds:** threaded compression, per-wheel `.pyc` cache
+9. ~~**Faster large builds**~~ **Done 2026-10-05** ([findings](findings/2026-10-05-faster-builds.md),
+   [ADR-0020](adr/0020-parallel-zip-and-bytecode-cache.md) Proposed). Was: threaded compression, per-wheel `.pyc` cache
    ([findings](findings/2026-10-04-large-project-and-rust.md)).
 10. **`bundleup check`**, the pre-ship analyzer, including the compatibility pre-check
    (native code that doesn't match the target).

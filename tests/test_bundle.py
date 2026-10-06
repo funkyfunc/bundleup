@@ -243,3 +243,31 @@ def test_loader_parses_on_any_python_3() -> None:
     """The loader must get far enough on an old Python to print "this app needs Python X"."""
     source = (Path(b.__file__).parent / "_loader.py").read_text()
     ast.parse(source, feature_version=(3, 5))  # raises SyntaxError on newer-only syntax
+
+
+SET_LITERALS = """\
+# /// script
+# requires-python = ">=3.9"
+# dependencies = []
+# ///
+WORDS = {"alpha", "beta", "gamma", "delta", "epsilon", "zeta", "eta", "theta"}
+def check(word: str) -> bool:
+    return word in {"one", "two", "three", "four", "five", "six", "seven", "eight"}
+print(check("two"), len(WORDS))
+"""
+
+
+def test_reproducible_with_and_without_the_bytecode_cache(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Set literals are stored in hash order, and string hashes are randomised per process: the
+    bytecode must still be identical, whether compiled now or restored from the cache."""
+    src = tmp_path / "sets.py"
+    src.write_text(SET_LITERALS)
+    outputs = []
+    for name, cache in (("cold", "c1"), ("warm", "c1"), ("other", "c2")):
+        monkeypatch.setenv("BUNDLEUP_BUILD_CACHE", str(tmp_path / cache))
+        out = tmp_path / f"{name}.pyz"
+        assert main(["build", str(src), "-o", str(out), "--python", sys.executable, "-q"]) == 0
+        outputs.append(out.read_bytes())
+    assert outputs[0] == outputs[1] == outputs[2]

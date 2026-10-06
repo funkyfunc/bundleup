@@ -11,7 +11,6 @@ Layout of the output (see docs/adr/0010-bundle-format-and-loader.md):
 
 from __future__ import annotations
 
-import hashlib
 import json
 import os
 import re
@@ -29,7 +28,7 @@ from typing import Any, Callable, Literal
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.utils import canonicalize_name
 
-from . import __version__, _platforms, _verify
+from . import __version__, _bytecode, _platforms, _verify, _zipwriter
 from ._errors import (
     ISSUES_URL,
     BundleMismatchError,
@@ -98,6 +97,7 @@ class Target:
     machine: str
     abiflags: str | None
     implementation: str
+    cache_tag: str  # names .pyc files, e.g. "cpython-312" (from the compiling interpreter)
     markers: dict[str, str]  # the PEP 508 environment uv.lock's markers are evaluated against
     python_platform: _platforms.Platform | None = None  # set when building for another platform
 
@@ -173,10 +173,11 @@ def run(
     cwd: Path | None = None,
     what: str = "",
     error: type[BundleupError] = UvError,
+    env: dict[str, str] | None = None,
 ) -> str:
     """Run a command and return its stdout, or raise `error` with its output as the detail."""
     progress(ProgressEvent("command", " ".join(cmd)))
-    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
+    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=env)
     if proc.returncode:
         detail = (proc.stderr or proc.stdout).strip()
         raise error(f"{what or cmd[0]} failed", detail=detail)
@@ -296,6 +297,7 @@ def find_python(
             machine=platform.machine,
             abiflags=None if platform.sys_platform == "win32" else "",  # no sys.abiflags on Windows
             implementation="cpython",
+            cache_tag=info["cache_tag"],
             markers=platform.markers(python_full_version=full),
             python_platform=platform,
         )
@@ -309,6 +311,7 @@ def find_python(
         machine=info["markers"]["platform_machine"],
         abiflags=info["abiflags"],
         implementation=info["markers"]["implementation_name"],
+        cache_tag=info["cache_tag"],
         markers=info["markers"],
     )
 
@@ -343,7 +346,8 @@ markers = {
     "sys_platform": sys.platform,
 }
 print(json.dumps({"version": sys.version_info[:2], "abiflags": getattr(sys, "abiflags", None),
-                  "executable": sys.executable, "markers": markers}))
+                  "executable": sys.executable, "markers": markers,
+                  "cache_tag": sys.implementation.cache_tag}))
 """
 
 
@@ -557,13 +561,9 @@ def inspect_site(site: Path) -> tuple[int, bool]:
     return count, native
 
 
-COMPILE_SITE = """
-import compileall, py_compile, sys
-compileall.compile_dir(sys.argv[1], ddir="", quiet=2, workers=int(sys.argv[2]),
-                       invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH)
-"""
-# In .py files. Below this, spawning worker interpreters costs more than it saves.
-PARALLEL_COMPILE_FROM = 300
+# Set literals are stored in .pyc files in hash order, and string hashes are randomised per process,
+# so compiling twice can give different bytes. A fixed seed keeps builds reproducible.
+COMPILE_ENV = {**os.environ, "PYTHONHASHSEED": "0"}
 COMPILE_LOADER = """
 import py_compile, sys
 py_compile.compile(sys.argv[1], cfile=sys.argv[2], dfile="__main__.py", doraise=True,
@@ -572,43 +572,39 @@ py_compile.compile(sys.argv[1], cfile=sys.argv[2], dfile="__main__.py", doraise=
 
 
 def precompile(target: Target, site: Path, *, progress: Progress) -> None:
-    """Compile everything with the target Python.
+    """Compile everything with the target's interpreter, reusing cached bytecode (_bytecode)."""
 
-    Unchecked-hash .pycs never consult the source's mtime, which suits an immutable,
-    content-addressed cache and survives extraction (mtimes aren't kept).
-    """
-    workers = 0 if sum(1 for _ in site.rglob("*.py")) >= PARALLEL_COMPILE_FROM else 1
-    run(
-        [target.executable, "-I", "-c", COMPILE_SITE, str(site), str(workers)],
-        what="compiling bytecode",
-        progress=progress,
-        error=BundleupError,
+    def compile_with(cmd: list[str]) -> None:
+        run(cmd, what="compiling bytecode", progress=progress, error=BundleupError, env=COMPILE_ENV)
+
+    identity = (
+        f"{_bytecode.FORMAT}-{target.implementation}-{target.full_version}-{target.cache_tag}"
+    )
+    _bytecode.precompile(
+        site,
+        python=target.executable,
+        python_identity=identity,
+        cache_tag=target.cache_tag,
+        run=compile_with,
     )
 
 
 def write_payload(site: Path, payload: Path) -> tuple[str, dict[str, str]]:
-    """Zip the installed tree reproducibly.
+    """Zip the installed tree reproducibly, compressing on several threads.
 
     Returns the archive's sha256, and each zipped file's RECORD-style hash, for the integrity
     check and the manifest.
     """
-    files = sorted(p for p in site.rglob("*") if p.is_file() or p.is_symlink())
-    written: dict[str, str] = {}
-    with zipfile.ZipFile(payload, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as zf:
-        for path in files:
-            rel = path.relative_to(site).as_posix()
-            data = path.read_bytes()
-            written[rel] = _verify.record_hash(data)
-            info = zipfile.ZipInfo(rel, FIXED_TIME)
-            info.compress_type = zipfile.ZIP_DEFLATED
-            mode = path.stat().st_mode
-            info.external_attr = ((0o755 if mode & 0o111 else 0o644) | 0o100000) << 16
-            zf.writestr(info, data)
-    digest = hashlib.sha256()
-    with open(payload, "rb") as f:
-        for chunk in iter(lambda: f.read(1 << 20), b""):
-            digest.update(chunk)
-    return digest.hexdigest(), written
+    members = [
+        _zipwriter.Member(rel, Path(path).read_bytes, os.stat(path).st_mode)
+        for rel, path in _bytecode.walk_files(site)
+    ]
+    workers = min(8, os.cpu_count() or 1)
+    # Level 6 (zlib's default): with compression spread over threads it costs ~5% more time than
+    # level 1 on a large tree and saves ~8-13% of the size (findings 2026-10-05-faster-builds).
+    return _zipwriter.write_zip(
+        payload, members, level=6, workers=workers, hasher=_verify.record_hash
+    )
 
 
 def verify_payload(
@@ -813,6 +809,7 @@ def build(
             what="compiling the loader",
             progress=report,
             error=BundleupError,
+            env=COMPILE_ENV,
         )
         output = (options.output or source.workdir / "dist" / f"{name}.pyz").absolute()
         manifest_json = manifest(

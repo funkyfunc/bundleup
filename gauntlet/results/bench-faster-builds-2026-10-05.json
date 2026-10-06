@@ -1,0 +1,29 @@
+[
+  {
+    "tool": "bundleup",
+    "project": "03-pure-deps",
+    "python": "3.12",
+    "build_ms": 155.5,
+    "first_run_ms": 49.0,
+    "warm_ms": 29.3,
+    "warm_min_ms": 28.9
+  },
+  {
+    "tool": "bundleup",
+    "project": "13-native-bundled-libs",
+    "python": "3.12",
+    "build_ms": 389.8,
+    "first_run_ms": 811.9,
+    "warm_ms": 39.0,
+    "warm_min_ms": 38.0
+  },
+  {
+    "tool": "bundleup",
+    "project": "21-large-pure-python",
+    "python": "3.12",
+    "build_ms": 2552.1,
+    "first_run_ms": 1420.5,
+    "warm_ms": 353.0,
+    "warm_min_ms": 349.0
+  }
+]

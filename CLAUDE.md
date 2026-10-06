@@ -61,10 +61,10 @@ Do these **as you go**, not only at the end:
   yet).
 - bundleup depends on the `uv` package (bundled binary) but prefers a uv ≥ 0.9 on `PATH`
   (ADR-0011, at the user's request).
-- Build speed on large projects is no better than pex (gauntlet 21: 5.2 vs 5.5 s); fixes are in
-  Python (threaded compression, per-wheel `.pyc` cache). Rust stays reserved for the analyzer's
-  scanner, which a parse-only proxy puts at ADR-0008's trigger
-  ([findings](docs/findings/2026-10-04-large-project-and-rust.md)).
+- **Builds are 2-9× faster than pex** after parallel compression and a per-wheel bytecode cache
+  (gauntlet 21: 2.5 s vs pex 5.5 s; [findings](docs/findings/2026-10-05-faster-builds.md),
+  [ADR-0020](docs/adr/0020-parallel-zip-and-bytecode-cache.md), **Proposed**). Rust stays reserved
+  for the analyzer's scanner ([findings](docs/findings/2026-10-04-large-project-and-rust.md)).
 - Engineering tooling done (Ruff, pyright, hooks; [ADR-0015](docs/adr/0015-engineering-tooling.md)).
 - **CI** (public repo, free): checks, tests on 4 OSes, and the gauntlet on Linux x64/arm64, Windows
   x64 and macOS arm64 × Python 3.9/3.11/3.12. bundleup passes everywhere, including Windows.
@@ -91,7 +91,8 @@ Do these **as you go**, not only at the end:
 MISSION.md              goal and scope
 pyproject.toml, src/bundleup/  the package (ADR-0018): __init__.py (public API), _cli.py, _build.py,
                         _verify.py (lock and RECORD checks), _errors.py, _term.py, _loader.py
-                        (the bundle's __main__)
+                        (the bundle's __main__), _platforms.py (cross targets), _zipwriter.py
+                        (parallel zip), _bytecode.py (bytecode cache)
 tests/snapshots/        CLI output and API snapshots; docs/cli-reference.md is generated too
 docs/schema/            JSON Schema of `bundleup build --json`
 tests/                  pytest: loader/CLI edge cases the gauntlet doesn't reach
