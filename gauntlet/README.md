@@ -26,19 +26,42 @@ If a project fails here, the *test* is broken, not the bundler. Add `--heavy` to
 
 Last run (2026-10-03, macOS arm64): all projects pass on every Python they support.
 
-## Running the existing bundlers
+## Running the bundlers
 
 ```bash
 uv run gauntlet/run_bundlers.py --conditions --out <name>
+uv run gauntlet/run_bundlers.py --tool bundleup --conditions --check --python 3.11 --out <name>
 uv run gauntlet/report.py gauntlet/results/<name>.json > gauntlet/results/<name>.md
 ```
 
 Builds every project with bundleup (this repo's, via `uv sync`), pex, shiv, zipapps and a naive
-`pip --target` + `zipapp`, for Python 3.9 and 3.12, then runs each bundle with network blocked from an
-empty directory. bundleup is given the project directory itself; the other tools get pre-exported
-requirements and a pre-built wheel, so bundleup's build time includes work theirs doesn't. `--conditions` adds
-the hostile runs (spaces in path, read-only cwd, read-only HOME, simultaneous first runs). Filter
-with `--tool`, `--python` and id prefixes. Scratch output goes to `gauntlet/.work/` (git-ignored).
+`pip --target` + `zipapp`, for Python 3.9 and 3.12 by default (`--python` takes any version), then
+runs each bundle from an empty directory with a fresh `HOME`. bundleup is given the project
+directory itself; the other tools get pre-exported requirements and a pre-built wheel, so
+bundleup's build time includes work theirs doesn't. Filter with `--tool`, `--python` and id
+prefixes. Scratch output goes to `gauntlet/.work/` (git-ignored).
+
+- **Pythons:** "3.9" on macOS means Apple's `/usr/bin/python3`; everything else is a uv-managed
+  Python (`uv python install <version>`). Bundles never run on a virtual environment: a venv's own
+  packages could mask one missing from a bundle, so the harness refuses one.
+- **No network:** blocked with `sandbox-exec` on macOS and `sudo unshare --net` on Linux (needs
+  passwordless sudo, as on CI). Windows can't block it; each result records `network_blocked`.
+- **`--conditions`** adds the hostile runs (spaces in path, read-only cwd, read-only HOME,
+  simultaneous first runs; Windows skips the read-only ones, since it ignores read-only on
+  directories) and, for bundleup, **`matches-venv`**: the project installed normally with
+  `uv sync` and the bundle's payload must have the same distributions and versions, the same
+  entry points, and the same top-level modules importing ([snapshot.py](snapshot.py)).
+- **`--check`** exits 1 if any result isn't what the project's `gauntlet.toml` expects. CI uses it.
+
+bundleup also checks every bundle at build time: the payload must match `uv.lock` (every locked
+package at its locked version, nothing extra) and every wheel's `RECORD` (every file present and
+byte-identical, nothing unexplained). See [testing-strategy.md](../docs/testing-strategy.md).
+
+## CI
+
+[`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the gauntlet for bundleup with
+`--conditions --check` on every push: Linux x64 (3.9, 3.11, 3.12), Linux arm64 and Windows x64
+(3.11, 3.12), macOS arm64 (Apple's 3.9, 3.12). Each job uploads its results JSON as an artifact.
 
 ## Measuring speed
 
@@ -99,15 +122,12 @@ Latest analysis: [docs/findings/2026-10-04-milestone-1.md](../docs/findings/2026
 
 ## Run conditions
 
-Each bundle should also be run under hostile conditions, because these break bundles that pass
-in a normal shell. `run_bundlers.py` covers the base run with no network, paths with spaces,
-read-only cwd, read-only HOME and simultaneous first runs; the rest are still to do:
+Each bundle should also be run under hostile conditions, because these break bundles that pass in
+a normal shell. Covered by `run_bundlers.py`: no network, macOS's system Python 3.9, paths with
+spaces and non-ASCII characters, read-only cwd, read-only `HOME`, simultaneous first runs, Linux
+and Windows (CI). Still to do:
 
-- macOS system Python (`/usr/bin/python3`, 3.9)
-- No network access
 - Read-only bundle location, and a read-only or missing cache directory
 - No `HOME` / unusual `HOME`
-- A path containing spaces and non-ASCII characters
-- Two processes starting the same bundle at once (first-run extraction race)
 - An older, conflicting version of a dependency already installed in the user's site-packages
-- Built on one platform, run on another (macOS arm64 → Linux x86_64 in a container)
+- Built on one platform, run on another (cross-target builds, roadmap item 7)

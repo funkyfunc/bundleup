@@ -49,7 +49,8 @@ line-length = 100
 target-version = "py39"  # the loader must run on macOS's system Python 3.9
 extend-exclude = ["gauntlet/projects", "docs"]  # fixtures (17 uses 3.12-only syntax on purpose)
 force-exclude = true  # also when a hook passes an excluded file explicitly
-per-file-target-version = { "gauntlet/*.py" = "py311" }  # harness scripts need tomllib
+# Harness scripts need tomllib; snapshot.py runs on the target Python, so it stays 3.9.
+per-file-target-version = { "gauntlet/*.py" = "py311", "gauntlet/snapshot.py" = "py39" }
 
 [tool.ruff.lint]
 # ANN enforces "type hints on every function signature" (docs/python-for-js-reviewers.md).
@@ -63,9 +64,11 @@ allowed-confusables = ["–"]  # the en dash reports use for "not applicable"
 
 [tool.pyright]
 include = ["src", "tests", "gauntlet/*.py"]
+exclude = ["gauntlet/projects", "gauntlet/.work"]  # fixtures, even when a path is passed explicitly
 pythonVersion = "3.9"
 typeCheckingMode = "standard"
 executionEnvironments = [
+    { root = "gauntlet/snapshot.py", pythonVersion = "3.9" },
     { root = "gauntlet", pythonVersion = "3.11" },
     { root = "src" },
     { root = "tests" },

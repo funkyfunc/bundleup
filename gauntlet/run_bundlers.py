@@ -44,6 +44,7 @@ ROOT = Path(__file__).parent
 PROJECTS = ROOT / "projects"
 WORK = ROOT / ".work"
 RESULTS = ROOT / "results"
+SNAPSHOT = ROOT / "snapshot.py"
 
 # Tool name -> the pinned package uvx runs it from (None: not run through uvx).
 TOOLS: dict[str, str | None] = {
@@ -377,7 +378,91 @@ def one(tool: str, project: Path, version: str, conditions: bool) -> list[Result
     results = [res]
     if conditions and res.outcome == "pass":
         results += hostile(tool, meta, py=py, version=version, bundle=out, stage=stage)
+        if tool == "bundleup":
+            results.append(matches_venv(project, meta, py=py, version=version, stage=stage))
     return results
+
+
+def venv_python(venv: Path) -> Path:
+    return venv / ("Scripts/python.exe" if WINDOWS else "bin/python")
+
+
+def install_normally(project: Path, meta: Meta, *, py: str, venv: Path) -> None:
+    """Install the project the way its users would without bundleup: `uv sync` (or, for a PEP 723
+    script, its exported dependencies into a fresh venv)."""
+    env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
+    if "script" not in meta:
+        env["UV_PROJECT_ENVIRONMENT"] = str(venv)
+        sync = ["uv", "sync", "--frozen", "--no-dev", "--no-editable", "--python", py, "-q"]
+        sh(sync, cwd=project, env=env).check_returncode()
+        return
+    sh(["uv", "venv", "-q", "--python", py, str(venv)], env=env).check_returncode()
+    flags = ["--no-hashes", "--no-header", "--no-annotate", "-q"]
+    if (project / f"{meta['script']}.lock").exists():
+        flags.append("--frozen")  # a script without dependencies has no lockfile
+    export = sh(["uv", "export", "--script", meta["script"], *flags], cwd=project, env=env)
+    export.check_returncode()
+    if export.stdout.strip():
+        reqs = venv.parent / "venv-requirements.txt"
+        reqs.write_text(export.stdout)
+        install = [
+            "uv",
+            "pip",
+            "install",
+            "-q",
+            "--python",
+            str(venv_python(venv)),
+            "-r",
+            str(reqs),
+        ]
+        sh(install, env=env).check_returncode()
+
+
+def matches_venv(project: Path, meta: Meta, *, py: str, version: str, stage: Path) -> Result:
+    """Compare the bundle's packages with a normal install: same distributions and versions, same
+    entry points, and the same top-level modules import (docs/testing-strategy.md)."""
+    res = Result("bundleup", meta["id"], version, condition="matches-venv")
+    res.network_blocked = network_blocker() is not None
+    try:
+        venv = stage / "venv"
+        install_normally(project, meta, py=py, venv=venv)
+        purelib = "import sysconfig; print(sysconfig.get_paths()['purelib'])"
+        venv_site = sh([str(venv_python(venv)), "-c", purelib]).stdout.strip()
+        normal = sh([str(venv_python(venv)), str(SNAPSHOT), venv_site])
+        cache = stage / "venv-cache"
+        home, cwd = fresh_dirs(stage, "venv-compare")
+        extra = {"BUNDLEUP_CACHE": str(cache)}
+        bundle = stage / "app.pyz"
+        run_bundle(py, bundle, args=meta.get("args", []), home=home, cwd=cwd, extra_env=extra)
+        extracted = next(p for p in cache.iterdir() if not p.name.startswith("."))
+        bundled = sh([py, "-S", str(SNAPSHOT), str(extracted), "--as-bundle"])
+    except (subprocess.CalledProcessError, StopIteration, OSError) as e:
+        res.outcome, res.error_kind, res.detail = "run-fail", "harness", repr(e)
+        return res
+    if normal.returncode or bundled.returncode:
+        res.outcome, res.error_kind = "run-fail", "snapshot-failed"
+        res.detail = (normal.stderr + bundled.stderr)[-1200:]
+        return res
+    differences = compare_snapshots(json.loads(normal.stdout), json.loads(bundled.stdout))
+    res.outcome = "run-fail" if differences else "pass"
+    if differences:
+        res.error_kind, res.detail = "mismatch", "\n".join(differences)[-1200:]
+    return res
+
+
+def compare_snapshots(normal: dict[str, Any], bundled: dict[str, Any]) -> list[str]:
+    """Readable differences between a venv snapshot and a bundle snapshot."""
+    differences = []
+    for key in ("distributions", "entry_points"):
+        venv_only = [x for x in normal[key] if x not in bundled[key]]
+        bundle_only = [x for x in bundled[key] if x not in normal[key]]
+        differences += [f"{key}: only in the venv: {x}" for x in venv_only]
+        differences += [f"{key}: only in the bundle: {x}" for x in bundle_only]
+    for name in sorted(set(normal["imports"]) | set(bundled["imports"])):
+        a, b = normal["imports"].get(name, "absent"), bundled["imports"].get(name, "absent")
+        if a != b:
+            differences.append(f"import {name}: venv {a}, bundle {b}")
+    return differences
 
 
 def hostile(

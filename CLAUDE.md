@@ -66,15 +66,20 @@ Do these **as you go**, not only at the end:
   scanner, which a parse-only proxy puts at ADR-0008's trigger
   ([findings](docs/findings/2026-10-04-large-project-and-rust.md)).
 - Engineering tooling done (Ruff, pyright, hooks; [ADR-0015](docs/adr/0015-engineering-tooling.md)).
-  The repo is being made public so CI can run the full matrix
-  ([ADR-0017](docs/adr/0017-platform-matrix-and-corpus-testing.md)).
+- **CI** (public repo, free): checks, tests on 4 OSes, and the gauntlet on Linux x64/arm64, Windows
+  x64 and macOS arm64 × Python 3.9/3.11/3.12. bundleup passes everywhere, including Windows.
+- **Correctness checks:** every build fails unless the payload matches `uv.lock` and every
+  wheel's `RECORD` exactly (`src/bundleup/_verify.py`); the gauntlet's `matches-venv` condition
+  compares each bundle with a `uv sync` install. Still to do from roadmap item 4: embedded
+  manifest + verify command, nightly top-PyPI smoke test, real-world test suites.
 - Next: see [docs/roadmap.md](docs/roadmap.md) "Next up".
 
 ## Layout
 
 ```
 MISSION.md              goal and scope
-pyproject.toml, src/bundleup/  the bundleup package: cli.py, build.py, _loader.py (bundle's __main__)
+pyproject.toml, src/bundleup/  the bundleup package: cli.py, build.py, _loader.py (bundle's __main__),
+                        _verify.py (build-time lock and RECORD checks)
 tests/                  pytest: loader/CLI edge cases the gauntlet doesn't reach
 docs/roadmap.md         "Next up" work list, then possible future directions
 docs/python-for-js-reviewers.md  code style rules + review guide for the JS-fluent owner
@@ -88,6 +93,8 @@ gauntlet/projects/      test projects, one failure mode each (gauntlet.toml desc
 gauntlet/check_native.py  control group: projects run installed normally
 gauntlet/run_bundlers.py  build + run with bundleup and existing bundlers, hostile conditions
 gauntlet/bench.py       sequential speed benchmark (build, first run, warm start) vs venv/shiv/pex
+gauntlet/snapshot.py    describes installed packages; the matches-venv condition compares two snapshots
+.github/workflows/ci.yml  CI: checks, tests, gauntlet across the platform matrix
 gauntlet/report.py      results JSON -> markdown
 gauntlet/results/       committed results
 gauntlet/.work/         scratch (git-ignored)

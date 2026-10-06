@@ -6,6 +6,25 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-05** · runtime · A wheel's data files (the `.data/data/` scheme, e.g. sympy's
+  `share/man/man1/isympy.1`) go to `<venv>/share/...` in a venv but to the payload root with
+  `--target` (uv and pip alike), where `share/` even imports as a namespace package. Harmless for man
+  pages; an app that looks for its data under `sys.prefix` won't find it in a bundle. Found by the
+  `matches-venv` condition on gauntlet 21; candidate for its own gauntlet project if a real package
+  depends on it. Evidence: [gauntlet/snapshot.py](../gauntlet/snapshot.py).
+- **2026-10-05** · platforms · First runs on CI: every gauntlet project passed on Linux x64 and
+  arm64 (3.9/3.11/3.12) and Windows x64 (3.11/3.12) with no code changes, including the hostile
+  conditions each platform supports. Windows can't block network for a process (recorded per
+  result) and ignores read-only on directories (those conditions are skipped there). Evidence: CI
+  artifacts of the first green run; [gauntlet README](../gauntlet/README.md) "CI".
+- **2026-10-05** · tooling · `astral-sh/setup-uv` publishes exact version tags only (`v10.2.0`), not
+  a floating `v10`; `actions/checkout` and `actions/upload-artifact` do have `v7`. Evidence:
+  `.github/workflows/ci.yml`.
+- **2026-10-05** · tooling · `uv export --format pylock.toml` gives each locked package's name,
+  version, marker and wheel hashes, which is what a lock-vs-bundle check needs. But
+  `uv pip install -r pylock.toml` is a preview feature and resolves local directories relative to
+  the file, so installs keep using the requirements format. Evidence: `src/bundleup/build.py`
+  `export()`.
 - **2026-10-05** · testing · Inside a project, `uv python find 3.12` returns the project's own
   `.venv` even with `--managed-python --no-project`; only running it from outside the repo (and
   without `VIRTUAL_ENV`) finds a plain interpreter. Since milestone 1 the harness had run "3.12"

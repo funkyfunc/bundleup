@@ -21,12 +21,15 @@ import sys
 import tempfile
 import time
 import zipfile
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable
 
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.utils import canonicalize_name
+
+from . import _verify
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -56,6 +59,7 @@ class Target:
     machine: str
     abiflags: str | None
     implementation: str
+    markers: dict[str, str]  # the PEP 508 environment uv.lock's markers are evaluated against
 
     def describe(self, native: bool) -> str:
         where = PLATFORM_NAMES.get(self.platform, self.platform)
@@ -167,19 +171,54 @@ def find_python(uv: str, source: Source, *, request: str | None) -> Target:
     else:
         cmd = _find_cmd(uv, source, request=request)
         exe = run(cmd, cwd=source.workdir, what="finding a Python").strip()
-    # No `platform` import: it costs ~30 ms on macOS's system Python.
-    probe = (
-        "import json, os, sys; m = os.uname().machine if hasattr(os, 'uname') else "
-        "os.environ.get('PROCESSOR_ARCHITECTURE', ''); print(json.dumps([sys.version_info[:2], "
-        "sys.version.split()[0], sys.platform, m, getattr(sys, 'abiflags', None), "
-        "sys.implementation.name, sys.executable]))"
+    info = json.loads(run([exe, "-I", "-S", "-c", PROBE], what=exe))
+    major, minor = info["version"]
+    return Target(
+        # Use the real interpreter from here on: uv re-inspects shims like macOS's
+        # /usr/bin/python3 on every call, but caches what it learns about a real interpreter.
+        executable=info["executable"] or exe,
+        version=(major, minor),
+        full_version=info["markers"]["python_full_version"],
+        platform=info["markers"]["sys_platform"],
+        machine=info["markers"]["platform_machine"],
+        abiflags=info["abiflags"],
+        implementation=info["markers"]["implementation_name"],
+        markers=info["markers"],
     )
-    version, full, plat, machine, abiflags, impl, real = json.loads(
-        run([exe, "-I", "-S", "-c", probe], what=exe)
-    )
-    # Use the real interpreter from here on: uv re-inspects shims like macOS's /usr/bin/python3
-    # on every call, but caches what it learns about a real interpreter.
-    return Target(real or exe, (version[0], version[1]), full, plat, machine, abiflags, impl)
+
+
+# Runs on the target Python (any version bundleup supports) and prints what the build needs.
+# The marker environment follows PEP 508; on POSIX it's read from os.uname() because importing
+# `platform` costs ~30 ms on macOS's system Python.
+PROBE = """
+import json, os, sys
+def full(v):
+    s = "%d.%d.%d" % (v.major, v.minor, v.micro)
+    return s if v.releaselevel == "final" else s + v.releaselevel[0] + str(v.serial)
+if hasattr(os, "uname"):
+    u = os.uname()
+    system, release, version, machine = u.sysname, u.release, u.version, u.machine
+else:
+    import platform
+    system, release = platform.system(), platform.release()
+    version, machine = platform.version(), platform.machine()
+impl = sys.implementation.name
+markers = {
+    "implementation_name": impl,
+    "implementation_version": full(sys.implementation.version),
+    "os_name": os.name,
+    "platform_machine": machine,
+    "platform_release": release,
+    "platform_system": system,
+    "platform_version": version,
+    "python_full_version": sys.version.split()[0],
+    "platform_python_implementation": {"cpython": "CPython", "pypy": "PyPy"}.get(impl, impl),
+    "python_version": "%d.%d" % sys.version_info[:2],
+    "sys_platform": sys.platform,
+}
+print(json.dumps({"version": sys.version_info[:2], "abiflags": getattr(sys, "abiflags", None),
+                  "executable": sys.executable, "markers": markers}))
+"""
 
 
 def _find_cmd(uv: str, source: Source, *, request: str | None) -> list[str]:
@@ -218,18 +257,23 @@ def _suggest(spec: SpecifierSet) -> str:
     return "<version>"
 
 
-def export(uv: str, source: Source, *, lock_mode: str | None, stage: Path) -> Path:
-    """Write the locked runtime dependencies (and the project itself) as a requirements file."""
-    reqs = stage / "requirements.txt"
-    cmd = [uv, "export", "--no-hashes", "--no-header", "--no-annotate", "--quiet", "-o", str(reqs)]
+def export(uv: str, source: Source, *, lock_mode: str | None, stage: Path) -> tuple[Path, Path]:
+    """Export the locked runtime dependencies (and the project itself) twice from one lock:
+    as requirements, which `uv pip install` takes, and as pylock.toml (PEP 751), which the
+    lock-vs-bundle check reads (uv only installs pylock.toml as a preview feature)."""
+    reqs, pylock = stage / "requirements.txt", stage / "pylock.toml"
+    selection = (
+        ["--script", str(source.path)] if source.is_script else ["--no-dev", "--no-editable"]
+    )
     if lock_mode:
-        cmd.append(f"--{lock_mode}")
-    if source.is_script:
-        cmd += ["--script", str(source.path)]
-    else:
-        cmd += ["--no-dev", "--no-editable"]
-    run(cmd, cwd=source.workdir, what="uv export")
-    return reqs
+        selection.append(f"--{lock_mode}")
+    as_requirements = ["--no-hashes", "--no-header", "--no-annotate", "-o", str(reqs)]
+    as_pylock = ["--format", "pylock.toml", "-o", str(pylock)]
+    commands = [[uv, "export", "--quiet", *selection, *fmt] for fmt in (as_requirements, as_pylock)]
+    with ThreadPoolExecutor(2) as pool:  # independent reads of the same lock
+        for future in [pool.submit(run, c, cwd=source.workdir, what="uv export") for c in commands]:
+            future.result()
+    return reqs, pylock
 
 
 def install(uv: str, source: Source, *, target: Target, reqs: Path, site: Path) -> None:
@@ -355,22 +399,44 @@ def precompile(target: Target, site: Path) -> None:
     )
 
 
-def write_payload(site: Path, payload: Path) -> str:
-    """Zip the installed tree reproducibly and return the archive's sha256."""
+def write_payload(site: Path, payload: Path) -> tuple[str, dict[str, str]]:
+    """Zip the installed tree reproducibly.
+
+    Returns the archive's sha256, and each zipped file's RECORD-style hash (empty for compiled
+    bytecode, which no RECORD lists) for the integrity check.
+    """
     files = sorted(p for p in site.rglob("*") if p.is_file() or p.is_symlink())
+    written: dict[str, str] = {}
     with zipfile.ZipFile(payload, "w", zipfile.ZIP_DEFLATED, compresslevel=1) as zf:
         for path in files:
             rel = path.relative_to(site).as_posix()
+            data = path.read_bytes()
+            written[rel] = "" if rel.endswith(".pyc") else _verify.record_hash(data)
             info = zipfile.ZipInfo(rel, FIXED_TIME)
             info.compress_type = zipfile.ZIP_DEFLATED
             mode = path.stat().st_mode
             info.external_attr = ((0o755 if mode & 0o111 else 0o644) | 0o100000) << 16
-            zf.writestr(info, path.read_bytes())
+            zf.writestr(info, data)
     digest = hashlib.sha256()
     with open(payload, "rb") as f:
         for chunk in iter(lambda: f.read(1 << 20), b""):
             digest.update(chunk)
-    return digest.hexdigest()
+    return digest.hexdigest(), written
+
+
+def verify(site: Path, *, pylock: Path, target: Target, written: dict[str, str]) -> None:
+    """Fail the build if the payload doesn't match uv.lock and the wheels' RECORD files exactly."""
+    locked = _verify.locked_packages(pylock.read_text(encoding="utf-8"), target.markers)
+    problems = _verify.check_lock(locked, _verify.installed_distributions(site))
+    problems += _verify.check_records(site, written)
+    if problems:
+        shown = "\n".join(f"  {p}" for p in problems[:20])
+        more = f"\n  ... and {len(problems) - 20} more" if len(problems) > 20 else ""
+        raise BuildError(
+            "the bundle wouldn't match uv.lock exactly, so it wasn't written:\n"
+            f"{shown}{more}\n"
+            "This is a bug in bundleup; please report it: https://github.com/funkyfunc/bundleup/issues"
+        )
 
 
 def render_loader(config: dict[str, object]) -> str:
@@ -439,7 +505,7 @@ def build(
     with tempfile.TemporaryDirectory(prefix="bundleup-") as tmp:
         stage = Path(tmp)
         site = stage / "site"
-        reqs = export(uv, source, lock_mode=lock_mode, stage=stage)
+        reqs, pylock = export(uv, source, lock_mode=lock_mode, stage=stage)
         lap("export")
         install(uv, source, target=target, reqs=reqs, site=site)
         lap("install")
@@ -448,8 +514,10 @@ def build(
         precompile(target, site)
         lap("compile")
         payload = stage / "payload.zip"
-        digest = write_payload(site, payload)
+        digest, written = write_payload(site, payload)
         lap("zip")
+        verify(site, pylock=pylock, target=target, written=written)
+        lap("verify")
         name = safe_name(source.name)
         config = {
             "NAME": source.name,

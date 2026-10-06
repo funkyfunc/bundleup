@@ -17,7 +17,8 @@ merged; ask if unsure.
    check on commit; tests on push). Land it as one checkpoint commit that also reformats existing
    code. Follow [python-for-js-reviewers.md](python-for-js-reviewers.md) when fixing what the
    checks flag.
-2. **CI on GitHub Actions, across the platform matrix** ([ADR-0015](adr/0015-engineering-tooling.md),
+2. ~~**CI on GitHub Actions**~~ **Done 2026-10-05:** [`ci.yml`](../.github/workflows/ci.yml); every
+   push runs checks, tests on 4 OSes and the gauntlet on 9 OS × Python jobs. Was: **CI on GitHub Actions, across the platform matrix** ([ADR-0015](adr/0015-engineering-tooling.md),
    [ADR-0017](adr/0017-platform-matrix-and-corpus-testing.md), [testing-strategy.md](testing-strategy.md)).
    - **First, ask the owner to make the repo public** (they're fine with it): GitHub Actions is
      free and unlimited on standard runners for public repos. Private repos get 2,000 minutes a
@@ -47,7 +48,8 @@ merged; ask if unsure.
    [cli-style-guide.md](cli-style-guide.md) "Open decision").
 4. **Correctness verification beyond the gauntlet.** The gauntlet proves bundles *run and behave*
    for 22 hand-written projects; nothing yet proves a bundle contains *exactly* the right files.
-   In order of value:
+   In order of value (**done 2026-10-05:** lock vs bundle and `RECORD` checks on every build, the
+   differential test as the gauntlet's `matches-venv` condition):
    - **Lockfile vs bundle check:** every locked runtime distribution present at the locked
      version; nothing extra (no dev dependencies); a build-time error if not.
    - **Wheel integrity:** every bundled file matches the sha256 in its wheel's `RECORD`.
