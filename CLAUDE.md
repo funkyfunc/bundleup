@@ -105,7 +105,9 @@ gauntlet/run_bundlers.py  build + run with bundleup and existing bundlers, hosti
 gauntlet/bench.py       sequential speed benchmark (build, first run, warm start) vs venv/shiv/pex
 gauntlet/snapshot.py    describes installed packages; the matches-venv condition compares two snapshots
 gauntlet/smoke.py       nightly breadth test: top PyPI packages bundled and compared with a venv
-.github/workflows/       ci.yml (every push: checks, tests, gauntlet matrix); nightly.yml (smoke test)
+gauntlet/corpus*.py, corpus.toml  nightly corpus: real CLIs run installed vs bundled; failures -> issues
+.github/workflows/       ci.yml (every push: checks, tests, gauntlet matrix); nightly.yml (smoke
+                        test); corpus.yml (corpus run + corpus-failure issues)
 gauntlet/report.py      results JSON -> markdown
 gauntlet/results/       committed results
 gauntlet/.work/         scratch (git-ignored)

@@ -1,0 +1,124 @@
+# Real programs bundleup is tested on every night (roadmap item 6, ADR-0017; runner: corpus.py).
+#
+# Every entry is pinned, so a failure can be reproduced. Each command is run both installed
+# normally (`uv sync`) and from the bundle; exit codes and output must match.
+#
+# [[app]]   a CLI from PyPI, wrapped in a throwaway locked project that depends on `requirement`.
+#           `command` is its console script; `entry` overrides it for apps without one.
+# [[repo]]  a public, clearly licensed GitHub project with pyproject.toml + uv.lock and a CLI,
+#           cloned at `commit`.
+#
+# Pins resolved 2026-10-05 for Python 3.12.
+
+[[app]]
+requirement = "httpie==3.2.4"
+command = "http"
+runs = [["--version"], ["--help"]]
+
+[[app]]
+requirement = "black==26.10.0"
+command = "black"
+runs = [["--version"], ["--help"]]
+
+[[app]]
+requirement = "isort==9.0.2"
+command = "isort"
+runs = [["--version"], ["--help"]]
+
+[[app]]
+requirement = "flake8==7.4.1"
+command = "flake8"
+runs = [["--version"], ["--help"]]
+
+[[app]]
+requirement = "pylint==4.1.2"
+command = "pylint"
+runs = [["--version"], ["--help"]]
+
+[[app]]
+requirement = "mypy==2.4.0"
+command = "mypy"
+runs = [["--version"], ["--help"]]
+
+[[app]]
+requirement = "yt-dlp==2026.8.19"
+command = "yt-dlp"
+runs = [["--version"], ["--help"]]
+
+[[app]]
+requirement = "cookiecutter==2.7.1"
+command = "cookiecutter"
+runs = [["--version"], ["--help"]]
+
+[[app]]
+requirement = "sqlfluff==4.4.0"
+command = "sqlfluff"
+runs = [["--version"], ["--help"]]
+
+[[app]]
+requirement = "mkdocs==1.6.1"
+command = "mkdocs"
+runs = [["--version"], ["--help"]]
+
+[[app]]
+requirement = "sphinx==9.1.0"
+command = "sphinx-build"
+runs = [["--version"], ["--help"]]
+
+[[app]]
+requirement = "ipython==9.17.1"
+command = "ipython"
+runs = [["--version"], ["--help"]]
+
+[[app]]
+requirement = "pre-commit==4.6.2"
+command = "pre-commit"
+runs = [["--version"], ["--help"]]
+
+[[app]]
+requirement = "tox==4.64.9"
+command = "tox"
+runs = [["--version"], ["--help"]]
+
+[[app]]
+requirement = "nox==2026.8.17"
+command = "nox"
+runs = [["--version"], ["--help"]]
+
+[[app]]
+requirement = "twine==7.0.0"
+command = "twine"
+runs = [["--version"], ["--help"]]
+
+[[app]]
+requirement = "awscli==1.46.1"
+command = "aws"
+entry = "awscli.clidriver:main"  # awscli installs a plain script, not an entry point
+runs = [["--version"], ["help"]]
+
+[[app]]
+requirement = "csvkit==2.2.0"
+command = "csvlook"
+runs = [["--version"], ["--help"]]
+
+[[app]]
+requirement = "datasette==0.65.5"
+command = "datasette"
+runs = [["--version"], ["--help"]]
+
+[[app]]
+requirement = "rich-cli==1.8.1"
+command = "rich"
+runs = [["--version"], ["--help"]]
+
+[[repo]]
+url = "https://github.com/yt-dlp/yt-dlp"
+commit = "51bab8a0116f4d8004c315706d809782607d5847"
+command = "yt-dlp"
+runs = [["--version"], ["--help"]]
+
+[[repo]]
+url = "https://github.com/pydantic/pydantic-ai"
+commit = "17c7673ca99012e825319cd64227a5a1ce75c181"
+command = "pai"
+runs = [["--version"], ["--help"]]

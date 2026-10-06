@@ -1,0 +1,58 @@
+# Nightly corpus run (roadmap item 6, ADR-0017): real programs from gauntlet/corpus.toml, installed
+# normally and bundled, run both ways; failures grouped into `corpus-failure` issues. Runs
+# third-party code, so only on GitHub's ephemeral runners, with no secrets beyond the job token.
+name: Nightly corpus
+
+on:
+  schedule:
+    - cron: "47 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  corpus:
+    name: Corpus (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0 # publishes exact versions only, no floating v10 tag
+      - run: uv sync --locked --python 3.12
+      - run: uv python install 3.12
+      - name: Install and bundle every program, run both, compare
+        run: uv run gauntlet/corpus.py --python 3.12 --jobs 4 --check --out corpus
+      - name: Keep the results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: corpus-${{ matrix.os }}
+          path: gauntlet/results/corpus.json
+          if-no-files-found: ignore
+
+  issues:
+    name: File failures as issues
+    needs: corpus
+    if: ${{ always() }}
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: corpus-*
+          path: results
+      - name: One issue per failure signature
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          uv run gauntlet/corpus_issues.py results/*/corpus.json --repo ${{ github.repository }}
+          --run-url ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

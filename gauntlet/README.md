@@ -76,6 +76,15 @@ platform are skipped. It imports third-party code, so it runs nightly on GitHub'
 ([`nightly.yml`](../.github/workflows/nightly.yml), Linux x64/arm64, macOS, Windows; ADR-0017), not
 on personal machines. Every failure should become a gauntlet project or a learning.
 
+## Corpus (nightly)
+
+[corpus.toml](corpus.toml) lists real programs, each pinned: PyPI CLIs (wrapped in a throwaway
+locked project) and GitHub repos with `uv.lock` (cloned at a commit). [corpus.py](corpus.py)
+installs each normally and bundles it, runs the same commands both ways (`--version`, `--help`),
+and compares exit codes and output. [corpus_issues.py](corpus_issues.py) groups failures by
+signature into `corpus-failure` issues. Runs nightly on GitHub's runners only
+([`corpus.yml`](../.github/workflows/corpus.yml), ADR-0017): it runs third-party code.
+
 ## Measuring speed
 
 ```bash

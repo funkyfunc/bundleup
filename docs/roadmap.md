@@ -72,7 +72,10 @@ merged; ask if unsure.
    [ADR-0016](adr/0016-cli-and-api-conventions.md)): `bundleup build [PATH]` (verbs), stderr/stdout split,
    `error:`/`hint:` messages, exit codes, `--json`, library API (`build()`, `BuildOptions`,
    `BundleupError`), snapshot tests.
-6. **Nightly corpus testing with AI triage** ([testing-strategy.md](testing-strategy.md),
+6. **Nightly corpus testing with AI triage** (**steps 1-5 built 2026-10-05**:
+   [`corpus.toml`](../gauntlet/corpus.toml), [`corpus.py`](../gauntlet/corpus.py),
+   [`corpus_issues.py`](../gauntlet/corpus_issues.py), [`corpus.yml`](../.github/workflows/corpus.yml);
+   step 6 deferred by the owner, step 7 once there's a week of results) ([testing-strategy.md](testing-strategy.md),
    [ADR-0017](adr/0017-platform-matrix-and-corpus-testing.md), accepted 2026-10-05: issues first, agent
    triage (step 6) later). Real open-source projects,
    cloned and bundled every night, so bundleup is tested on code nobody wrote for us. Needs items
