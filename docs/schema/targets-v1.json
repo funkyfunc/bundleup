@@ -1,0 +1,89 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/funkyfunc/bundleup/blob/main/docs/schema/targets-v1.json",
+  "title": "bundleup targets --json, schema version 1",
+  "description": "The target presets. Within schema_version 1 changes are additive only.",
+  "type": "object",
+  "required": [
+    "schema_version",
+    "command",
+    "ok",
+    "exit_code",
+    "result",
+    "diagnostics"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "command": {
+      "const": "targets"
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "exit_code": {
+      "enum": [
+        0,
+        1,
+        2,
+        3,
+        130
+      ]
+    },
+    "result": {
+      "type": "object",
+      "required": [
+        "targets"
+      ],
+      "properties": {
+        "targets": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "name",
+              "description",
+              "format",
+              "python",
+              "python_platform",
+              "expansion"
+            ],
+            "properties": {
+              "name": {
+                "type": "string"
+              },
+              "description": {
+                "type": "string"
+              },
+              "format": {
+                "enum": [
+                  "pyz",
+                  "dir",
+                  "lambda"
+                ]
+              },
+              "python": {
+                "type": "string",
+                "description": "The default; --python overrides it"
+              },
+              "python_platform": {
+                "type": "string",
+                "description": "For the default Python; it can depend on the version"
+              },
+              "expansion": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "diagnostics": {
+      "type": "array"
+    }
+  }
+}

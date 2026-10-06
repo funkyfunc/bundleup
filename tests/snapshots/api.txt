@@ -1,15 +1,17 @@
-__all__ = ['BuildOptions', 'BuildResult', 'BundleMismatchError', 'BundleupError', 'CachedBundle', 'CheckFailedError', 'CheckReport', 'CleanReport', 'Diagnostic', 'EntryPointError', 'ExitCode', 'LockfileOutdatedError', 'NoCompatibleWheelError', 'NotABundleError', 'PackageSize', 'ProgressEvent', 'ProjectError', 'PythonMismatchError', 'PythonNotFoundError', 'Target', 'UsageError', 'UvError', 'UvNotFoundError', 'VerifyReport', '__version__', 'build', 'check', 'clean_cache', 'list_cache', 'verify']
+__all__ = ['BuildOptions', 'BuildResult', 'BundleMismatchError', 'BundleupError', 'CachedBundle', 'CheckFailedError', 'CheckReport', 'CleanReport', 'Diagnostic', 'EntryPointError', 'ExitCode', 'LockfileOutdatedError', 'NoCompatibleWheelError', 'NotABundleError', 'PackageSize', 'Preset', 'ProgressEvent', 'ProjectError', 'PythonMismatchError', 'PythonNotFoundError', 'Target', 'UsageError', 'UvError', 'UvNotFoundError', 'VerifyReport', '__version__', 'build', 'check', 'clean_cache', 'list_cache', 'list_targets', 'verify']
 build(options: 'BuildOptions', *, progress: 'Callable[[ProgressEvent], None] | None' = None) -> 'BuildResult'
 check(options: 'BuildOptions', *, progress: 'Callable[[ProgressEvent], None] | None' = None) -> 'CheckReport'
 verify(bundle: 'Path') -> 'VerifyReport'
 list_cache() -> 'list[CachedBundle]'
 clean_cache(*, older_than_days: 'float' = 30, build: 'bool' = False, dry_run: 'bool' = False) -> 'CleanReport'
-BuildOptions: path: Path, output: Path | None, python: str | None, entry: str | None, lock_mode: Literal['locked', 'frozen'] | None, python_platform: str | None, strict: bool
-BuildResult: output: Path, size_bytes: int, name: str, version: str | None, packages: int, native: bool, target: Target, project_dir: Path, duration_s: float, timings: dict[str, float], diagnostics: list[Diagnostic]
+list_targets() -> 'list[Preset]'
+BuildOptions: path: Path, output: Path | None, python: str | None, entry: str | None, lock_mode: Literal['locked', 'frozen'] | None, python_platform: str | None, strict: bool, format: Literal['pyz', 'dir', 'lambda'] | None, target: str | None
+BuildResult: output: Path, size_bytes: int, name: str, version: str | None, packages: int, native: bool, target: Target, project_dir: Path, duration_s: float, timings: dict[str, float], diagnostics: list[Diagnostic], format: str, entry: str | None
 ProgressEvent: kind: Literal['step', 'command'], text: str
 Diagnostic: code: str, level: Literal['error', 'warning'], message: str, hint: str | None, detail: str | None, package: str | None, file: str | None, line: int | None
 CheckReport: name: str, version: str | None, target: Target, native: bool, packages: list[PackageSize], diagnostics: list[Diagnostic], duration_s: float
 PackageSize: name: str, version: str | None, size_bytes: int, native: bool
+Preset: name: str, description: str, format: str, python: str, platform_for: Callable[[str], str]
 VerifyReport: bundle: Path, name: str, files: int, problems: list[str], cache: Path | None, cache_problems: list[str]
 CachedBundle: path: Path, name: str, size_bytes: int, last_used: float
 CleanReport: removed: list[Path], freed_bytes: int, dry_run: bool

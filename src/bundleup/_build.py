@@ -29,7 +29,7 @@ from typing import Any, Callable, Literal
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.utils import canonicalize_name
 
-from . import __version__, _bytecode, _check, _platforms, _verify, _zipwriter
+from . import __version__, _bytecode, _check, _platforms, _targets, _verify, _zipwriter
 from ._check import CheckReport
 from ._errors import (
     ISSUES_URL,
@@ -74,6 +74,9 @@ class BuildOptions:
     # Another OS/CPU, in uv's terms (e.g. "x86_64-manylinux_2_28"); default: this machine.
     python_platform: str | None = None
     strict: bool = False  # warnings fail the build too (errors always do)
+    # What to write (ADR-0025): "pyz" (the default), "dir" or "lambda".
+    format: Literal["pyz", "dir", "lambda"] | None = None
+    target: str | None = None  # a preset such as "lambda" (`bundleup targets`); flags win
 
 
 @dataclass(frozen=True)
@@ -131,6 +134,7 @@ class Source:
     name: str
     requires_python: str | None
     is_script: bool
+    pylock: Path | None = None  # a project's pylock.toml (PEP 751), used when there's no uv.lock
 
     @property
     def workdir(self) -> Path:
@@ -154,6 +158,16 @@ class BuildResult:
     timings: dict[str, float]  # seconds per build step, keyed by the slugs in STEPS
     # Warnings from the analysis (ADR-0024); in the --json document's `diagnostics`, not `result`.
     diagnostics: list[Diagnostic] = field(default_factory=list)
+    format: str = "pyz"
+    entry: str | None = None  # what runs: "module:function", "module", or the script's path
+
+    @property
+    def handler(self) -> str | None:
+        """For Lambda: the handler setting, "module.function", if the entry is a function."""
+        if self.entry and ":" in self.entry:
+            module, function = self.entry.split(":", 1)
+            return f"{module}.{function}"
+        return None
 
     def to_json_dict(self) -> dict[str, object]:
         try:
@@ -170,6 +184,8 @@ class BuildResult:
             "target": self.target.to_json_dict(native=self.native),
             "duration_s": round(self.duration_s, 3),
             "timings": {step: round(seconds, 3) for step, seconds in self.timings.items()},
+            "format": self.format,
+            "entry": self.entry,
         }
 
 
@@ -242,7 +258,12 @@ def load_source(path: Path) -> Source:
             raise ProjectError(
                 f"{pyproject} has no [project] name", hint='add `name = "..."` under [project]'
             )
-        return Source(path, project["name"], project.get("requires-python"), is_script=False)
+        # uv.lock first (it's what uv users have); a standard pylock.toml otherwise (ADR-0026).
+        lock = path / "pylock.toml"
+        pylock = lock if lock.is_file() and not (path / "uv.lock").exists() else None
+        return Source(
+            path, project["name"], project.get("requires-python"), is_script=False, pylock=pylock
+        )
     raise ProjectError(
         f"{path} is not a project directory or a .py script",
         hint="pass a directory with pyproject.toml, or a PEP 723 script",
@@ -394,12 +415,42 @@ def _suggest(spec: SpecifierSet) -> str:
     return "<version>"
 
 
+def from_pylock(source: Source, stage: Path) -> tuple[list[list[str]], Path]:
+    """Install arguments for a project's own pylock.toml, and the lock the check compares the
+    bundle with. uv installs the file in place (its relative paths are relative to it). A lock
+    from another tool may not list the project itself; then the project is installed alongside
+    and added to the copy the check reads."""
+    assert source.pylock is not None
+    text = source.pylock.read_text(encoding="utf-8")
+    try:
+        packages = tomllib.loads(text).get("packages", [])
+    except tomllib.TOMLDecodeError as e:
+        raise ProjectError(f"{source.pylock} isn't valid TOML: {e}") from None
+    me = canonicalize_name(source.name)
+    mine = [p for p in packages if canonicalize_name(str(p.get("name", ""))) == me]
+    if any(p.get("directory", {}).get("editable") for p in mine):
+        raise ProjectError(
+            f"{source.pylock.name} installs {source.name} as editable, which would point the "
+            "bundle back at this directory",
+            hint="export the lock without editable installs (uv: --no-editable)",
+        )
+    installs = [["-r", str(source.pylock)]] if packages else []  # uv rejects an empty lock
+    check = stage / "pylock.toml"
+    if not mine:
+        installs.append([str(source.path)])
+        text += f'\n[[packages]]\nname = "{source.name}"\ndirectory = {{ path = "." }}\n'
+    check.write_text(text, encoding="utf-8")
+    return installs, check
+
+
 def export(
     uv: str, source: Source, *, lock_mode: str | None, stage: Path, progress: Progress
-) -> tuple[Path, Path]:
-    """Export the locked runtime dependencies (and the project itself) twice from one lock:
-    as requirements, which `uv pip install` takes, and as pylock.toml (PEP 751), which the
-    lock-vs-bundle check reads (uv only installs pylock.toml as a preview feature)."""
+) -> tuple[list[list[str]], Path]:
+    """What to install, as `uv pip install` arguments, and the pylock.toml (PEP 751) the
+    lock-vs-bundle check reads. From uv.lock: exported twice in parallel, as requirements and as
+    pylock.toml. From a project's own pylock.toml: that file (ADR-0026)."""
+    if source.pylock:
+        return from_pylock(source, stage)
     reqs, pylock = stage / "requirements.txt", stage / "pylock.toml"
     selection = (
         ["--script", str(source.path)] if source.is_script else ["--no-dev", "--no-editable"]
@@ -425,39 +476,41 @@ def export(
                 detail=e.detail,
             ) from None
         raise
-    return reqs, pylock
+    return [["-r", str(reqs)]], pylock
+
+
+def script_path(source: Source, fmt: str) -> str | None:
+    """Where a PEP 723 script goes in the payload: out of the way in a .pyz (the loader runs it),
+    at the top for `dir` and `lambda`, where it's imported as a module (a Lambda handler)."""
+    if not source.is_script:
+        return None
+    return f"{_verify.SCRIPT_DIR}/{source.path.name}" if fmt == "pyz" else source.path.name
 
 
 def install(
-    uv: str, source: Source, *, target: Target, reqs: Path, site: Path, progress: Progress
+    uv: str,
+    source: Source,
+    *,
+    target: Target,
+    reqs: list[list[str]],
+    site: Path,
+    script: str | None,
+    progress: Progress,
 ) -> None:
-    """Install the exported set into `site`, the directory that becomes the payload."""
+    """Install the exported set into `site`, the directory that becomes the payload. `reqs` is
+    one `uv pip install` argument list per call (uv takes a pylock.toml only on its own)."""
     # The export is the complete, pinned set, so --no-deps installs exactly the lock. Relative
     # paths in it (the project itself, workspace members) resolve against the working directory.
+    platform = ["--python-platform", target.python_platform.name] if target.python_platform else []
+    common = ["--quiet", "--no-deps", "--target", str(site), "--python", target.executable]
     try:
-        run(
-            [
-                uv,
-                "pip",
-                "install",
-                "--quiet",
-                "--no-deps",
-                "--target",
-                str(site),
-                "--python",
-                target.executable,
-                *(
-                    ["--python-platform", target.python_platform.name]
-                    if target.python_platform
-                    else []
-                ),
-                "-r",
-                str(reqs),
-            ],
-            cwd=source.workdir,
-            what="uv pip install",
-            progress=progress,
-        )
+        for args in reqs:
+            run(
+                [uv, "pip", "install", *common, *platform, *args],
+                cwd=source.workdir,
+                what="uv pip install",
+                progress=progress,
+            )
     except UvError as e:
         if target.python_platform and "is not compatible with the target" in (e.detail or ""):
             raise NoCompatibleWheelError(
@@ -478,21 +531,27 @@ def install(
     for folder in _verify.SCRIPT_DIRS:
         with contextlib.suppress(OSError):  # missing, or holds files a wheel ships: keep it
             (site / folder).rmdir()
-    if source.is_script:
-        dest = site / "__bundleup_script__"
-        dest.mkdir()
-        shutil.copy2(source.path, dest / source.path.name)
+    if script:
+        if (site / script).exists():
+            raise ProjectError(
+                f"{script} would replace a file one of the dependencies installs",
+                hint="rename the script",
+            )
+        (site / script).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source.path, site / script)
 
 
-def resolve_entry(source: Source, site: Path, *, entry: str | None) -> tuple[str, str, str]:
+def resolve_entry(
+    source: Source, site: Path, *, entry: str | None, script: str | None
+) -> tuple[str, str, str]:
     """What the loader runs: --entry, the project's console script, or the script itself."""
-    if source.is_script:
+    if script:
         if entry:
             raise UsageError(
                 "--entry is for projects; a script bundle runs the script",
                 hint="drop --entry",
             )
-        return ("script", f"__bundleup_script__/{source.path.name}", "")
+        return ("script", script, "")
     scripts = console_scripts(site, source.name)
     if entry is None:
         if len(scripts) == 1:
@@ -645,7 +704,7 @@ def write_payload(site: Path, payload: Path) -> tuple[str, dict[str, str]]:
 
 
 def verify_payload(
-    site: Path, *, pylock: Path, target: Target, written: dict[str, str]
+    site: Path, *, pylock: Path, target: Target, written: dict[str, str], script: str | None
 ) -> list[_verify.LockedPackage]:
     """Fail the build if the payload doesn't match uv.lock and the wheels' RECORD files exactly.
 
@@ -653,7 +712,9 @@ def verify_payload(
     """
     locked = _verify.locked_packages(pylock.read_text(encoding="utf-8"), target.markers)
     problems = _verify.check_lock(locked, _verify.installed_distributions(site))
-    problems += _verify.check_records(site, written, removed=launchers(site))
+    problems += _verify.check_records(
+        site, written, removed=launchers(site), added=[script] if script else []
+    )
     if problems:
         shown = "\n".join(problems[:20])
         more = f"\n... and {len(problems) - 20} more" if len(problems) > 20 else ""
@@ -680,13 +741,14 @@ def manifest(
     version: str | None,
     target: Target,
     native: bool,
-    entry: tuple[str, str, str],
-    cache_dir: str,
-    payload: Path,
-    payload_sha256: str,
+    entry: tuple[str, str, str] | None,
+    cache_dir: str | None,
+    fmt: str,
+    payload: Path | None,
+    payload_sha256: str | None,
     locked: list[_verify.LockedPackage],
     files: dict[str, str],
-    loader: dict[str, str],
+    loader: dict[str, str] | None,
 ) -> bytes:
     """What's inside the bundle, with hashes: read by `bundleup verify` and by reviewers
     (`unzip -p app.pyz manifest.json`). Sorted, so the same inputs give the same bytes."""
@@ -696,9 +758,11 @@ def manifest(
         "name": source.name,
         "version": version,
         "target": target.to_json_dict(native=native),
-        "entry": list(entry),
+        "entry": list(entry) if entry else None,
         "cache_dir": cache_dir,
-        "payload": {"sha256": payload_sha256, "size": payload.stat().st_size},
+        "format": fmt,
+        # The inner zip and the loader exist only in a .pyz; `files` covers every format.
+        "payload": {"sha256": payload_sha256, "size": payload.stat().st_size} if payload else None,
         "loader": loader,  # __main__.py and __main__.pyc: they run first, so they're checked too
         "packages": [
             {"name": p.name, "version": p.version} for p in sorted(locked, key=lambda p: p.name)
@@ -794,95 +858,227 @@ class _Steps:
             self.current = None
 
 
+FORMATS = ("pyz", "dir", "lambda")
+DIR_MANIFEST = "bundleup-manifest.json"  # in a `dir` output and at the top of a Lambda zip
+# AWS Lambda's limits for a function's .zip (checked 2026-10-05): 50 MB to upload directly,
+# 250 MB unzipped including layers.
+LAMBDA_UPLOAD = 50 * 1000 * 1000
+LAMBDA_UNZIPPED = 250 * 1000 * 1000
+
+
 def build(
     options: BuildOptions, *, progress: Callable[[ProgressEvent], None] | None = None
 ) -> BuildResult:
-    """Bundle a project or PEP 723 script into one .pyz.
+    """Bundle a project or PEP 723 script into one .pyz (or a directory, or a Lambda zip).
 
     Raises a BundleupError subclass for every expected failure. Never prints; reports steps
     and commands through `progress` if given.
     """
+    options, _flags = _targets.apply(options)
+    fmt = _format(options)
     report = progress or _ignore
     steps = _Steps(report)
     with tempfile.TemporaryDirectory(prefix="bundleup-") as tmp:
         stage = Path(tmp)
-        p = _prepare(options, stage=stage, steps=steps, progress=report)
-        source, target, site, native, version = p.source, p.target, p.site, p.native, p.version
+        p = _prepare(options, fmt=fmt, stage=stage, steps=steps, progress=report)
         failing = [d for d in p.diagnostics if d.level == "error" or options.strict]
         if failing:
             raise CheckFailedError(
-                f"found {_count(failing)}, so no bundle was written",
+                f"found {_count(failing)}, so nothing was written",
                 diagnostics=p.diagnostics,
-                hint="--strict makes warnings fail too; build without it to allow them"
-                if not any(d.level == "error" for d in failing)
-                else None,
+                hint=_STRICT_HINT if not any(d.level == "error" for d in failing) else None,
             )
-        steps.start("zip")
-        payload = stage / "payload.zip"
-        digest, written = write_payload(site, payload)
-        steps.start("verify")
-        locked = verify_payload(site, pylock=p.pylock, target=target, written=written)
-        steps.start("write")
-        name = safe_name(source.name)
-        cache_dir = f"{name}-{digest[:16]}"
-        config = {
-            "NAME": source.name,
-            "DIRNAME": cache_dir,
-            "PYTHON": target.version,
-            "PLATFORM": target.platform,
-            "MACHINE": target.machine if native else None,
-            "ABIFLAGS": target.abiflags if native else None,
-            "TARGET": target.describe(native),
-            "ENTRY": p.entry,
-            "PTH": pth_files(site),
-        }
-        loader, loader_pyc = stage / "__main__.py", stage / "__main__.pyc"
-        loader.write_text(render_loader(config), encoding="utf-8")
-        run(
-            [target.executable, "-I", "-c", COMPILE_LOADER, str(loader), str(loader_pyc)],
-            what="compiling the loader",
-            progress=report,
-            error=BundleupError,
-            env=COMPILE_ENV,
-        )
-        output = (options.output or source.workdir / "dist" / f"{name}.pyz").absolute()
-        manifest_json = manifest(
-            source=source,
-            version=version,
-            target=target,
-            native=native,
-            entry=p.entry,
-            cache_dir=cache_dir,
-            payload=payload,
-            payload_sha256=digest,
-            locked=locked,
-            files=written,
-            loader={
-                "__main__.py": _verify.record_hash(loader.read_bytes()),
-                "__main__.pyc": _verify.record_hash(loader_pyc.read_bytes()),
-            },
-        )
-        write_bundle(
-            output,
-            payload=payload,
-            loader=loader,
-            loader_pyc=loader_pyc,
-            manifest_json=manifest_json,
-        )
+        name = safe_name(p.source.name)
+        default = {"pyz": f"{name}.pyz", "dir": name, "lambda": f"{name}-lambda.zip"}[fmt]
+        output = (options.output or p.source.workdir / "dist" / default).absolute()
+        diagnostics = list(p.diagnostics)
+        if fmt == "pyz":
+            _write_pyz(p, output, stage=stage, steps=steps, progress=report)
+        elif fmt == "dir":
+            _write_dir(p, output, steps=steps)
+        else:
+            _write_lambda(p, output, stage=stage, steps=steps)
+            if output.stat().st_size > LAMBDA_UPLOAD:
+                diagnostics.append(_lambda_upload_warning(output))
+                if options.strict:
+                    output.unlink()
+                    raise CheckFailedError(
+                        "found 1 warning, so nothing was written",
+                        diagnostics=diagnostics,
+                        hint=_STRICT_HINT,
+                    )
         steps.finish()
+    size = output.stat().st_size if output.is_file() else sum(x.size_bytes for x in p.sizes)
     return BuildResult(
         output=output,
-        size_bytes=output.stat().st_size,
-        name=source.name,
-        version=version,
+        size_bytes=size,
+        name=p.source.name,
+        version=p.version,
         packages=p.packages,
-        native=native,
-        target=target,
-        project_dir=source.workdir,
+        native=p.native,
+        target=p.target,
+        project_dir=p.source.workdir,
         duration_s=time.perf_counter() - steps.started,
         timings=steps.timings,
-        diagnostics=p.diagnostics,
+        diagnostics=diagnostics,
+        format=fmt,
+        entry=_entry_text(p.entry),
     )
+
+
+_STRICT_HINT = "--strict makes warnings fail too; build without it to allow them"
+
+
+def _format(options: BuildOptions) -> str:
+    fmt = options.format or "pyz"
+    if fmt not in FORMATS:
+        raise UsageError(f"unknown format `{fmt}`", hint=f"use one of {', '.join(FORMATS)}")
+    return fmt
+
+
+def _entry_text(entry: tuple[str, str, str] | None) -> str | None:
+    if entry is None:
+        return None
+    kind, target, attr = entry
+    return f"{target}:{attr}" if kind == "call" else target
+
+
+def _lambda_upload_warning(output: Path) -> Diagnostic:
+    return Diagnostic(
+        "lambda-upload-size",
+        "warning",
+        f"{output.name} is over Lambda's 50 MB limit for uploading a .zip directly",
+        hint="upload it to S3 and point the function at it (the limit there is 250 MB unzipped), "
+        "or move large dependencies into a layer",
+    )
+
+
+def _write_pyz(
+    p: _Prepared, output: Path, *, stage: Path, steps: _Steps, progress: Progress
+) -> None:
+    """The default: shebang + outer zip with the loader, the manifest and the payload."""
+    assert p.entry is not None  # resolved for every .pyz
+    steps.start("zip")
+    payload = stage / "payload.zip"
+    digest, written = write_payload(p.site, payload)
+    steps.start("verify")
+    locked = verify_payload(
+        p.site, pylock=p.pylock, target=p.target, written=written, script=p.script
+    )
+    steps.start("write")
+    cache_dir = f"{safe_name(p.source.name)}-{digest[:16]}"
+    target, native = p.target, p.native
+    config = {
+        "NAME": p.source.name,
+        "DIRNAME": cache_dir,
+        "PYTHON": target.version,
+        "PLATFORM": target.platform,
+        "MACHINE": target.machine if native else None,
+        "ABIFLAGS": target.abiflags if native else None,
+        "TARGET": target.describe(native),
+        "ENTRY": p.entry,
+        "PTH": pth_files(p.site),
+    }
+    loader, loader_pyc = stage / "__main__.py", stage / "__main__.pyc"
+    loader.write_text(render_loader(config), encoding="utf-8")
+    run(
+        [target.executable, "-I", "-c", COMPILE_LOADER, str(loader), str(loader_pyc)],
+        what="compiling the loader",
+        progress=progress,
+        error=BundleupError,
+        env=COMPILE_ENV,
+    )
+    manifest_json = manifest(
+        source=p.source,
+        version=p.version,
+        target=target,
+        native=native,
+        entry=p.entry,
+        cache_dir=cache_dir,
+        fmt="pyz",
+        payload=payload,
+        payload_sha256=digest,
+        locked=locked,
+        files=written,
+        loader={
+            "__main__.py": _verify.record_hash(loader.read_bytes()),
+            "__main__.pyc": _verify.record_hash(loader_pyc.read_bytes()),
+        },
+    )
+    write_bundle(
+        output, payload=payload, loader=loader, loader_pyc=loader_pyc, manifest_json=manifest_json
+    )
+
+
+def _plain_manifest(p: _Prepared, fmt: str, written: dict[str, str]) -> bytes:
+    locked = verify_payload(
+        p.site, pylock=p.pylock, target=p.target, written=written, script=p.script
+    )
+    return manifest(
+        source=p.source,
+        version=p.version,
+        target=p.target,
+        native=p.native,
+        entry=p.entry,
+        cache_dir=None,
+        fmt=fmt,
+        payload=None,
+        payload_sha256=None,
+        locked=locked,
+        files=written,
+        loader=None,
+    )
+
+
+def _write_dir(p: _Prepared, output: Path, *, steps: _Steps) -> None:
+    """The payload as a plain directory, for hosts that put a directory on sys.path (Splunk's
+    bin/lib, QGIS, Azure Functions' .python_packages). Replaces an earlier bundleup output
+    atomically; refuses to replace anything else."""
+    steps.start("verify")
+    written = {
+        rel: _verify.record_hash(Path(path).read_bytes())
+        for rel, path in _bytecode.walk_files(p.site)
+    }
+    manifest_json = _plain_manifest(p, "dir", written)
+    steps.start("write")
+    if output.exists() and not (
+        output.is_dir() and (not any(output.iterdir()) or (output / DIR_MANIFEST).is_file())
+    ):
+        raise UsageError(
+            f"{output} already exists and isn't a directory bundleup wrote",
+            hint="remove it, or choose another place with -o",
+        )
+    output.parent.mkdir(parents=True, exist_ok=True)
+    tmp = output.with_name(f".{output.name}.tmp-{os.getpid()}")
+    old = output.with_name(f".{output.name}.old-{os.getpid()}")
+    try:
+        shutil.copytree(p.site, tmp, symlinks=True)
+        (tmp / DIR_MANIFEST).write_bytes(manifest_json)
+        if output.exists():
+            output.rename(old)
+        tmp.rename(output)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+        shutil.rmtree(old, ignore_errors=True)
+
+
+def _write_lambda(p: _Prepared, output: Path, *, stage: Path, steps: _Steps) -> None:
+    """An AWS Lambda function .zip: the packages and the project at the top (Lambda puts
+    /var/task on sys.path), bytecode precompiled for the runtime's Python, since /var/task is
+    read-only; the manifest alongside."""
+    steps.start("zip")
+    staged = stage / "lambda.zip"
+    _digest, written = write_payload(p.site, staged)
+    steps.start("verify")
+    manifest_json = _plain_manifest(p, "lambda", written)
+    steps.start("write")
+    with zipfile.ZipFile(staged, "a") as zf:
+        info = zipfile.ZipInfo(DIR_MANIFEST, FIXED_TIME)
+        info.external_attr = 0o100644 << 16
+        info.compress_type = zipfile.ZIP_DEFLATED
+        zf.writestr(info, manifest_json)
+    output.parent.mkdir(parents=True, exist_ok=True)
+    shutil.move(str(staged), output)
 
 
 def _count(diags: list[Diagnostic]) -> str:
@@ -904,7 +1100,8 @@ class _Prepared:
     target: Target
     site: Path
     pylock: Path
-    entry: tuple[str, str, str]
+    script: str | None  # where a PEP 723 script is in the payload
+    entry: tuple[str, str, str] | None  # None only for `dir` and `lambda`, where it's optional
     packages: int
     native: bool
     version: str | None
@@ -912,7 +1109,39 @@ class _Prepared:
     sizes: list[_check.PackageSize]
 
 
-def _prepare(options: BuildOptions, *, stage: Path, steps: _Steps, progress: Progress) -> _Prepared:
+def _format_diagnostics(fmt: str, site: Path, sizes: list[_check.PackageSize]) -> list[Diagnostic]:
+    """What only matters for `dir` and `lambda` outputs, which run without bundleup's loader."""
+    diags = []
+    pth = pth_files(site)
+    if fmt != "pyz" and pth:
+        diags.append(
+            Diagnostic(
+                "pth-not-run",
+                "warning",
+                f"{', '.join(pth)} won't run: the host puts this directory on sys.path, and Python "
+                "only runs .pth files in site-packages",
+                hint="a .pyz runs them (its loader does); in a directory output, whatever they set "
+                "up (e.g. setuptools' distutils, pywin32's paths) is missing",
+            )
+        )
+    unzipped = sum(x.size_bytes for x in sizes)
+    if fmt == "lambda" and unzipped > LAMBDA_UNZIPPED:
+        largest = ", ".join(f"{x.name} {x.size_bytes / 1e6:.0f} MB" for x in sizes[:3])
+        diags.append(
+            Diagnostic(
+                "lambda-too-big",
+                "error",
+                f"the function would be {unzipped / 1e6:.0f} MB unzipped; Lambda allows 250 MB "
+                "including layers",
+                hint=f"largest: {largest}; use a container image for bigger functions",
+            )
+        )
+    return diags
+
+
+def _prepare(
+    options: BuildOptions, *, fmt: str, stage: Path, steps: _Steps, progress: Progress
+) -> _Prepared:
     """The steps `build` and `check` share: find the Python, read the lock, install, compile,
     analyze."""
     steps.start("python")
@@ -927,12 +1156,18 @@ def _prepare(options: BuildOptions, *, stage: Path, steps: _Steps, progress: Pro
     )
     check_requires_python(source, target)
     site = stage / "site"
+    script = script_path(source, fmt)
     steps.start("export")
     reqs, pylock = export(uv, source, lock_mode=options.lock_mode, stage=stage, progress=progress)
     steps.start("install")
-    install(uv, source, target=target, reqs=reqs, site=site, progress=progress)
+    install(uv, source, target=target, reqs=reqs, site=site, script=script, progress=progress)
     check_wheel_platforms(site, target)
-    entry = resolve_entry(source, site, entry=options.entry)
+    try:
+        entry = resolve_entry(source, site, entry=options.entry, script=script)
+    except EntryPointError:
+        if fmt == "pyz":
+            raise
+        entry = None  # a directory or a Lambda zip is imported; its host decides what runs
     packages, native = inspect_site(site)
     version = project_version(site, source)
     steps.start("compile")
@@ -943,24 +1178,28 @@ def _prepare(options: BuildOptions, *, stage: Path, steps: _Steps, progress: Pro
         return run(cmd, what="checking the code", progress=progress, error=BundleupError)
 
     diagnostics, sizes = _check.analyze(
-        site, project=canonicalize_name(source.name), target=target, run=run_python
+        site, project=canonicalize_name(source.name), target=target, run=run_python, script=script
     )
+    diagnostics += _format_diagnostics(fmt, site, sizes)
+    diagnostics.sort(key=lambda d: d.level != "error")
     return _Prepared(
-        source, target, site, pylock, entry, packages, native, version, diagnostics, sizes
+        source, target, site, pylock, script, entry, packages, native, version, diagnostics, sizes
     )
 
 
 def check(
     options: BuildOptions, *, progress: Callable[[ProgressEvent], None] | None = None
 ) -> CheckReport:
-    """Install, compile and analyze like `build`, without writing a bundle: what won't survive
-    bundling, and how big each package is. Findings are in the report (`ok` is False when
-    there are errors); raises a BundleupError subclass only when the build itself fails.
-    `options.output` and `options.strict` are ignored."""
+    """Install, compile and analyze like `build`, without writing anything: what won't survive
+    bundling (for `options.format`), and how big each package is. Findings are in the report
+    (`ok` is False when there are errors); raises a BundleupError subclass only when the build
+    itself fails. `options.output` and `options.strict` are ignored."""
+    options, _flags = _targets.apply(options)
+    fmt = _format(options)
     report = progress or _ignore
     steps = _Steps(report)
     with tempfile.TemporaryDirectory(prefix="bundleup-") as tmp:
-        p = _prepare(options, stage=Path(tmp), steps=steps, progress=report)
+        p = _prepare(options, fmt=fmt, stage=Path(tmp), steps=steps, progress=report)
         steps.finish()
     return CheckReport(
         name=p.source.name,

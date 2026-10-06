@@ -125,8 +125,13 @@ merged; ask if unsure.
    files ([ADR-0023](adr/0023-payload-behaves-like-site-packages.md)). Was: the pre-ship analyzer,
    including the compatibility pre-check (native code that doesn't match the target, already
    enforced by cross builds).
-11. **`--format dir`** and **`--target lambda`** ([ADR-0014](adr/0014-output-formats-and-target-presets.md), accepted).
-12. **`pylock.toml` input** ([ADR-0006](adr/0006-delegate-to-uv-and-existing-files.md)): a hedge against depending on uv's own lockfile.
+11. ~~**`--format dir`** and **`--target lambda`**~~ **Done 2026-10-06** ([ADR-0025](adr/0025-dir-and-lambda-formats-and-presets.md),
+   Proposed): `--format dir|lambda`, presets `lambda`, `lambda-arm64`, `claude-api`, `bundleup targets`;
+   [`gauntlet/formats.py`](../gauntlet/formats.py) runs Lambda zips in AWS's Lambda image in CI.
+   Was: ([ADR-0014](adr/0014-output-formats-and-target-presets.md), accepted).
+12. ~~**`pylock.toml` input**~~ **Done 2026-10-06** ([ADR-0026](adr/0026-pylock-toml-input.md), Proposed):
+    a project's `pylock.toml` when it has no `uv.lock`; works with uv- and pip-written locks. Was:
+    ([ADR-0006](adr/0006-delegate-to-uv-and-existing-files.md)): a hedge against depending on uv's own lockfile.
 
 Before writing code in an unfamiliar area, look at [references.md](references.md) for projects
 that solved similar problems.

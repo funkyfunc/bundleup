@@ -153,12 +153,17 @@ def record_paths(text: str) -> list[str]:
 
 
 def check_records(
-    site: Path, written: dict[str, str], *, removed: Collection[str] = ()
+    site: Path,
+    written: dict[str, str],
+    *,
+    removed: Collection[str] = (),
+    added: Collection[str] = (),
 ) -> list[str]:
     """Compare the payload with every RECORD in `site`.
 
     `written` maps each payload path (POSIX, relative) to the RECORD-style hash of the bytes that
-    went into the zip; `removed` lists RECORD paths bundleup left out on purpose.
+    went into the zip; `removed` lists RECORD paths bundleup left out on purpose, `added` files it
+    put in that no RECORD lists (a PEP 723 script outside __bundleup_script__/).
     """
     problems = []
     covered: set[str] = set()
@@ -178,7 +183,7 @@ def check_records(
             elif actual != expected:
                 problems.append(f"changed file: {path} differs from {record.parent.name}/RECORD")
     for path in sorted(set(written) - covered):
-        if not _added_on_purpose(path):
+        if not _added_on_purpose(path) and path not in added:
             problems.append(f"extra file: {path} isn't listed in any wheel's RECORD")
     return problems
 

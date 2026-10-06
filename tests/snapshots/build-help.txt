@@ -1,5 +1,6 @@
-usage: bundleup build [-h] [-o FILE] [--python VERSION] [--entry NAME] [--python-platform PLATFORM]
-                      [--locked | --frozen] [--strict] [--json] [-q] [-v] [--color WHEN]
+usage: bundleup build [-h] [-o FILE] [--format FORMAT] [--target NAME] [--python VERSION]
+                      [--entry NAME] [--python-platform OS] [--locked | --frozen] [--strict]
+                      [--json] [-q] [-v] [--color WHEN]
                       [path]
 
 Bundle a project (pyproject.toml + uv.lock) or a PEP 723 script.
@@ -11,11 +12,11 @@ options:
   -h, --help            show this help message and exit
   -o FILE, --output FILE
                         output file (default: dist/<name>.pyz) [env: BUNDLEUP_OUTPUT]
+  --format FORMAT       pyz (default), dir (a directory) or lambda (an AWS Lambda .zip)
+  --target NAME         a preset: lambda, lambda-arm64, claude-api [env: BUNDLEUP_TARGET]
   --python VERSION      a version (3.12) or a path; default: uv's choice [env: BUNDLEUP_PYTHON]
   --entry NAME          a script name, module:function or module [env: BUNDLEUP_ENTRY]
-  --python-platform PLATFORM
-                        another OS/CPU in uv's terms, e.g. x86_64-manylinux_2_28 [env:
-                        BUNDLEUP_PYTHON_PLATFORM]
+  --python-platform OS  another OS/CPU, uv's names (e.g. linux) [env: BUNDLEUP_PYTHON_PLATFORM]
   --locked              fail if uv.lock is out of date (as in uv; the default when CI is set)
   --frozen              use uv.lock as is, without checking it (as in uv)
   --strict              warnings fail too (errors always do)
@@ -27,5 +28,4 @@ options:
 examples:
   bundleup build                    bundle the project here into dist/<name>.pyz
   bundleup build --python 3.11 --python-platform linux   build for Linux x86_64
-
-docs: https://github.com/funkyfunc/bundleup
+  bundleup build --target lambda    an AWS Lambda .zip (`bundleup targets` lists presets)

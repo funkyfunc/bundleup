@@ -103,6 +103,14 @@ proposes it as a pull request, so the results outlive GitHub's 90-day artifact l
 locally (it only reads results through `gh`; nothing third-party runs):
 `uv run gauntlet/weekly_summary.py --repo funkyfunc/bundleup --out /tmp/summary.md`.
 
+## Other output formats
+
+[formats.py](formats.py) builds every project as `--format dir` and runs it with only
+`PYTHONPATH` pointing at the directory, or with `--target lambda` and invokes it inside AWS's
+Lambda image through its runtime interface emulator (Docker; CI job `formats`, x86_64 and arm64).
+Known limits without bundleup's loader are listed in its `KNOWN` table (`.pth` files; child
+processes on Lambda). Local `dir` run: [results/formats-dir-2026-10-06.json](results/formats-dir-2026-10-06.json).
+
 ## Measuring speed
 
 ```bash

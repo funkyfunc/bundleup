@@ -19,12 +19,14 @@ bundleup build --python 3.9     # build for another Python (a bundle runs on one
 bundleup build --python 3.11 --python-platform linux   # build on a Mac for Linux x86_64
 bundleup build --json           # the result as JSON on stdout, for scripts and agents
 bundleup check                  # what won't survive bundling, and each package's size
+bundleup build --target lambda  # an AWS Lambda .zip (Python 3.13, x86_64; `bundleup targets` lists presets)
+bundleup build --format dir     # a plain directory, for apps that load packages from one
 bundleup verify dist/app.pyz    # check a bundle (and its unpacked copy) against its manifest
 bundleup cache clean            # remove unpacked bundles not used for 30 days
 python dist/<name>.pyz          # run it: no install, no network
 ```
 
-bundleup reads `pyproject.toml` + `uv.lock` (or the script's `# /// script` block) and needs
+bundleup reads `pyproject.toml` + `uv.lock` (or a standard `pylock.toml`, or the script's `# /// script` block) and needs
 [uv](https://docs.astral.sh/uv/) at build time; the bundle needs only Python. On first run it
 unpacks to a cache (`~/Library/Caches/bundleup`, `~/.cache/bundleup`, or a temp directory if
 those aren't writable), so later runs start as fast as an installed virtualenv. A bundle only sees

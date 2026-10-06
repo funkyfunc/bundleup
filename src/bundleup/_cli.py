@@ -26,7 +26,7 @@ if TYPE_CHECKING:
     from ._verify import VerifyReport
 
 SCHEMA_VERSION = 1  # of the --json document; additive changes only within a version
-COMMANDS = ["build", "check", "verify", "cache"]
+COMMANDS = ["build", "check", "targets", "verify", "cache"]
 DOCS_URL = "https://github.com/funkyfunc/bundleup"
 
 DESCRIPTION = (
@@ -45,12 +45,11 @@ docs: {DOCS_URL}
 bugs: {ISSUES_URL}"""
 
 
-BUILD_EXAMPLES = f"""\
+BUILD_EXAMPLES = """\
 examples:
   bundleup build                    bundle the project here into dist/<name>.pyz
   bundleup build --python 3.11 --python-platform linux   build for Linux x86_64
-
-docs: {DOCS_URL}"""
+  bundleup build --target lambda    an AWS Lambda .zip (`bundleup targets` lists presets)"""
 
 CHECK_EXAMPLES = f"""\
 examples:
@@ -118,6 +117,15 @@ def parsers() -> dict[str, argparse.ArgumentParser]:
     )
     _add_build_options(check, output=False)
     _add_output_options(check, verbose="-v: every package's size; -vv: commands run")
+    targets = commands.add_parser(
+        "targets",
+        help="list the target presets and the flags each stands for",
+        description="Presets are shorthands for --format, --python and --python-platform. "
+        "Flags given explicitly win over a preset's.",
+        formatter_class=_HelpFormatter,
+        allow_abbrev=False,
+    )
+    _add_output_options(targets, verbose="-v: show the traceback if bundleup crashes")
     verify = commands.add_parser(
         "verify",
         help="check a bundle against its manifest",
@@ -169,6 +177,7 @@ def parsers() -> dict[str, argparse.ArgumentParser]:
         "bundleup": top,
         "build": build,
         "check": check,
+        "targets": targets,
         "verify": verify,
         "cache": cache,
         "cache list": listing,
@@ -191,6 +200,19 @@ def _add_build_options(command: argparse.ArgumentParser, *, output: bool) -> Non
             help=_env_help("output file (default: dist/<name>.pyz)", "BUNDLEUP_OUTPUT"),
         )
     command.add_argument(
+        "--format",
+        choices=["pyz", "dir", "lambda"],
+        metavar="FORMAT",
+        default=None,
+        help="pyz (default), dir (a directory) or lambda (an AWS Lambda .zip)",
+    )
+    command.add_argument(
+        "--target",
+        metavar="NAME",
+        default=os.environ.get("BUNDLEUP_TARGET"),
+        help=_env_help("a preset: lambda, lambda-arm64, claude-api", "BUNDLEUP_TARGET"),
+    )
+    command.add_argument(
         "--python",
         metavar="VERSION",
         default=os.environ.get("BUNDLEUP_PYTHON"),
@@ -210,12 +232,9 @@ def _add_build_options(command: argparse.ArgumentParser, *, output: bool) -> Non
     )
     command.add_argument(
         "--python-platform",
-        metavar="PLATFORM",
+        metavar="OS",
         default=os.environ.get("BUNDLEUP_PYTHON_PLATFORM"),
-        help=_env_help(
-            "another OS/CPU in uv's terms, e.g. x86_64-manylinux_2_28",
-            "BUNDLEUP_PYTHON_PLATFORM",
-        ),
+        help=_env_help("another OS/CPU, uv's names (e.g. linux)", "BUNDLEUP_PYTHON_PLATFORM"),
     )
     lock = command.add_mutually_exclusive_group()
     lock.add_argument(
@@ -307,15 +326,19 @@ def _shown(path: Path) -> str:
 
 def _success_lines(result: BuildResult, style: Style) -> list[str]:
     """At most two lines (rule 11): what was made and where, then the target in dim."""
-    shown = _shown(result.output)
+    shown = _shown(result.output) + ("/" if result.format == "dir" else "")
     name = f"{result.name} {result.version}" if result.version else result.name
     path = style.link(style.bold(shown), result.output.as_uri())
+    size = _size(result.size_bytes) + (" unpacked" if result.format == "dir" else "")
     first = (
         f"{style.bold('Bundled')} {name} {style.arrow} {path} "
-        f"{style.dim(f'({_size(result.size_bytes)}) in {result.duration_s:.2f}s')}"
+        f"{style.dim(f'({size}) in {result.duration_s:.2f}s')}"
     )
     packages = f"{result.packages} package{'s' if result.packages != 1 else ''}"
-    second = style.dim(f"  {result.target.describe(result.native)} {style.dot} {packages}")
+    details = [result.target.describe(result.native), packages]
+    if result.format == "lambda" and result.handler:
+        details.append(f"handler {result.handler}")
+    second = style.dim(f"  {f' {style.dot} '.join(details)}")
     return [first, second]
 
 
@@ -347,7 +370,35 @@ def _options(opts: argparse.Namespace) -> BuildOptions:
         lock_mode=opts.lock_mode or ("locked" if in_ci_with_lock else None),
         python_platform=opts.python_platform,
         strict=opts.strict,
+        format=opts.format,
+        target=opts.target,
     )
+
+
+def _expanded(opts: argparse.Namespace, style: Style) -> BuildOptions:
+    """The options with a --target preset filled in; says what it expanded to (rule 7)."""
+    from ._targets import apply
+
+    options, flags = apply(_options(opts))
+    if flags and not opts.json and opts.quiet == 0:
+        print(style.dim(f"Using target {opts.target}: {' '.join(flags)}"), file=sys.stderr)
+    return options
+
+
+def _run_targets(opts: argparse.Namespace) -> ExitCode:
+    from ._targets import list_targets
+
+    presets = list_targets()
+    if opts.json:
+        result: dict[str, object] = {"targets": [t.to_json_dict() for t in presets]}
+        _emit_json("targets", ExitCode.OK, result, [])
+        return ExitCode.OK
+    style = Style(sys.stderr, opts.color)
+    width = max(len(t.name) for t in presets)
+    for t in presets:
+        print(f"{style.bold(t.name.ljust(width))}  {t.description}", file=sys.stderr)
+        print(style.dim(f"{' ' * width}  {' '.join(t.expansion())}"), file=sys.stderr)
+    return ExitCode.OK
 
 
 def _progress(opts: argparse.Namespace, style: Style) -> tuple[StatusLine, Progress]:
@@ -392,7 +443,7 @@ def _run_build(opts: argparse.Namespace) -> ExitCode:
     style = Style(err, opts.color)
     status, on_progress = _progress(opts, style)
     try:
-        result = build(_options(opts), progress=on_progress)
+        result = build(_expanded(opts, style), progress=on_progress)
     except BundleupError as e:
         status.clear()
         return _failed(e, "build", opts, style)
@@ -448,7 +499,7 @@ def _run_check(opts: argparse.Namespace) -> ExitCode:
     style = Style(err, opts.color)
     status, on_progress = _progress(opts, style)
     try:
-        report = check(_options(opts), progress=on_progress)
+        report = check(_expanded(opts, style), progress=on_progress)
     except BundleupError as e:
         status.clear()
         return _failed(e, "check", opts, style)
@@ -619,6 +670,8 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if opts.command == "check":
             return _run_check(opts)
+        if opts.command == "targets":
+            return _run_targets(opts)
         if opts.command == "verify":
             return _run_verify(opts)
         if opts.command == "cache":

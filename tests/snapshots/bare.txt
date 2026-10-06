@@ -6,6 +6,7 @@ positional arguments:
   <command>
     build        bundle a project or script into one .pyz
     check        report what won't survive bundling, without writing a bundle
+    targets      list the target presets and the flags each stands for
     verify       check a bundle against its manifest
     cache        list or clean up unpacked bundles
 

@@ -6,6 +6,16 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-06** · ecosystem · uv 0.12 installs a `pylock.toml` directly, without a preview
+  flag, but refuses it alongside other requirements ("Cannot specify additional requirements
+  alongside a `pylock.toml` file") and rejects one with no `packages` array. `pip lock`'s output
+  lists the project itself as a directory entry, and bundles fine. Evidence:
+  [ADR-0026](adr/0026-pylock-toml-input.md).
+- **2026-10-06** · platforms · AWS Lambda runs Python 3.10/3.11 on Amazon Linux 2 (glibc 2.26)
+  and 3.12+ on Amazon Linux 2023 (glibc 2.34); both CPUs everywhere; 3.15 in preview. uv's
+  `--python-platform` has no `manylinux_2_26`, so AL2 targets use `manylinux_2_17`. Anthropic's
+  code execution sandbox is Python 3.11 on Linux x86_64 with no network; its glibc isn't
+  documented. Evidence: [ADR-0025](adr/0025-dir-and-lambda-formats-and-presets.md).
 - **2026-10-05** · build · `compileall` with `quiet=2` skips files that don't compile without a
   word, so a bundle built for 3.9 from code with a `match` statement built fine and crashed on
   import. The build now treats "a `.py` with no `.pyc` after compiling" as a candidate and asks

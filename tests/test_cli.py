@@ -183,6 +183,21 @@ def test_check_json_matches_the_schema(tmp_path: Path, script: Path) -> None:
     assert document["diagnostics"][0]["line"] == 5
 
 
+def test_targets_lists_presets_with_their_expansion(tmp_path: Path) -> None:
+    r = cli("targets", cwd=tmp_path)
+    assert r.returncode == 0 and r.stdout == ""
+    check_snapshot("targets", r.stderr)
+    r = cli("targets", "--json", cwd=tmp_path)
+    schema = json.loads((ROOT / "docs" / "schema" / "targets-v1.json").read_text())
+    jsonschema.validate(json.loads(r.stdout), schema)
+
+
+def test_target_checks_the_python_before_building(tmp_path: Path, script: Path) -> None:
+    r = cli("build", "app.py", "--target", "lambda", "--python", "3.99", cwd=tmp_path)
+    assert r.returncode == 2  # Lambda has no Python 3.99, so it stops before building
+    assert "AWS Lambda has no Python 3.99 runtime" in r.stderr
+
+
 def test_error_not_a_project(tmp_path: Path) -> None:
     r = cli("build", "nowhere", cwd=tmp_path)
     assert r.returncode == 1 and r.stdout == ""
@@ -263,6 +278,7 @@ def api_description() -> str:
     lines.append(f"verify{inspect.signature(bundleup.verify)}")
     lines.append(f"list_cache{inspect.signature(bundleup.list_cache)}")
     lines.append(f"clean_cache{inspect.signature(bundleup.clean_cache)}")
+    lines.append(f"list_targets{inspect.signature(bundleup.list_targets)}")
     public_types = (
         bundleup.BuildOptions,
         bundleup.BuildResult,
@@ -270,6 +286,7 @@ def api_description() -> str:
         bundleup.Diagnostic,
         bundleup.CheckReport,
         bundleup.PackageSize,
+        bundleup.Preset,
         bundleup.VerifyReport,
         bundleup.CachedBundle,
         bundleup.CleanReport,

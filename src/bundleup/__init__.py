@@ -32,6 +32,7 @@ if TYPE_CHECKING:
     from ._build import BuildOptions, BuildResult, ProgressEvent, Target, build, check
     from ._cache import CachedBundle, CleanReport, clean_cache, list_cache
     from ._check import CheckReport, PackageSize
+    from ._targets import Preset, list_targets
     from ._verify import VerifyReport, verify
 
 __version__ = "0.0.1"
@@ -52,6 +53,7 @@ __all__ = [
     "NoCompatibleWheelError",
     "NotABundleError",
     "PackageSize",
+    "Preset",
     "ProgressEvent",
     "ProjectError",
     "PythonMismatchError",
@@ -66,6 +68,7 @@ __all__ = [
     "check",
     "clean_cache",
     "list_cache",
+    "list_targets",
     "verify",
 ]
 
@@ -76,6 +79,7 @@ _LAZY = {
         for name in ("BuildOptions", "BuildResult", "ProgressEvent", "Target", "build", "check")
     },
     **{name: "._check" for name in ("CheckReport", "PackageSize")},
+    **{name: "._targets" for name in ("Preset", "list_targets")},
     **{name: "._verify" for name in ("VerifyReport", "verify")},
     **{name: "._cache" for name in ("CachedBundle", "CleanReport", "clean_cache", "list_cache")},
 }

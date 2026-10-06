@@ -1,0 +1,163 @@
+[
+ {
+  "project": "00-hello-script",
+  "format": "dir",
+  "outcome": "pass",
+  "detail": "",
+  "build_s": 0.13
+ },
+ {
+  "project": "01-script-with-deps",
+  "format": "dir",
+  "outcome": "pass",
+  "detail": "",
+  "build_s": 0.13
+ },
+ {
+  "project": "02-multi-module-package",
+  "format": "dir",
+  "outcome": "pass",
+  "detail": "",
+  "build_s": 0.11
+ },
+ {
+  "project": "03-pure-deps",
+  "format": "dir",
+  "outcome": "pass",
+  "detail": "",
+  "build_s": 0.16
+ },
+ {
+  "project": "04-resources-zip-safe",
+  "format": "dir",
+  "outcome": "pass",
+  "detail": "",
+  "build_s": 0.11
+ },
+ {
+  "project": "05-dunder-file-data",
+  "format": "dir",
+  "outcome": "pass",
+  "detail": "",
+  "build_s": 0.24
+ },
+ {
+  "project": "06-metadata-version",
+  "format": "dir",
+  "outcome": "pass",
+  "detail": "",
+  "build_s": 0.12
+ },
+ {
+  "project": "07-entry-point-plugins",
+  "format": "dir",
+  "outcome": "pass",
+  "detail": "",
+  "build_s": 0.11
+ },
+ {
+  "project": "08-namespace-packages",
+  "format": "dir",
+  "outcome": "pass",
+  "detail": "",
+  "build_s": 0.11
+ },
+ {
+  "project": "09-dynamic-imports",
+  "format": "dir",
+  "outcome": "pass",
+  "detail": "",
+  "build_s": 0.36
+ },
+ {
+  "project": "10-optional-accelerators",
+  "format": "dir",
+  "outcome": "pass",
+  "detail": "",
+  "build_s": 0.16
+ },
+ {
+  "project": "11-native-abi3",
+  "format": "dir",
+  "outcome": "pass",
+  "detail": "",
+  "build_s": 0.25
+ },
+ {
+  "project": "12-native-per-version",
+  "format": "dir",
+  "outcome": "pass",
+  "detail": "",
+  "build_s": 0.24
+ },
+ {
+  "project": "13-native-bundled-libs",
+  "format": "dir",
+  "outcome": "pass",
+  "detail": "",
+  "build_s": 0.63
+ },
+ {
+  "project": "14-real-world-pptx",
+  "format": "dir",
+  "outcome": "pass",
+  "detail": "",
+  "build_s": 0.42
+ },
+ {
+  "project": "15-flask-templates",
+  "format": "dir",
+  "outcome": "pass",
+  "detail": "",
+  "build_s": 0.24
+ },
+ {
+  "project": "16-multiprocessing-spawn",
+  "format": "dir",
+  "outcome": "pass",
+  "detail": "",
+  "build_s": 0.11
+ },
+ {
+  "project": "17-modern-syntax",
+  "format": "dir",
+  "outcome": "pass",
+  "detail": "",
+  "build_s": 0.1
+ },
+ {
+  "project": "18-sdist-only-dep",
+  "format": "dir",
+  "outcome": "pass",
+  "detail": "",
+  "build_s": 0.11
+ },
+ {
+  "project": "19-subprocess-sys-executable",
+  "format": "dir",
+  "outcome": "pass",
+  "detail": "",
+  "build_s": 0.12
+ },
+ {
+  "project": "21-large-pure-python",
+  "format": "dir",
+  "outcome": "pass",
+  "detail": "",
+  "build_s": 4.76
+ },
+ {
+  "project": "22-wheel-executables",
+  "format": "dir",
+  "outcome": "pass",
+  "detail": "",
+  "build_s": 0.13
+ },
+ {
+  "project": "23-pth-files",
+  "format": "dir",
+  "outcome": "known-fail",
+  "detail": "no loader to run .pth files (`check` warns: pth-not-run): Traceback (most recent call last):\n  File \"/Users/stompinggrounds/Development/bundleup/gauntlet/.work/formats-dir/23-pth-files/gauntlet_handler.py\", line 14, in handler\n    code = getattr(importlib.import_module(module), function)() or 0\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/Users/stompinggrounds/Development/bundleup/gauntlet/.work/formats-dir/23-pth-files/g23_pth/__init__.py\", line 8, in main\n    import distutils  # setuptools' copy, through distutils-precedence.pth's `import` line\n    ^^^^^^^^^^^^^^^^\nModuleNotFoundError: No module named 'distutils'\n",
+  "build_s": 0.43
+ }
+]

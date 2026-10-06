@@ -84,6 +84,11 @@ Do these **as you go**, not only at the end:
   dependency), data files outside packages, sizes; every build runs it; `--strict`. Wheel
   executables (`bin/ruff`) and `.pth` files now work like a venv
   ([ADR-0023](docs/adr/0023-payload-behaves-like-site-packages.md), **Proposed**; gauntlet 22-23).
+- **Output formats and presets** (roadmap item 11, [ADR-0025](docs/adr/0025-dir-and-lambda-formats-and-presets.md),
+  **Proposed**): `--format dir|lambda`, `--target lambda|lambda-arm64|claude-api`,
+  `bundleup targets`; `gauntlet/formats.py` (CI runs Lambda zips in AWS's Lambda image).
+- **`pylock.toml` input** (roadmap item 12, [ADR-0026](docs/adr/0026-pylock-toml-input.md),
+  **Proposed**): used when a project has no `uv.lock`. The roadmap's "Next up" list is done.
 - **Weekly nightly summary** (`weekly.yml`, Mondays): a findings page on a `weekly/<date>` branch;
   Actions can't open PRs in this repo (a setting), so it opens an issue linking the branch.
 - **Cross-target builds** (ADR-0014): `bundleup build --python 3.11 --python-platform linux` on a Mac;
@@ -103,9 +108,10 @@ pyproject.toml, src/bundleup/  the package (ADR-0018): __init__.py (public API),
                         _verify.py (lock and RECORD checks), _errors.py, _term.py, _loader.py
                         (the bundle's __main__), _platforms.py (cross targets), _zipwriter.py
                         (parallel zip), _bytecode.py (bytecode cache), _cache.py (cache list/clean),
-                        _check.py (the analysis behind `check` and every build)
+                        _check.py (the analysis behind `check` and every build), _targets.py
+                        (presets)
 tests/snapshots/        CLI output and API snapshots; docs/cli-reference.md is generated too
-docs/schema/            JSON Schemas of each command's `--json` (build, check, verify, cache)
+docs/schema/            JSON Schemas of each command's `--json` (build, check, targets, verify, cache)
 tests/                  pytest: loader/CLI edge cases the gauntlet doesn't reach
 docs/roadmap.md         "Next up" work list, then possible future directions
 docs/python-for-js-reviewers.md  code style rules + review guide for the JS-fluent owner
@@ -124,6 +130,7 @@ gauntlet/smoke.py       nightly breadth test: top PyPI packages bundled and comp
 gauntlet/corpus*.py, corpus.toml  nightly corpus: real CLIs run installed vs bundled; failures -> issues
 gauntlet/weekly_summary.py  weekly findings page from the nightly smoke + corpus results (weekly.yml)
 gauntlet/cross.py       cross-target gauntlet: build on one OS for another, run on the target
+gauntlet/formats.py     `dir` and Lambda outputs: run as a host app would, Lambda in AWS's image
 .github/workflows/       ci.yml (every push: checks, tests, gauntlet matrix); nightly.yml (smoke
                         test); corpus.yml (corpus run + corpus-failure issues); weekly.yml
                         (Monday summary of both)

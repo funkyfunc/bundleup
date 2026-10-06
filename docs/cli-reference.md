@@ -14,6 +14,7 @@ positional arguments:
   <command>
     build        bundle a project or script into one .pyz
     check        report what won't survive bundling, without writing a bundle
+    targets      list the target presets and the flags each stands for
     verify       check a bundle against its manifest
     cache        list or clean up unpacked bundles
 
@@ -35,8 +36,9 @@ bugs: https://github.com/funkyfunc/bundleup/issues
 ## `bundleup build`
 
 ```
-usage: bundleup build [-h] [-o FILE] [--python VERSION] [--entry NAME] [--python-platform PLATFORM]
-                      [--locked | --frozen] [--strict] [--json] [-q] [-v] [--color WHEN]
+usage: bundleup build [-h] [-o FILE] [--format FORMAT] [--target NAME] [--python VERSION]
+                      [--entry NAME] [--python-platform OS] [--locked | --frozen] [--strict]
+                      [--json] [-q] [-v] [--color WHEN]
                       [path]
 
 Bundle a project (pyproject.toml + uv.lock) or a PEP 723 script.
@@ -48,11 +50,11 @@ options:
   -h, --help            show this help message and exit
   -o FILE, --output FILE
                         output file (default: dist/<name>.pyz) [env: BUNDLEUP_OUTPUT]
+  --format FORMAT       pyz (default), dir (a directory) or lambda (an AWS Lambda .zip)
+  --target NAME         a preset: lambda, lambda-arm64, claude-api [env: BUNDLEUP_TARGET]
   --python VERSION      a version (3.12) or a path; default: uv's choice [env: BUNDLEUP_PYTHON]
   --entry NAME          a script name, module:function or module [env: BUNDLEUP_ENTRY]
-  --python-platform PLATFORM
-                        another OS/CPU in uv's terms, e.g. x86_64-manylinux_2_28 [env:
-                        BUNDLEUP_PYTHON_PLATFORM]
+  --python-platform OS  another OS/CPU, uv's names (e.g. linux) [env: BUNDLEUP_PYTHON_PLATFORM]
   --locked              fail if uv.lock is out of date (as in uv; the default when CI is set)
   --frozen              use uv.lock as is, without checking it (as in uv)
   --strict              warnings fail too (errors always do)
@@ -64,15 +66,15 @@ options:
 examples:
   bundleup build                    bundle the project here into dist/<name>.pyz
   bundleup build --python 3.11 --python-platform linux   build for Linux x86_64
-
-docs: https://github.com/funkyfunc/bundleup
+  bundleup build --target lambda    an AWS Lambda .zip (`bundleup targets` lists presets)
 ```
 
 ## `bundleup check`
 
 ```
-usage: bundleup check [-h] [--python VERSION] [--entry NAME] [--python-platform PLATFORM]
-                      [--locked | --frozen] [--strict] [--json] [-q] [-v] [--color WHEN]
+usage: bundleup check [-h] [--format FORMAT] [--target NAME] [--python VERSION] [--entry NAME]
+                      [--python-platform OS] [--locked | --frozen] [--strict] [--json] [-q] [-v]
+                      [--color WHEN]
                       [path]
 
 Install and compile like `build`, then report what won't work in a bundle and how big each package is. Every build runs the same checks.
@@ -82,11 +84,11 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
+  --format FORMAT       pyz (default), dir (a directory) or lambda (an AWS Lambda .zip)
+  --target NAME         a preset: lambda, lambda-arm64, claude-api [env: BUNDLEUP_TARGET]
   --python VERSION      a version (3.12) or a path; default: uv's choice [env: BUNDLEUP_PYTHON]
   --entry NAME          a script name, module:function or module [env: BUNDLEUP_ENTRY]
-  --python-platform PLATFORM
-                        another OS/CPU in uv's terms, e.g. x86_64-manylinux_2_28 [env:
-                        BUNDLEUP_PYTHON_PLATFORM]
+  --python-platform OS  another OS/CPU, uv's names (e.g. linux) [env: BUNDLEUP_PYTHON_PLATFORM]
   --locked              fail if uv.lock is out of date (as in uv; the default when CI is set)
   --frozen              use uv.lock as is, without checking it (as in uv)
   --strict              warnings fail too (errors always do)
@@ -100,6 +102,21 @@ examples:
   bundleup check --python 3.11 --python-platform linux --strict   fail on any warning
 
 docs: https://github.com/funkyfunc/bundleup
+```
+
+## `bundleup targets`
+
+```
+usage: bundleup targets [-h] [--json] [-q] [-v] [--color WHEN]
+
+Presets are shorthands for --format, --python and --python-platform. Flags given explicitly win over a preset's.
+
+options:
+  -h, --help     show this help message and exit
+  --json         print one JSON document on stdout
+  -q, --quiet    -q: warnings and errors only; -qq: errors
+  -v, --verbose  -v: show the traceback if bundleup crashes
+  --color WHEN   auto, always or never (default: auto; also NO_COLOR, FORCE_COLOR)
 ```
 
 ## `bundleup verify`

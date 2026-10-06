@@ -120,9 +120,9 @@ class _Owner:
     native: bool
 
 
-def owners(site: Path, *, project: str) -> dict[str, _Owner]:
+def owners(site: Path, *, project: str, script: str | None = None) -> dict[str, _Owner]:
     """Each payload path (as RECORD lists it) -> the distribution that installed it. A PEP 723
-    script's files belong to `project`."""
+    script (at `script`) belongs to `project`."""
     found: dict[str, _Owner] = {}
     for dist in _verify.installed_distributions(site):
         dist_info = site / dist.dist_info
@@ -131,10 +131,8 @@ def owners(site: Path, *, project: str) -> dict[str, _Owner]:
         owner = _Owner(dist.name, dist.version, native)
         for path in _verify.record_paths((dist_info / "RECORD").read_text(encoding="utf-8")):
             found[path] = owner
-    script = site / _verify.SCRIPT_DIR
-    if script.is_dir():
-        for name in os.listdir(script):
-            found[f"{_verify.SCRIPT_DIR}/{name}"] = _Owner(project, None, False)
+    if script:
+        found[script] = _Owner(project, None, False)
     return found
 
 
@@ -259,12 +257,17 @@ def data_files(site: Path, owner: dict[str, _Owner]) -> list[Diagnostic]:
 
 
 def analyze(
-    site: Path, *, project: str, target: Target, run: Callable[[list[str]], str]
+    site: Path,
+    *,
+    project: str,
+    target: Target,
+    run: Callable[[list[str]], str],
+    script: str | None = None,
 ) -> tuple[list[Diagnostic], list[PackageSize]]:
     """Everything `bundleup check` reports about an installed, compiled payload: the
     diagnostics (errors first) and each package's size. `project` is the canonical name of the
-    project (or script) being bundled."""
-    owner = owners(site, project=project)
+    project (or script, installed at `script`) being bundled."""
+    owner = owners(site, project=project, script=script)
     diags = syntax_errors(site, owner, project=project, target=target, run=run)
     diags += data_files(site, owner)
     diags.sort(key=lambda d: d.level != "error")  # stable: errors first, then in found order

@@ -167,7 +167,7 @@ fits a build tool. Everything here applies to TTY output only; rules 10–15 sti
 
 ## Implementation status (2026-10-05)
 
-Commands: `build`, `check` ([ADR-0024](adr/0024-check-command-and-build-analysis.md)), `verify`
+Commands: `build`, `check` ([ADR-0024](adr/0024-check-command-and-build-analysis.md)), `targets`, `verify`
 ([ADR-0019](adr/0019-manifest-and-verify-command.md)) and `cache list|clean`
 ([ADR-0022](adr/0022-cache-command.md)). Implemented in
 `src/bundleup/_cli.py`, `_errors.py`, `_term.py` and the public API
@@ -183,11 +183,13 @@ and the generated [CLI reference](cli-reference.md):
   lockfile exists (9);
 - help under ~30 lines with examples and `[env: ...]` (32-33), generated reference checked by a
   test (34), startup budget checked by a test (35);
+- presets (`--target`, printed expansion, `bundleup targets`, `list_targets()`) (7, 39;
+  [ADR-0025](adr/0025-dir-and-lambda-formats-and-presets.md));
 - `--strict` (27) on `build` and `check`; diagnostics carry `package`, `file` and `line` (18);
 - library API: `__all__`, `py.typed`, `build(BuildOptions, progress=...)`, frozen results with
   `to_json_dict()`, one exception root, a library that never prints or exits, API snapshot test
   (38-44); snapshots of every output mode and exit-code tests (47-50).
 
-Not yet: `--dry-run` (8); presets and `targets` (7, with ADR-0014); `[tool.bundleup]`
+Not yet: `--dry-run` (8); `[tool.bundleup]`
 configuration (29-31); progress counts per item (51); Ctrl-C and crash exit codes
 are tested in-process rather than through a subprocess (48).
