@@ -6,8 +6,9 @@ Runs on the *target* Python (3.9+), so it uses nothing newer:
     <venv>/bin/python snapshot.py <its site-packages>       # a normal install, as Python runs it
     python -S snapshot.py <extracted payload> --as-bundle   # a bundle, as bundleup's loader runs it
 
-The loader puts the payload on sys.path without processing `.pth` files, so the bundle side
-does the same; any package that depends on a `.pth` file shows up as a difference.
+The loader puts the payload on sys.path after the standard library and processes its `.pth`
+files as site.py does (ADR-0023), so the bundle side uses `site.addsitedir`, the reference for
+both.
 """
 
 from __future__ import annotations
@@ -43,7 +44,9 @@ def top_level_names(dist: md.Distribution) -> set[str]:
 
 def snapshot(site: str, *, as_bundle: bool) -> dict[str, object]:
     if as_bundle:
-        sys.path.append(site)  # after the standard library, as the loader does
+        import site as site_module  # importable under -S; -S only skips running it
+
+        site_module.addsitedir(site)  # appended after the standard library, .pth files run
     dists = sorted(md.distributions(path=[site]), key=lambda d: d.metadata["Name"].lower())
     names: set[str] = set()
     for dist in dists:
