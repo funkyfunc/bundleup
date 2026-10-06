@@ -11,6 +11,7 @@ Layout of the output (see docs/adr/0010-bundle-format-and-loader.md):
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -52,8 +53,8 @@ else:
 LOADER = Path(__file__).with_name("_loader.py")
 MANIFEST = "manifest.json"  # in the outer zip, next to __main__.py
 FIXED_TIME = (1980, 1, 1, 0, 0, 0)  # reproducible zips: same inputs, same bytes, same cache key
-# uv's lock file, and console-script launchers that point at the build machine's Python.
-SKIP_TOP = {".lock", "bin"}
+# uv's lock file. Console-script launchers are removed too (see `launchers`).
+SKIP_TOP = {".lock"}
 PLATFORM_NAMES = {"darwin": "macOS", "linux": "Linux", "win32": "Windows"}
 PEP723 = re.compile(r"(?m)^# /// (?P<type>[a-zA-Z0-9-]+)$\s(?P<content>(^#(| .*)$\s)+)^# ///$")
 
@@ -466,6 +467,11 @@ def install(
             shutil.rmtree(p)
         elif p.exists():
             p.unlink()
+    for launcher in launchers(site):
+        (site / launcher).unlink(missing_ok=True)
+    for folder in _verify.SCRIPT_DIRS:
+        with contextlib.suppress(OSError):  # missing, or holds files a wheel ships: keep it
+            (site / folder).rmdir()
     if source.is_script:
         dest = site / "__bundleup_script__"
         dest.mkdir()
@@ -504,26 +510,51 @@ def resolve_entry(source: Source, site: Path, *, entry: str | None) -> tuple[str
     return ("call", module.strip(), attr) if attr else ("module", module.strip(), "")
 
 
+def scripts_of(dist_info: Path) -> dict[str, str]:
+    """A distribution's console and GUI scripts (dynamic ones too): command name -> target."""
+    ep = dist_info / "entry_points.txt"
+    if not ep.exists():
+        return {}
+    scripts: dict[str, str] = {}
+    section = None
+    for line in ep.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if line.startswith("["):
+            section = line.strip("[]").strip()
+        elif "=" in line and section in ("console_scripts", "gui_scripts"):
+            key, value = line.split("=", 1)
+            scripts[key.strip()] = value.strip()
+    return scripts
+
+
 def console_scripts(site: Path, name: str) -> dict[str, str]:
-    """Console and GUI scripts from the project's installed metadata (dynamic scripts too)."""
+    """Console and GUI scripts from the project's installed metadata."""
     want = canonicalize_name(name)
     for dist_info in site.glob("*.dist-info"):
-        if canonicalize_name(dist_info.name.split("-")[0]) != want:
-            continue
-        ep = dist_info / "entry_points.txt"
-        if not ep.exists():
-            return {}
-        scripts: dict[str, str] = {}
-        section = None
-        for line in ep.read_text(encoding="utf-8").splitlines():
-            line = line.strip()
-            if line.startswith("["):
-                section = line.strip("[]").strip()
-            elif "=" in line and section in ("console_scripts", "gui_scripts"):
-                key, value = line.split("=", 1)
-                scripts[key.strip()] = value.strip()
-        return scripts
+        if canonicalize_name(dist_info.name.split("-")[0]) == want:
+            return scripts_of(dist_info)
     return {}
+
+
+def launchers(site: Path) -> set[str]:
+    """The console-script launchers the installer generated in `bin/` (`Scripts/` on Windows), as
+    RECORD paths. They start the build machine's Python by its absolute path, so they're useless
+    elsewhere. Executables a wheel ships itself stay in the bundle: ruff's and uv's Python wrappers
+    find their binary in `bin/` next to the packages (gauntlet 22)."""
+    found = set()
+    for dist_info in site.glob("*.dist-info"):
+        names = scripts_of(dist_info)
+        record = dist_info / "RECORD"
+        if not names or not record.exists():
+            continue
+        launcher_names = {
+            f"{n}{suffix}" for n in names for suffix in ("", ".exe", "-script.py", "-script.pyw")
+        }
+        for path in _verify.record_paths(record.read_text(encoding="utf-8")):
+            folder, _, file = path.partition("/")
+            if folder in _verify.SCRIPT_DIRS and file in launcher_names:
+                found.add(path)
+    return found
 
 
 def check_wheel_platforms(site: Path, target: Target) -> None:
@@ -616,7 +647,7 @@ def verify_payload(
     """
     locked = _verify.locked_packages(pylock.read_text(encoding="utf-8"), target.markers)
     problems = _verify.check_lock(locked, _verify.installed_distributions(site))
-    problems += _verify.check_records(site, written)
+    problems += _verify.check_records(site, written, removed=launchers(site))
     if problems:
         shown = "\n".join(problems[:20])
         more = f"\n... and {len(problems) - 20} more" if len(problems) > 20 else ""

@@ -1,0 +1,7 @@
+id = "22-wheel-executables"
+title = "A dependency that ships a program, not just Python"
+tier = 7
+exercises = "ruff's wheel is mostly a compiled executable installed as a script (bin/ruff); its Python wrapper finds it next to the packages, the layout of `pip install --target`. A bundler that drops scripts as console-script launchers loses the program."
+entry = "g22_exe:main"
+expect = "pass"
+notes = "Same pattern as uv, ninja, cmake and nodejs-wheel: the package is a wrapper around a binary. Found 2026-10-05: bundleup dropped bin/ entirely."

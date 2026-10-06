@@ -6,6 +6,12 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-05** · runtime · Some wheels are mostly a program: ruff's (and uv's, ninja's, cmake's)
+  binary is a wheel *script*, installed to `bin/` (`Scripts/` on Windows), and the Python wrapper
+  finds it next to the packages when installed with `--target`. bundleup dropped all of `bin/` as
+  console-script launchers, so `find_ruff_bin()` failed; now only each distribution's own
+  entry-point launchers are dropped. pex and zipapps fail the same way; shiv passes. Evidence:
+  gauntlet [22-wheel-executables](../gauntlet/projects/22-wheel-executables/gauntlet.toml).
 - **2026-10-05** · tooling · This repo's Actions token can't open pull requests: the repo setting
   "Allow GitHub Actions to create and approve pull requests" is off
   (`gh api repos/funkyfunc/bundleup/actions/permissions/workflow` shows

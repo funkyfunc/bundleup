@@ -1,0 +1,12 @@
+[project]
+name = "g22-exe"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = ["ruff==0.14.0"]
+
+[project.scripts]
+g22 = "g22_exe:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"

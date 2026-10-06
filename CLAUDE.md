@@ -45,7 +45,7 @@ Do these **as you go**, not only at the end:
 
 ## Current state
 
-- Done: research (4 rounds, see [docs/research/](docs/research/README.md)), mission/vision, gauntlet of 22 projects (21 is the large pure-Python
+- Done: research (4 rounds, see [docs/research/](docs/research/README.md)), mission/vision, gauntlet of 23 projects (21 is the large pure-Python
   performance check), baseline of pex/shiv/zipapps ([findings](docs/findings/2026-10-03-baseline.md)).
 - Named `bundleup` ([ADR-0009](docs/adr/0009-name-bundleup.md)); repo github.com/funkyfunc/bundleup.
   PyPI has only the 0.0.1 placeholder; the working bundler isn't released yet.

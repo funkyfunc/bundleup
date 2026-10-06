@@ -145,6 +145,7 @@ Latest analysis: [docs/findings/2026-10-04-milestone-1.md](../docs/findings/2026
 | `19-subprocess-sys-executable` | Child `sys.executable -c "import click"` must see the bundle's dependencies | pass |
 | `20-heavy-ml` | PyTorch + NumPy; size reporting. Marked `heavy`, skipped by default | pass |
 | `21-large-pure-python` | ~8,000 files / 44 MB of pure-Python source (sympy, Django, boto3, networkx): the performance check for compile, zip, extract and analysis; Django locale and botocore model data files | pass |
+| `22-wheel-executables` | ruff's compiled program ships as a wheel script (`bin/ruff`); its wrapper must find it next to the packages | pass |
 
 ## `gauntlet.toml`
 

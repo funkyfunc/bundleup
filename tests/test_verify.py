@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from bundleup import _build as b
 from bundleup import _verify as v
 
 MAC_312 = {
@@ -102,7 +103,22 @@ def test_records_match(tmp_path: Path) -> None:
     del written["bin/tool"]  # bundleup removes console-script launchers on purpose
     written["pkg/__pycache__/__init__.cpython-312.pyc"] = ""  # and adds compiled bytecode
     written["__bundleup_script__/app.py"] = v.record_hash(b"print(1)")  # and a PEP 723 script
-    assert v.check_records(site, written) == []
+    assert v.check_records(site, written, removed={"bin/tool"}) == []
+    # Anything else in bin/ is something the wheel ships (ruff's binary): it must be there.
+    assert v.check_records(site, written) == ["missing file: bin/tool (from pkg-1.0.dist-info)"]
+
+
+def test_only_launchers_are_removed(tmp_path: Path) -> None:
+    files = {
+        "bin/tool": b"#!py\n",
+        "bin/tool.exe": b"MZ",
+        "bin/engine": b"\x7fELF",
+        "pkg/a.py": b"",
+    }
+    site, _written = make_site(tmp_path, files)
+    entry_points = "[console_scripts]\ntool = pkg.a:main\n"
+    (site / "pkg-1.0.dist-info" / "entry_points.txt").write_text(entry_points)
+    assert b.launchers(site) == {"bin/tool", "bin/tool.exe"}
 
 
 def test_record_problems_are_each_reported(tmp_path: Path) -> None:

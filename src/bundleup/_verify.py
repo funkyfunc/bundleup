@@ -24,7 +24,7 @@ import os
 import sys
 import tempfile
 import zipfile
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -41,8 +41,11 @@ if sys.version_info >= (3, 11):
 else:
     import tomli as tomllib
 
-# Paths bundleup removes from the install on purpose (see build.SKIP_TOP).
-REMOVED_PREFIXES = ("bin/", ".lock")
+# Paths bundleup removes from the install on purpose (see build.SKIP_TOP); console-script
+# launchers are removed too, and passed to check_records.
+REMOVED_PREFIXES = (".lock",)
+# Where installers put scripts and executables (`Scripts` on Windows).
+SCRIPT_DIRS = ("bin", "Scripts")
 # Paths bundleup adds on purpose: compiled bytecode, and a PEP 723 script.
 ADDED_DIRS = ("__pycache__",)
 SCRIPT_DIR = "__bundleup_script__"
@@ -144,18 +147,30 @@ def _added_on_purpose(path: str) -> bool:
     return parts[0] == SCRIPT_DIR or any(part in ADDED_DIRS for part in parts[:-1])
 
 
-def check_records(site: Path, written: dict[str, str]) -> list[str]:
+def record_paths(text: str) -> list[str]:
+    """Every path a RECORD lists."""
+    return [path for path, _hash in _record_entries(text)]
+
+
+def check_records(
+    site: Path, written: dict[str, str], *, removed: Collection[str] = ()
+) -> list[str]:
     """Compare the payload with every RECORD in `site`.
 
     `written` maps each payload path (POSIX, relative) to the RECORD-style hash of the bytes that
-    went into the zip.
+    went into the zip; `removed` lists RECORD paths bundleup left out on purpose.
     """
     problems = []
     covered: set[str] = set()
     for record in sorted(site.glob("*.dist-info/RECORD")):
         for path, expected in _record_entries(record.read_text(encoding="utf-8")):
             covered.add(path)
-            if path.startswith(REMOVED_PREFIXES) or not expected or path.endswith(".pyc"):
+            if (
+                path.startswith(REMOVED_PREFIXES)
+                or path in removed
+                or not expected
+                or path.endswith(".pyc")
+            ):
                 continue  # removed on purpose, RECORD itself, or bytecode bundleup recompiles
             actual = written.get(path)
             if actual is None:
