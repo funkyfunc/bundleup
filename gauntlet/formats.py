@@ -55,15 +55,15 @@ def handler(event, context):
 RUN_LOCALLY = "import json, sys, gauntlet_handler; print(json.dumps(gauntlet_handler.handler(json.loads(sys.argv[1]), None)))"  # noqa: E501 (a one-line program)
 LAMBDA_IMAGE = "public.ecr.aws/lambda/python:{python}"
 INVOKE = "http://127.0.0.1:{port}/2015-03-31/functions/function/invocations"
-# Projects that can't work in an output without bundleup's loader, and why. The check reports the
-# first (`pth-not-run`); the others are properties of the host.
+# Projects that can't work in an output without bundleup's loader, and why (the check warns:
+# `pth-not-run`). Gauntlet 19 passes on Lambda: its working directory is /var/task, and a
+# `python -c` child puts the working directory on its path.
 KNOWN = {
     "dir": {
         "23-pth-files": "no loader to run .pth files (`check` warns: pth-not-run)",
     },
     "lambda": {
         "23-pth-files": "no loader to run .pth files (`check` warns: pth-not-run)",
-        "19-subprocess-sys-executable": "a child Python doesn't get /var/task on its path",
     },
 }
 

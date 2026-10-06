@@ -41,6 +41,9 @@ a newer Python, data files a package expects under `sys.prefix`) is a warning. `
 runs the same checks without writing a bundle and shows how big each package is; `--strict` makes
 warnings fail too.
 
+Recipes for Claude Skills, AWS Lambda, host applications, CI and HPC:
+[docs/recipes.md](docs/recipes.md).
+
 ## Why
 
 Python has three ways to hand a program to someone else, and the middle one is missing:

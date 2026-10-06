@@ -133,6 +133,20 @@ merged; ask if unsure.
     a project's `pylock.toml` when it has no `uv.lock`; works with uv- and pip-written locks. Was:
     ([ADR-0006](adr/0006-delegate-to-uv-and-existing-files.md)): a hedge against depending on uv's own lockfile.
 
+**Items 1-12 are done (2026-10-06).** Proposed next, for the owner to order (an agent's
+suggestion, not yet agreed):
+
+13. **Confirm or change the Proposed ADRs 0023-0026** (written while the owner was away), and
+    ADR-0013's remaining features.
+14. **First real release to PyPI** (0.1.0): the version, a changelog, a release workflow with
+    trusted publishing, and the README's status line. Needs the owner.
+15. **Agent triage of `corpus-failure` issues** (item 6 step 6, deferred by the owner).
+16. **Standalone executables** ([ADR-0014](adr/0014-output-formats-and-target-presets.md) defers
+    them; needs its own ADR): a `.pyz` paired with a portable Python for machines without one.
+17. **Smaller follow-ups:** Lambda layers (`python/` prefix); `bundleup verify` for `dir` and
+    Lambda outputs; a `splunk` preset; automatic `uv python install` when a target's Python is
+    missing (ADR-0025 left it out); trying the `claude-api` preset in the real sandbox.
+
 Before writing code in an unfamiliar area, look at [references.md](references.md) for projects
 that solved similar problems.
 
@@ -194,24 +208,24 @@ What [MISSION.md](../MISSION.md) defines as done:
 
 | Idea | What it is | Why |
 |---|---|---|
-| **`bundleup check`** | The pre-ship analyzer as its own command, runnable in CI on any project: "will this survive bundling?" | Useful even to people who bundle with something else; the most defensible part of the tool |
-| **Multi-platform bundles** | One `.pyz` that runs on several OS/CPU/Python combinations, or one per target from a single machine (`--python`, `--platform`) | Build once on a Mac, ship to Linux servers. Round 4's #1 priority: it unlocks most strong-fit use cases ([ADR-0014](adr/0014-output-formats-and-target-presets.md), accepted) |
-| **Cache override and runtime hardening** | `BUNDLEUP_CACHE`, cache order (env → user cache → temp), per-build locks, stale-cache cleanup, isolated `sys.path` | Lambda's read-only filesystem, read-only roots, HPC node-local scratch, 1,000 jobs starting at once |
-| **`--format dir`** | A vendored directory built for a host application's Python and platform | Splunk, QGIS, Maya/Houdini, Azure Functions' `.python_packages` all hand-roll `pip install --target --platform` today ([ADR-0014](adr/0014-output-formats-and-target-presets.md), accepted) |
-| **Target profiles** | Named targets for environments with a fixed, known Python and platform, starting with `claude-api` (CPython 3.11, manylinux x86_64, no network) | Known targets make compiled wheels (pydantic, numpy) shippable; the most agent-specific feature ([ADR-0013](adr/0013-agent-sandboxes-as-headline-use-case.md), Proposed) |
-| **Skill output** | `scripts/<tool>.pyz` plus a ready `SKILL.md` stanza and an honest `compatibility` line | No platform offers skill scripts with dependencies that run offline ([ADR-0013](adr/0013-agent-sandboxes-as-headline-use-case.md), Proposed) |
-| **Size and contents report** | What's in the bundle, what's heavy, why (like webpack-bundle-analyzer / esbuild's metafile) | Native wheels dominate size; people need to see it |
-| **Python API** | Call bundleup as a library from uv, Hatch, Pants, CI scripts | Be the component others call, the way Vite calls esbuild |
-| **Machine-readable output** | `--json` for build results and `check` findings | CI systems and agents can act on results without parsing prose |
-| **Bundle manifest** | A list of exactly what's inside each bundle, with hashes and versions | Trust and supply-chain review: the reviewed artifact is the executed artifact. Secondary: doesn't address malicious skill instructions |
-| **Tested offline guarantee** | State, and test on every gauntlet run, that a bundle never touches the network | Makes "runs offline" a promise rather than a hope (the harness already blocks network) |
+| ~~**`bundleup check`**~~ done ([ADR-0024](adr/0024-check-command-and-build-analysis.md)) | The pre-ship analyzer as its own command, runnable in CI on any project: "will this survive bundling?" | Useful even to people who bundle with something else; the most defensible part of the tool |
+| **Multi-platform bundles** (one per target from one machine: done, ADR-0014) | One `.pyz` that runs on several OS/CPU/Python combinations, or one per target from a single machine (`--python`, `--platform`) | Build once on a Mac, ship to Linux servers. Round 4's #1 priority: it unlocks most strong-fit use cases ([ADR-0014](adr/0014-output-formats-and-target-presets.md), accepted) |
+| ~~**Cache override and runtime hardening**~~ done (item 8) | `BUNDLEUP_CACHE`, cache order (env → user cache → temp), per-build locks, stale-cache cleanup, isolated `sys.path` | Lambda's read-only filesystem, read-only roots, HPC node-local scratch, 1,000 jobs starting at once |
+| ~~**`--format dir`**~~ done ([ADR-0025](adr/0025-dir-and-lambda-formats-and-presets.md)) | A vendored directory built for a host application's Python and platform | Splunk, QGIS, Maya/Houdini, Azure Functions' `.python_packages` all hand-roll `pip install --target --platform` today ([ADR-0014](adr/0014-output-formats-and-target-presets.md), accepted) |
+| **Target profiles** (`claude-api`, `lambda`: done, ADR-0025) | Named targets for environments with a fixed, known Python and platform, starting with `claude-api` (CPython 3.11, manylinux x86_64, no network) | Known targets make compiled wheels (pydantic, numpy) shippable; the most agent-specific feature ([ADR-0013](adr/0013-agent-sandboxes-as-headline-use-case.md), Proposed) |
+| **Skill output** (a [recipe](recipes.md) with `--target claude-api` for now) | `scripts/<tool>.pyz` plus a ready `SKILL.md` stanza and an honest `compatibility` line | No platform offers skill scripts with dependencies that run offline ([ADR-0013](adr/0013-agent-sandboxes-as-headline-use-case.md), Proposed) |
+| **Size and contents report** (per package: `bundleup check -v`) | What's in the bundle, what's heavy, why (like webpack-bundle-analyzer / esbuild's metafile) | Native wheels dominate size; people need to see it |
+| ~~**Python API**~~ done ([ADR-0018](adr/0018-package-layout-and-lazy-api.md)) | Call bundleup as a library from uv, Hatch, Pants, CI scripts | Be the component others call, the way Vite calls esbuild |
+| ~~**Machine-readable output**~~ done (`--json`, [schemas](schema/)) | `--json` for build results and `check` findings | CI systems and agents can act on results without parsing prose |
+| ~~**Bundle manifest**~~ done ([ADR-0019](adr/0019-manifest-and-verify-command.md)) | A list of exactly what's inside each bundle, with hashes and versions | Trust and supply-chain review: the reviewed artifact is the executed artifact. Secondary: doesn't address malicious skill instructions |
+| ~~**Tested offline guarantee**~~ done (every gauntlet run blocks the network on macOS and Linux) | State, and test on every gauntlet run, that a bundle never touches the network | Makes "runs offline" a promise rather than a hope (the harness already blocks network) |
 | **Opt-in pruning** | Drop whole distributions that are provably unreachable | Smaller bundles without the risk of function-level tree-shaking |
 
 ## Middle: the same bundle, different destinations
 
 | Destination | What we'd produce | Why it's a real gap |
 |---|---|---|
-| **AWS Lambda** | `--target lambda`: a native Lambda zip or layer (not a `.pyz`: Lambda already unzips, and only `/tmp` is writable), with a size report against the 250 MB limit | Most common serverless request; hand-built packages often ship Mac wheels ([ADR-0014](adr/0014-output-formats-and-target-presets.md), accepted) |
+| ~~**AWS Lambda**~~ done (`--target lambda`; layers not yet) | `--target lambda`: a native Lambda zip or layer (not a `.pyz`: Lambda already unzips, and only `/tmp` is writable), with a size report against the 250 MB limit | Most common serverless request; hand-built packages often ship Mac wheels ([ADR-0014](adr/0014-output-formats-and-target-presets.md), accepted) |
 | **Container images (docs only)** | Document the 3-line Dockerfile that copies `app.pyz` onto `python:3.x-slim` | Round 4 recommends against building images ourselves; Dockerfile + uv already works |
 | **Standalone executables** (high value, deferred) | An opt-in output that pairs the `.pyz` with a portable Python (python-build-standalone), like pex `--scie` or PyApp: one file per OS/CPU that needs **nothing** installed | Serves desktop users without Python, the one big audience a `.pyz` can't reach (round 4). Deferred, not rejected: excluded from the core by [ADR-0002](adr/0002-target-the-runtime-only-tier.md) because of code signing/notarization and size (~tens of MB per platform), so it needs its own ADR first. Build on cross-target builds; consider handing off to pex's scie tooling rather than writing a launcher |
 | **"No Python installed"** | A tiny launcher that downloads a Python on first run, then runs the bundle | The "user has no usable Python" problem ([primer](python-primer.md) §3) |

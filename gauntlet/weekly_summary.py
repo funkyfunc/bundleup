@@ -1,6 +1,7 @@
-"""Weekly summary of the nightly runs (roadmap item 6, step 7): what passed and failed, by night and
-OS, from the results each run attached on GitHub. Writes a findings page, so the nightly runs leave
-a record in the repo after GitHub deletes their artifacts (90 days).
+"""Weekly summary of the nightly runs (roadmap item 6, step 7): smoke test, corpus and test
+suites; what passed and failed, by night and OS, from the results each run attached on GitHub.
+Writes a findings page, so the nightly runs leave a record in the repo after GitHub deletes their
+artifacts (90 days).
 
 Usage:
     uv run gauntlet/weekly_summary.py --repo funkyfunc/bundleup \
@@ -25,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 Row = dict[str, Any]  # one result from smoke.py or corpus.py, as JSON; Any: mixed value types
-WORKFLOWS = {"smoke": "nightly.yml", "corpus": "corpus.yml"}
+WORKFLOWS = {"smoke": "nightly.yml", "corpus": "corpus.yml", "suites": "suites.yml"}
 PASSING = ("pass", "skipped")
 
 
@@ -127,6 +128,7 @@ def main() -> int:
     since = end - timedelta(days=opts.days)
     smoke = nights(opts.repo, WORKFLOWS["smoke"], since, "smoke")
     corpus = nights(opts.repo, WORKFLOWS["corpus"], since, "corpus")
+    suites = nights(opts.repo, WORKFLOWS["suites"], since, "suites")
     issues = open_issues(opts.repo)
     lines = [
         f"# Nightly runs: {since.date().isoformat()} to {end.date().isoformat()}",
@@ -137,6 +139,9 @@ def main() -> int:
         "",
         *section("Smoke test (most-downloaded PyPI packages)", "smoke", smoke, "package"),
         *section("Corpus (real programs, installed vs bundled)", "corpus", corpus, "name"),
+        *section(
+            "Test suites (real projects' own tests, venv vs bundle)", "suites", suites, "name"
+        ),
         "## Open `corpus-failure` issues",
         "",
         *(issues or ["None."]),
@@ -144,7 +149,7 @@ def main() -> int:
     ]
     opts.out.parent.mkdir(parents=True, exist_ok=True)
     opts.out.write_text("\n".join(lines))
-    print(f"wrote {opts.out}: {len(smoke)} smoke and {len(corpus)} corpus runs")
+    print(f"wrote {opts.out}: {len(smoke)} smoke, {len(corpus)} corpus, {len(suites)} suites runs")
     return 0
 
 

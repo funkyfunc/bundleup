@@ -48,8 +48,11 @@ decided while building it.
 
 - Lambda users get a zip that runs as is, without hand-rolled `pip install --target --platform`.
 - Without the loader, `dir` and Lambda outputs don't isolate from the host's packages, don't run
-  `.pth` files, and don't set up child processes (gauntlet 19 fails on Lambda: a child Python
-  doesn't get `/var/task`). These are properties of the hosts; the check warns where it can.
+  `.pth` files (gauntlet 23; the check warns), and don't set up child processes. In CI on
+  2026-10-06 every other gauntlet project passed in AWS's Lambda image on x86_64 and arm64,
+  including 19 (a child `python -c` finds the packages through the working directory,
+  `/var/task`) and 16 (multiprocessing). The emulator has `/dev/shm`; real Lambda doesn't, so
+  `multiprocessing.Pool` and `Queue` still fail there (an AWS limitation, untested here).
 - Not done: Lambda layers (`python/` prefix), `verify` for `dir`/Lambda outputs, a `splunk`
   preset. Each is small once someone needs it.
 

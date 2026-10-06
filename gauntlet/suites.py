@@ -60,10 +60,15 @@ class Record:
     detail: str = ""
 
 
-def summarize(text: str, exit_code: int) -> Outcome:
-    lines = [line for line in text.splitlines() if line.strip()]
-    found = re.search(r"SUITE-MODULE-FILE (.+)", text)
-    last = lines[-1] if lines else ""
+SUMMARY = re.compile(r"\d+ (passed|failed|errors?|skipped)\b.* in [\d.]+s")
+
+
+def summarize(stdout: str, stderr: str, exit_code: int) -> Outcome:
+    """pytest's result: its last summary line ("12 passed, 1 skipped in 0.3s"), wherever other
+    output lands, and where the probe found the module."""
+    lines = [line for line in (stdout + "\n" + stderr).splitlines() if line.strip()]
+    found = re.search(r"SUITE-MODULE-FILE (.+)", stdout)
+    last = next((line for line in reversed(lines) if SUMMARY.search(line)), "")
     counts = {
         kind.rstrip("s") if kind.startswith("error") else kind: int(n)
         for n, kind in COUNTS.findall(last)
@@ -76,10 +81,10 @@ def summarize(text: str, exit_code: int) -> Outcome:
 def run_tests(cmd: list[str], *, clone: Path, env: dict[str, str]) -> Outcome:
     args = [str(clone / "tests"), "-q", "-p", "no:cacheprovider", "-p", "suite_probe"]
     done = rb.sh([*cmd, *args, "--import-mode=importlib"], cwd=clone, env=env, timeout=1800)
-    return summarize(done.stdout + done.stderr, done.returncode)
+    return summarize(done.stdout, done.stderr, done.returncode)
 
 
-def run_suite(suite: Suite, python: str, work: Path) -> Record:
+def run_suite(suite: Suite, python: str, version: str, work: Path) -> Record:
     rec = Record(str(suite["name"]))
     root = work / rec.name
     shutil.rmtree(root, ignore_errors=True)
@@ -104,7 +109,7 @@ def run_suite(suite: Suite, python: str, work: Path) -> Record:
         return rec
     deps = [suite["package"], *suite["test_deps"]]
     (project / "pyproject.toml").write_text(
-        f'[project]\nname = "suite-{rec.name}"\nversion = "0"\nrequires-python = ">=3.9"\n'
+        f'[project]\nname = "suite-{rec.name}"\nversion = "0"\nrequires-python = ">={version}"\n'
         f"dependencies = {json.dumps(deps)}\n"
     )
     (probe / "suite_probe.py").write_text(PROBE)
@@ -165,7 +170,7 @@ def main() -> int:
     for suite in suites:
         if opts.only and suite["name"] not in opts.only:
             continue
-        rec = run_suite(suite, rb.python_path(opts.python), work)
+        rec = run_suite(suite, rb.python_path(opts.python), opts.python, work)
         records.append(rec)
         counts = rec.bundle.counts if rec.bundle else {}
         print(f"{rec.outcome:<16} {rec.name:<14} {counts} {rec.detail[:200]}", flush=True)
