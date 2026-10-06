@@ -17,9 +17,28 @@ merged; ask if unsure.
    check on commit; tests on push). Land it as one checkpoint commit that also reformats existing
    code. Follow [python-for-js-reviewers.md](python-for-js-reviewers.md) when fixing what the
    checks flag.
-2. **CI on GitHub Actions** ([ADR-0015](adr/0015-engineering-tooling.md)): lint, type check and
-   tests on every push; the gauntlet on macOS and Linux, Python 3.9 / 3.11 / 3.12. Closes the
-   "no Linux runs" gap.
+2. **CI on GitHub Actions, across the platform matrix** ([ADR-0015](adr/0015-engineering-tooling.md),
+   [ADR-0017](adr/0017-platform-matrix-and-corpus-testing.md), [testing-strategy.md](testing-strategy.md)).
+   - **First, ask the owner to make the repo public** (they're fine with it): GitHub Actions is
+     free and unlimited on standard runners for public repos. Private repos get 2,000 minutes a
+     month, then per-minute charges (macOS $0.062/min), which runs out fast.
+   - **Every push:** lint, type check, unit tests.
+   - **Every push (or nightly if slow):** the gauntlet, including hostile conditions, on this
+     matrix:
+
+     | OS | Runner | Pythons |
+     |---|---|---|
+     | Linux x64 | `ubuntu-24.04` | 3.9, 3.11, 3.12 (+ 3.13/3.14 as they matter) |
+     | Linux arm64 | `ubuntu-24.04-arm` | 3.11, 3.12 |
+     | Windows x64 | `windows-2025` | 3.11, 3.12 |
+     | macOS arm64 | `macos-15` | system 3.9, 3.12 |
+     | macOS Intel / Windows arm64 | `macos-15-intel` / `windows-11-arm` | nightly spot checks |
+
+   - **Limits to design around:** 20 concurrent jobs (5 macOS), 6 hours per job, artifact storage
+     quotas (store JSON results, not bundles).
+   - **Local machines are for debugging, not CI:** the Mac (macOS, system Python 3.9, Linux
+     containers/VMs via Colima/Lima/UTM) and the owner's System76 laptop (real x86_64 Linux, can host
+     a Windows VM). No hardware purchases until a concrete need appears.
 3. **User review of [ADR-0010](adr/0010-bundle-format-and-loader.md),
    [ADR-0011](adr/0011-cli-and-build-pipeline.md) and [ADR-0016](adr/0016-cli-and-api-conventions.md)**
    (all Proposed). Summarize each for the user in JavaScript terms and ask for decisions,
@@ -30,7 +49,11 @@ merged; ask if unsure.
    In order of value:
    - **Lockfile vs bundle check:** every locked runtime distribution present at the locked
      version; nothing extra (no dev dependencies); a build-time error if not.
-   - **Wheel integrity:** every extracted file matches the sha256 in its wheel's `RECORD`.
+   - **Wheel integrity:** every bundled file matches the sha256 in its wheel's `RECORD`.
+   - **Embedded manifest + `--verify`:** the bundle records every file's hash; `python app.pyz
+     --verify` re-checks the extracted cache. Together with the two checks above and reproducible
+     builds, this is a hash chain from `uv.lock` to every file that runs
+     ([testing-strategy.md](testing-strategy.md) "What correct means").
    - **Differential test vs an installed venv:** for any project, compare the bundle with
      `uv sync` (same distributions and versions via `importlib.metadata`, every top-level module
      importable, same entry points).
@@ -41,17 +64,46 @@ merged; ask if unsure.
    [ADR-0016](adr/0016-cli-and-api-conventions.md)) once item 3 is decided: stderr/stdout split,
    `error:`/`hint:` messages, exit codes, `--json`, library API (`build()`, `BuildOptions`,
    `BundleupError`), snapshot tests.
-6. **Cross-target builds** (`--python`, `--python-platform` in uv's vocabulary;
+6. **Nightly corpus testing with AI triage** ([testing-strategy.md](testing-strategy.md),
+   [ADR-0017](adr/0017-platform-matrix-and-corpus-testing.md), Proposed). Real open-source projects,
+   cloned and bundled every night, so bundleup is tested on code nobody wrote for us. Needs items
+   4–5 first (correctness checks, stable `--json` and exit codes). Build it in this order:
+   1. **Corpus list** (a checked-in file): a stratified mix, not random repos. Public, clearly
+      licensed GitHub projects with `pyproject.toml` + `uv.lock` + a CLI entry point; popular CLI
+      apps from PyPI (wrapped in a tiny locked project); PEP 723 scripts; top PyPI packages
+      (import-only). **Pin every entry to a commit SHA.** Start with ~20 and grow.
+   2. **Nightly workflow** on GitHub-hosted runners across the matrix (item 2): for each project,
+      clone at the pinned commit, install it normally (`uv sync`) **and** bundle it, then run the
+      same command both ways (`--help`, `--version`, or a documented smoke command).
+   3. **Pass/fail oracle:** same exit code and output both ways, plus the correctness checks from
+      item 4 (lock vs bundle, `RECORD` hashes, environment snapshot). A clear refusal (e.g. "needs
+      system libraries") counts as a pass.
+   4. **Results:** one small JSON record per run: project, commit, OS, Python, bundleup version,
+      failing phase (build / run / compare), exit code, error excerpt, timings.
+   5. **Deduplicate** by failure signature (phase + exception + package + bundleup function) and
+      open or update **one GitHub issue per signature**, labelled `corpus-failure`, with every
+      reproduction attached.
+   6. **AI triage:** a scheduled agent takes new `corpus-failure` issues, reproduces each, classifies
+      it (bundleup bug / bad refusal message / project problem / flaky), **reduces real bugs to a
+      new gauntlet project**, proposes a fix as a pull request, and re-runs the gauntlet plus the
+      original project. **The owner merges; agents never merge their own fixes.**
+   7. **Weekly summary** in `docs/findings/`: pass rate by OS and Python, new and fixed signatures.
+   - **Safety:** third-party code runs only on ephemeral GitHub-hosted runners with no secrets, or
+     in a throwaway VM/container on the System76 laptop. Never directly on personal machines.
+   - **Budget and fair use:** batch size and matrix width are configuration; cap agent triage per
+     night; keep batches modest (tens of projects a night), since GitHub's terms forbid
+     "disproportionate burden".
+7. **Cross-target builds** (`--python`, `--python-platform` in uv's vocabulary;
    [ADR-0014](adr/0014-output-formats-and-target-presets.md), Proposed): build a Linux bundle from
    a Mac. Gauntlet coverage for at least manylinux x86_64 + CPython 3.11.
-7. **Runtime hardening:** `BUNDLEUP_CACHE` override, cache order, per-build locks, stale-cache
+8. **Runtime hardening:** `BUNDLEUP_CACHE` override, cache order, per-build locks, stale-cache
    cleanup, isolated `sys.path`.
-8. **Faster large builds:** threaded compression, per-wheel `.pyc` cache
+9. **Faster large builds:** threaded compression, per-wheel `.pyc` cache
    ([findings](findings/2026-10-04-large-project-and-rust.md)).
-9. **`bundleup check`**, the pre-ship analyzer, including the compatibility pre-check
+10. **`bundleup check`**, the pre-ship analyzer, including the compatibility pre-check
    (native code that doesn't match the target).
-10. **`--format dir`** and **`--target lambda`** ([ADR-0014](adr/0014-output-formats-and-target-presets.md), Proposed).
-11. **`pylock.toml` input** ([ADR-0006](adr/0006-delegate-to-uv-and-existing-files.md)): a hedge against depending on uv's own lockfile.
+11. **`--format dir`** and **`--target lambda`** ([ADR-0014](adr/0014-output-formats-and-target-presets.md), Proposed).
+12. **`pylock.toml` input** ([ADR-0006](adr/0006-delegate-to-uv-and-existing-files.md)): a hedge against depending on uv's own lockfile.
 
 Before writing code in an unfamiliar area, look at [references.md](references.md) for projects
 that solved similar problems.
@@ -133,7 +185,7 @@ What [MISSION.md](../MISSION.md) defines as done:
 |---|---|---|
 | **AWS Lambda** | `--target lambda`: a native Lambda zip or layer (not a `.pyz`: Lambda already unzips, and only `/tmp` is writable), with a size report against the 250 MB limit | Most common serverless request; hand-built packages often ship Mac wheels ([ADR-0014](adr/0014-output-formats-and-target-presets.md), Proposed) |
 | **Container images (docs only)** | Document the 3-line Dockerfile that copies `app.pyz` onto `python:3.x-slim` | Round 4 recommends against building images ourselves; Dockerfile + uv already works |
-| **Standalone executables** | Bundle + a portable Python via pex's `scie` | Out of scope for the core ([ADR-0002](adr/0002-target-the-runtime-only-tier.md)) because of code signing; possible later as an opt-in output |
+| **Standalone executables** (high value, deferred) | An opt-in output that pairs the `.pyz` with a portable Python (python-build-standalone), like pex `--scie` or PyApp: one file per OS/CPU that needs **nothing** installed | Serves desktop users without Python, the one big audience a `.pyz` can't reach (round 4). Deferred, not rejected: excluded from the core by [ADR-0002](adr/0002-target-the-runtime-only-tier.md) because of code signing/notarization and size (~tens of MB per platform), so it needs its own ADR first. Build on cross-target builds; consider handing off to pex's scie tooling rather than writing a launcher |
 | **"No Python installed"** | A tiny launcher that downloads a Python on first run, then runs the bundle | The "user has no usable Python" problem ([primer](python-primer.md) §3) |
 | **MCP servers (deferred)** | A bundled MCP server that starts with `python server.pyz` | Only for offline or single-platform cases: MCPB already moved Python to a host-side `uv` server type, and compiled deps (pydantic) can't be bundled portably for unknown desktops |
 | **Agents as operators (hypothesis)** | A bundleup skill so an agent can bundle a script it wrote (build where there's network, run in an offline sandbox) | Plausible and unserved, but no evidence of demand found yet; validate with users first |

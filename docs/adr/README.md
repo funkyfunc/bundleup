@@ -25,3 +25,4 @@ and change only the old one's status line.
 | [0014](0014-output-formats-and-target-presets.md) | `.pyz` stays the product; add `dir` and Lambda outputs and printable target presets | Proposed |
 | [0015](0015-engineering-tooling.md) | Enforce code quality with Ruff, a type checker, git hooks and CI | Accepted |
 | [0016](0016-cli-and-api-conventions.md) | CLI and Python API follow the style guide | Proposed |
+| [0017](0017-platform-matrix-and-corpus-testing.md) | Free platform matrix on GitHub Actions, plus nightly corpus testing with AI triage | Proposed |

@@ -30,7 +30,9 @@ Maya/Houdini, Azure Functions' `.python_packages`). Both currently hand-roll
 5. **No hybrid or uv-dependent default.** A PEP 723 header on a `.pyz` may come later as an
    explicit opt-in, once uv supports it (uv#18662), because `python app.pyz` and `uv run app.pyz`
    would otherwise run different dependency sets.
-6. **Out of scope:** standalone executables, container images, Pyodide/WebAssembly, conda-style
+6. **Deferred:** standalone executables (valuable, on the roadmap; needs its own ADR because of
+   signing and size; amended 2026-10-04 at the owner's request). **Out of scope:** container images,
+   Pyodide/WebAssembly, conda-style
    environments, wheelhouses. Non-Python dependencies are detected and warned about, not bundled.
 
 ## Consequences
