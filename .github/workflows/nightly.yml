@@ -1,0 +1,42 @@
+# Nightly breadth smoke test (roadmap item 4): bundle the most-downloaded PyPI packages and compare
+# each bundle with a normal install. Imports third-party code, so it only runs on GitHub's
+# ephemeral runners (ADR-0017), never on personal machines.
+name: Nightly smoke test
+
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+    inputs:
+      top:
+        description: "How many of the most-downloaded packages to test"
+        default: "200"
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    name: Smoke (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0 # publishes exact versions only, no floating v10 tag
+      - run: uv sync --locked --python 3.12
+      - run: uv python install 3.12
+      - name: Bundle and compare the most-downloaded packages
+        run: >
+          uv run gauntlet/smoke.py --top ${{ inputs.top || '200' }} --python 3.12 --jobs 4
+          --check --out smoke
+      - name: Keep the results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: smoke-${{ matrix.os }}
+          path: gauntlet/results/smoke.json
+          if-no-files-found: ignore

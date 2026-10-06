@@ -11,6 +11,7 @@ someone tries it on a personal project. Decided direction: [ADR-0017](adr/0017-p
 | Unit tests (`tests/`) | Loader and CLI edge cases | Every commit (hooks) and CI | Exists |
 | Gauntlet (22 projects) | Bundles run and *behave* for known failure modes, incl. hostile conditions | CI, every push | Exists (Linux, Windows, macOS since 2026-10-05) |
 | Correctness checks | Bundles contain *exactly* the right files: lock vs bundle, wheel `RECORD` hashes, manifest, differential test vs a `uv sync` venv | Every build (lock, `RECORD`, manifest); `bundleup verify`; CI (`matches-venv`) | Exists (2026-10-05) |
+| Breadth smoke test | The most-downloaded PyPI packages bundle and match a normal install | Nightly CI, 4 OSes | Exists (2026-10-05) |
 | Platform matrix | All of the above on Linux, Windows and macOS, x64 and arm64, Python 3.9–3.14 | CI | Exists for Linux x64/arm64, Windows x64, macOS arm64 × 3.9/3.11/3.12 |
 | **Corpus testing** | bundleup works on real projects nobody wrote for us | Nightly CI | Roadmap (below) |
 | Dogfooding and early users | Real workflows, starting with the owner's own skills | By hand | Ongoing |

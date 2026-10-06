@@ -62,7 +62,9 @@ merged; ask if unsure.
    - **Differential test vs an installed venv:** for any project, compare the bundle with
      `uv sync` (same distributions and versions via `importlib.metadata`, every top-level module
      importable, same entry points).
-   - **Breadth smoke test (nightly CI):** bundle the top few hundred PyPI packages and import
+   - ~~**Breadth smoke test (nightly CI)**~~ **Built 2026-10-05**
+     ([`gauntlet/smoke.py`](../gauntlet/smoke.py), [`nightly.yml`](../.github/workflows/nightly.yml)):
+     bundle the top few hundred PyPI packages and import
      each one's top-level modules; turn every failure into a gauntlet project or a learning.
    - **Real-world suites:** run a few real projects' own test suites against their bundles.
 5. ~~**Align the CLI with the style guide**~~ **Done 2026-10-05** (see the style guide's

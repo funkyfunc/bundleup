@@ -63,6 +63,19 @@ byte-identical, nothing unexplained). See [testing-strategy.md](../docs/testing-
 `--conditions --check` on every push: Linux x64 (3.9, 3.11, 3.12), Linux arm64 and Windows x64
 (3.11, 3.12), macOS arm64 (Apple's 3.9, 3.12). Each job uploads its results JSON as an artifact.
 
+## Breadth smoke test (nightly)
+
+```bash
+uv run gauntlet/smoke.py --top 200 --out <name>    # the most-downloaded PyPI packages
+uv run gauntlet/smoke.py click requests            # specific packages
+```
+
+[smoke.py](smoke.py) makes a throwaway locked project for each package, installs it normally,
+bundles it, and runs the `matches-venv` comparison. Packages that don't install normally on the
+platform are skipped. It imports third-party code, so it runs nightly on GitHub's runners
+([`nightly.yml`](../.github/workflows/nightly.yml), Linux x64/arm64, macOS, Windows; ADR-0017), not
+on personal machines. Every failure should become a gauntlet project or a learning.
+
 ## Measuring speed
 
 ```bash

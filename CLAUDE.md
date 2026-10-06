@@ -73,7 +73,8 @@ Do these **as you go**, not only at the end:
   compares each bundle with a `uv sync` install. Every bundle carries `manifest.json`;
   `bundleup verify` checks a bundle and its unpacked copy against it
   ([ADR-0019](docs/adr/0019-manifest-and-verify-command.md)). Still to do from roadmap item 4:
-  nightly top-PyPI smoke test, real-world test suites.
+  real-world test suites (the nightly top-PyPI smoke test exists:
+  [`gauntlet/smoke.py`](gauntlet/smoke.py)).
 - **CLI follows the style guide** (ADR-0016): `bundleup build [PATH]`, `--json`, `error:`/`hint:`,
   exit codes, a typed library API with lazy exports
   ([ADR-0018](docs/adr/0018-package-layout-and-lazy-api.md), **Proposed**). Open rules are listed
@@ -103,7 +104,8 @@ gauntlet/check_native.py  control group: projects run installed normally
 gauntlet/run_bundlers.py  build + run with bundleup and existing bundlers, hostile conditions
 gauntlet/bench.py       sequential speed benchmark (build, first run, warm start) vs venv/shiv/pex
 gauntlet/snapshot.py    describes installed packages; the matches-venv condition compares two snapshots
-.github/workflows/ci.yml  CI: checks, tests, gauntlet across the platform matrix
+gauntlet/smoke.py       nightly breadth test: top PyPI packages bundled and compared with a venv
+.github/workflows/       ci.yml (every push: checks, tests, gauntlet matrix); nightly.yml (smoke test)
 gauntlet/report.py      results JSON -> markdown
 gauntlet/results/       committed results
 gauntlet/.work/         scratch (git-ignored)
