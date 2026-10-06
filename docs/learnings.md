@@ -6,6 +6,10 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-05** · testing · The 100 most-downloaded PyPI packages (incl. pandas, scipy, pyarrow,
+  grpcio, cryptography) bundle and match a normal install on Linux x64/arm64, macOS and Windows with
+  no failures. Breadth beyond that and real program runs are the next risk. Evidence:
+  [findings](findings/2026-10-05-ci-and-correctness.md).
 - **2026-10-05** · testing · argparse's error wording changes even between patch releases
   (`(choose from 'build')` vs `(choose from build)` across 3.12.x), so CLI snapshots must only
   contain bundleup's own words. A corruption test that flipped a byte at a fixed offset landed in

@@ -1,8 +1,8 @@
 # ADR-0014: `.pyz` stays the product; add `dir` and Lambda outputs and printable target presets
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-05)
 - **Date:** 2026-10-04
-- **Deciders:** proposed by an agent from round 4 research; awaiting the user
+- **Deciders:** proposed by an agent from round 4 research; accepted by the user
 
 ## Context
 

@@ -22,9 +22,9 @@ and change only the old one's status line.
 | [0011](0011-cli-and-build-pipeline.md) | CLI shape and build pipeline | Accepted (pipeline); CLI superseded by 0016 |
 | [0012](0012-lead-with-what-it-does.md) | Describe bundleup by what it does, with use cases as examples | Accepted |
 | [0013](0013-agent-sandboxes-as-headline-use-case.md) | Agent sandboxes as the headline use case, served by target profiles and skill output | Accepted (positioning); features Proposed |
-| [0014](0014-output-formats-and-target-presets.md) | `.pyz` stays the product; add `dir` and Lambda outputs and printable target presets | Proposed |
+| [0014](0014-output-formats-and-target-presets.md) | `.pyz` stays the product; add `dir` and Lambda outputs and printable target presets | Accepted |
 | [0015](0015-engineering-tooling.md) | Enforce code quality with Ruff, a type checker, git hooks and CI | Accepted |
 | [0016](0016-cli-and-api-conventions.md) | CLI and Python API follow the style guide | Accepted (verbs) |
-| [0017](0017-platform-matrix-and-corpus-testing.md) | Free platform matrix on GitHub Actions, plus nightly corpus testing with AI triage | Proposed |
-| [0018](0018-package-layout-and-lazy-api.md) | Private modules, and a public API that loads lazily | Proposed |
-| [0019](0019-manifest-and-verify-command.md) | Every bundle carries a manifest; `bundleup verify` checks it | Accepted (command); format Proposed |
+| [0017](0017-platform-matrix-and-corpus-testing.md) | Free platform matrix on GitHub Actions, plus nightly corpus testing with AI triage | Accepted (agent triage deferred) |
+| [0018](0018-package-layout-and-lazy-api.md) | Private modules, and a public API that loads lazily | Accepted |
+| [0019](0019-manifest-and-verify-command.md) | Every bundle carries a manifest; `bundleup verify` checks it | Accepted |

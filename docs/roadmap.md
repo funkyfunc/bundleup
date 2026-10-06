@@ -73,7 +73,8 @@ merged; ask if unsure.
    `error:`/`hint:` messages, exit codes, `--json`, library API (`build()`, `BuildOptions`,
    `BundleupError`), snapshot tests.
 6. **Nightly corpus testing with AI triage** ([testing-strategy.md](testing-strategy.md),
-   [ADR-0017](adr/0017-platform-matrix-and-corpus-testing.md), Proposed). Real open-source projects,
+   [ADR-0017](adr/0017-platform-matrix-and-corpus-testing.md), accepted 2026-10-05: issues first, agent
+   triage (step 6) later). Real open-source projects,
    cloned and bundled every night, so bundleup is tested on code nobody wrote for us. Needs items
    4–5 first (correctness checks, stable `--json` and exit codes). Build it in this order:
    1. **Corpus list** (a checked-in file): a stratified mix, not random repos. Public, clearly
@@ -102,7 +103,7 @@ merged; ask if unsure.
      night; keep batches modest (tens of projects a night), since GitHub's terms forbid
      "disproportionate burden".
 7. **Cross-target builds** (`--python`, `--python-platform` in uv's vocabulary;
-   [ADR-0014](adr/0014-output-formats-and-target-presets.md), Proposed): build a Linux bundle from
+   [ADR-0014](adr/0014-output-formats-and-target-presets.md), accepted): build a Linux bundle from
    a Mac. Gauntlet coverage for at least manylinux x86_64 + CPython 3.11.
 8. **Runtime hardening:** `BUNDLEUP_CACHE` override, cache order, per-build locks, stale-cache
    cleanup, isolated `sys.path`.
@@ -110,7 +111,7 @@ merged; ask if unsure.
    ([findings](findings/2026-10-04-large-project-and-rust.md)).
 10. **`bundleup check`**, the pre-ship analyzer, including the compatibility pre-check
    (native code that doesn't match the target).
-11. **`--format dir`** and **`--target lambda`** ([ADR-0014](adr/0014-output-formats-and-target-presets.md), Proposed).
+11. **`--format dir`** and **`--target lambda`** ([ADR-0014](adr/0014-output-formats-and-target-presets.md), accepted).
 12. **`pylock.toml` input** ([ADR-0006](adr/0006-delegate-to-uv-and-existing-files.md)): a hedge against depending on uv's own lockfile.
 
 Before writing code in an unfamiliar area, look at [references.md](references.md) for projects
@@ -175,9 +176,9 @@ What [MISSION.md](../MISSION.md) defines as done:
 | Idea | What it is | Why |
 |---|---|---|
 | **`bundleup check`** | The pre-ship analyzer as its own command, runnable in CI on any project: "will this survive bundling?" | Useful even to people who bundle with something else; the most defensible part of the tool |
-| **Multi-platform bundles** | One `.pyz` that runs on several OS/CPU/Python combinations, or one per target from a single machine (`--python`, `--platform`) | Build once on a Mac, ship to Linux servers. Round 4's #1 priority: it unlocks most strong-fit use cases ([ADR-0014](adr/0014-output-formats-and-target-presets.md), Proposed) |
+| **Multi-platform bundles** | One `.pyz` that runs on several OS/CPU/Python combinations, or one per target from a single machine (`--python`, `--platform`) | Build once on a Mac, ship to Linux servers. Round 4's #1 priority: it unlocks most strong-fit use cases ([ADR-0014](adr/0014-output-formats-and-target-presets.md), accepted) |
 | **Cache override and runtime hardening** | `BUNDLEUP_CACHE`, cache order (env → user cache → temp), per-build locks, stale-cache cleanup, isolated `sys.path` | Lambda's read-only filesystem, read-only roots, HPC node-local scratch, 1,000 jobs starting at once |
-| **`--format dir`** | A vendored directory built for a host application's Python and platform | Splunk, QGIS, Maya/Houdini, Azure Functions' `.python_packages` all hand-roll `pip install --target --platform` today ([ADR-0014](adr/0014-output-formats-and-target-presets.md), Proposed) |
+| **`--format dir`** | A vendored directory built for a host application's Python and platform | Splunk, QGIS, Maya/Houdini, Azure Functions' `.python_packages` all hand-roll `pip install --target --platform` today ([ADR-0014](adr/0014-output-formats-and-target-presets.md), accepted) |
 | **Target profiles** | Named targets for environments with a fixed, known Python and platform, starting with `claude-api` (CPython 3.11, manylinux x86_64, no network) | Known targets make compiled wheels (pydantic, numpy) shippable; the most agent-specific feature ([ADR-0013](adr/0013-agent-sandboxes-as-headline-use-case.md), Proposed) |
 | **Skill output** | `scripts/<tool>.pyz` plus a ready `SKILL.md` stanza and an honest `compatibility` line | No platform offers skill scripts with dependencies that run offline ([ADR-0013](adr/0013-agent-sandboxes-as-headline-use-case.md), Proposed) |
 | **Size and contents report** | What's in the bundle, what's heavy, why (like webpack-bundle-analyzer / esbuild's metafile) | Native wheels dominate size; people need to see it |
@@ -191,7 +192,7 @@ What [MISSION.md](../MISSION.md) defines as done:
 
 | Destination | What we'd produce | Why it's a real gap |
 |---|---|---|
-| **AWS Lambda** | `--target lambda`: a native Lambda zip or layer (not a `.pyz`: Lambda already unzips, and only `/tmp` is writable), with a size report against the 250 MB limit | Most common serverless request; hand-built packages often ship Mac wheels ([ADR-0014](adr/0014-output-formats-and-target-presets.md), Proposed) |
+| **AWS Lambda** | `--target lambda`: a native Lambda zip or layer (not a `.pyz`: Lambda already unzips, and only `/tmp` is writable), with a size report against the 250 MB limit | Most common serverless request; hand-built packages often ship Mac wheels ([ADR-0014](adr/0014-output-formats-and-target-presets.md), accepted) |
 | **Container images (docs only)** | Document the 3-line Dockerfile that copies `app.pyz` onto `python:3.x-slim` | Round 4 recommends against building images ourselves; Dockerfile + uv already works |
 | **Standalone executables** (high value, deferred) | An opt-in output that pairs the `.pyz` with a portable Python (python-build-standalone), like pex `--scie` or PyApp: one file per OS/CPU that needs **nothing** installed | Serves desktop users without Python, the one big audience a `.pyz` can't reach (round 4). Deferred, not rejected: excluded from the core by [ADR-0002](adr/0002-target-the-runtime-only-tier.md) because of code signing/notarization and size (~tens of MB per platform), so it needs its own ADR first. Build on cross-target builds; consider handing off to pex's scie tooling rather than writing a launcher |
 | **"No Python installed"** | A tiny launcher that downloads a Python on first run, then runs the bundle | The "user has no usable Python" problem ([primer](python-primer.md) §3) |

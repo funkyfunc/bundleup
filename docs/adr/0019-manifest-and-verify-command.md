@@ -1,10 +1,9 @@
 # ADR-0019: Every bundle carries a manifest; `bundleup verify` checks it
 
-- **Status:** Accepted for the command (the user chose it, 2026-10-05); Proposed for the manifest
-  format
+- **Status:** Accepted (2026-10-05)
 - **Date:** 2026-10-05
 - **Deciders:** the user chose a `bundleup verify` command over a hook inside every bundle; the
-  manifest format is an agent's proposal
+  manifest format, proposed by an agent, was accepted the same day
 
 ## Context
 

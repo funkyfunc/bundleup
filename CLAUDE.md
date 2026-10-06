@@ -73,11 +73,11 @@ Do these **as you go**, not only at the end:
   compares each bundle with a `uv sync` install. Every bundle carries `manifest.json`;
   `bundleup verify` checks a bundle and its unpacked copy against it
   ([ADR-0019](docs/adr/0019-manifest-and-verify-command.md)). Still to do from roadmap item 4:
-  real-world test suites (the nightly top-PyPI smoke test exists:
-  [`gauntlet/smoke.py`](gauntlet/smoke.py)).
+  real-world test suites. The nightly top-PyPI smoke test exists: the top 100 pass on all four
+  OSes ([findings](docs/findings/2026-10-05-ci-and-correctness.md)).
 - **CLI follows the style guide** (ADR-0016): `bundleup build [PATH]`, `--json`, `error:`/`hint:`,
   exit codes, a typed library API with lazy exports
-  ([ADR-0018](docs/adr/0018-package-layout-and-lazy-api.md), **Proposed**). Open rules are listed
+  ([ADR-0018](docs/adr/0018-package-layout-and-lazy-api.md)). Open rules are listed
   in the style guide's "Implementation status".
 - Next: see [docs/roadmap.md](docs/roadmap.md) "Next up".
 
@@ -94,7 +94,7 @@ tests/                  pytest: loader/CLI edge cases the gauntlet doesn't reach
 docs/roadmap.md         "Next up" work list, then possible future directions
 docs/python-for-js-reviewers.md  code style rules + review guide for the JS-fluent owner
 docs/references.md      open-source projects to learn from, by area
-docs/cli-style-guide.md CLI and library API rules (ADR-0016, Proposed)
+docs/cli-style-guide.md CLI and library API rules (ADR-0016)
 docs/adr/               decisions (ADRs)
 docs/learnings.md       lessons log
 docs/findings/          experiment write-ups

@@ -1,12 +1,13 @@
 # ADR-0017: Free platform matrix on GitHub Actions, plus nightly corpus testing with AI triage
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-05), with agent triage (point 6) deferred
 - **Date:** 2026-10-04
 - **Deciders:** proposed by an agent from the owner's questions; awaiting the owner (incl. whether
   to make the repo public)
 
-**Owner decision (2026-10-05):** the repository will be made public (the owner flips it), so CI
-runs the full matrix. The rest of this ADR stays Proposed.
+**Owner decisions (2026-10-05):** the repository is public, so CI runs the full matrix. Accepted,
+but build the corpus run and the deduplicated `corpus-failure` issues first; add the agent that
+reproduces, reduces and proposes fixes (point 6) once the issues show what's worth automating.
 
 ## Context
 

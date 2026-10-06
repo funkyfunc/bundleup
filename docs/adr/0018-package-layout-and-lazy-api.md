@@ -1,8 +1,8 @@
 # ADR-0018: Private modules, and a public API that loads lazily
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-05)
 - **Date:** 2026-10-05
-- **Deciders:** an agent, while implementing [ADR-0016](0016-cli-and-api-conventions.md); awaiting
+- **Deciders:** an agent, while implementing [ADR-0016](0016-cli-and-api-conventions.md); accepted by
   the user
 
 ## Context
