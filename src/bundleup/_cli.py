@@ -43,6 +43,14 @@ docs: {DOCS_URL}
 bugs: {ISSUES_URL}"""
 
 
+BUILD_EXAMPLES = f"""\
+examples:
+  bundleup build                    bundle the project here into dist/<name>.pyz
+  bundleup build --python 3.11 --python-platform linux   build for Linux x86_64
+
+docs: {DOCS_URL}"""
+
+
 class _UsageProblem(Exception):
     """argparse found a problem with the command line."""
 
@@ -84,7 +92,7 @@ def parsers() -> dict[str, argparse.ArgumentParser]:
         "build",
         help="bundle a project or script into one .pyz",
         description="Bundle a project (pyproject.toml + uv.lock) or a PEP 723 script.",
-        epilog=EXAMPLES,
+        epilog=BUILD_EXAMPLES,
         formatter_class=_HelpFormatter,
         allow_abbrev=False,
     )
@@ -104,7 +112,7 @@ def parsers() -> dict[str, argparse.ArgumentParser]:
         metavar="VERSION",
         default=os.environ.get("BUNDLEUP_PYTHON"),
         help=_env_help(
-            "a version like 3.12, or a path (default: what uv picks for the project)",
+            "a version (3.12) or a path; default: uv's choice",
             "BUNDLEUP_PYTHON",
         ),
     )
@@ -113,8 +121,17 @@ def parsers() -> dict[str, argparse.ArgumentParser]:
         metavar="NAME",
         default=os.environ.get("BUNDLEUP_ENTRY"),
         help=_env_help(
-            "a [project.scripts] name, module:function or module (default: the only script)",
+            "a script name, module:function or module",
             "BUNDLEUP_ENTRY",
+        ),
+    )
+    build.add_argument(
+        "--python-platform",
+        metavar="PLATFORM",
+        default=os.environ.get("BUNDLEUP_PYTHON_PLATFORM"),
+        help=_env_help(
+            "another OS/CPU in uv's terms, e.g. x86_64-manylinux_2_28",
+            "BUNDLEUP_PYTHON_PLATFORM",
         ),
     )
     lock = build.add_mutually_exclusive_group()
@@ -279,6 +296,7 @@ def _run_build(opts: argparse.Namespace) -> ExitCode:
         python=opts.python,
         entry=opts.entry,
         lock_mode=lock_mode,
+        python_platform=opts.python_platform,
     )
     try:
         result = build(options, progress=on_progress)

@@ -1,7 +1,7 @@
-__all__ = ['BuildOptions', 'BuildResult', 'BundleMismatchError', 'BundleupError', 'EntryPointError', 'ExitCode', 'LockfileOutdatedError', 'NotABundleError', 'ProgressEvent', 'ProjectError', 'PythonMismatchError', 'PythonNotFoundError', 'Target', 'UsageError', 'UvError', 'UvNotFoundError', 'VerifyReport', '__version__', 'build', 'verify']
+__all__ = ['BuildOptions', 'BuildResult', 'BundleMismatchError', 'BundleupError', 'EntryPointError', 'ExitCode', 'LockfileOutdatedError', 'NoCompatibleWheelError', 'NotABundleError', 'ProgressEvent', 'ProjectError', 'PythonMismatchError', 'PythonNotFoundError', 'Target', 'UsageError', 'UvError', 'UvNotFoundError', 'VerifyReport', '__version__', 'build', 'verify']
 build(options: 'BuildOptions', *, progress: 'Callable[[ProgressEvent], None] | None' = None) -> 'BuildResult'
 verify(bundle: 'Path') -> 'VerifyReport'
-BuildOptions: path: Path, output: Path | None, python: str | None, entry: str | None, lock_mode: Literal['locked', 'frozen'] | None
+BuildOptions: path: Path, output: Path | None, python: str | None, entry: str | None, lock_mode: Literal['locked', 'frozen'] | None, python_platform: str | None
 BuildResult: output: Path, size_bytes: int, name: str, version: str | None, packages: int, native: bool, target: Target, project_dir: Path, duration_s: float, timings: dict[str, float]
 ProgressEvent: kind: Literal['step', 'command'], text: str
 VerifyReport: bundle: Path, name: str, files: int, problems: list[str], cache: Path | None, cache_problems: list[str]
@@ -10,6 +10,7 @@ BundleMismatchError: code='bundle-mismatch' exit_code=3
 BundleupError: code='build-failed' exit_code=1
 EntryPointError: code='no-entry-point' exit_code=1
 LockfileOutdatedError: code='lock-outdated' exit_code=1
+NoCompatibleWheelError: code='incompatible-wheel' exit_code=1
 NotABundleError: code='not-a-bundle' exit_code=1
 ProjectError: code='invalid-project' exit_code=1
 PythonMismatchError: code='python-mismatch' exit_code=1

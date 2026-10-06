@@ -79,6 +79,10 @@ Do these **as you go**, not only at the end:
   exit codes, a typed library API with lazy exports
   ([ADR-0018](docs/adr/0018-package-layout-and-lazy-api.md)). Open rules are listed
   in the style guide's "Implementation status".
+- **Cross-target builds** (ADR-0014): `bundleup build --python 3.11 --python-platform linux` on a Mac;
+  wheels checked against the target; CI proves three build→run pairs.
+- **Nightly corpus** (item 6): 20 PyPI CLIs + 2 repos run installed vs bundled; failures become
+  `corpus-failure` issues (agent triage deferred).
 - Next: see [docs/roadmap.md](docs/roadmap.md) "Next up".
 
 ## Layout
@@ -106,6 +110,7 @@ gauntlet/bench.py       sequential speed benchmark (build, first run, warm start
 gauntlet/snapshot.py    describes installed packages; the matches-venv condition compares two snapshots
 gauntlet/smoke.py       nightly breadth test: top PyPI packages bundled and compared with a venv
 gauntlet/corpus*.py, corpus.toml  nightly corpus: real CLIs run installed vs bundled; failures -> issues
+gauntlet/cross.py       cross-target gauntlet: build on one OS for another, run on the target
 .github/workflows/       ci.yml (every push: checks, tests, gauntlet matrix); nightly.yml (smoke
                         test); corpus.yml (corpus run + corpus-failure issues)
 gauntlet/report.py      results JSON -> markdown

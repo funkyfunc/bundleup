@@ -75,3 +75,54 @@ jobs:
           name: gauntlet-${{ matrix.os }}-${{ matrix.python }}
           path: gauntlet/results/ci.json
           if-no-files-found: ignore
+
+  # Cross-target builds (ADR-0014): build on one OS for another, run the bundles on the target.
+  cross-build:
+    name: Cross build (${{ matrix.name }})
+    needs: checks
+    strategy:
+      fail-fast: false
+      matrix:
+        include: &cross
+          - { name: macos-to-linux, build: macos-15, run: ubuntu-24.04, platform: x86_64-manylinux_2_28 }
+          - { name: linux-to-windows, build: ubuntu-24.04, run: windows-2025, platform: x86_64-pc-windows-msvc }
+          - { name: linux-to-macos, build: ubuntu-24.04, run: macos-15, platform: aarch64-apple-darwin }
+    runs-on: ${{ matrix.build }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0 # publishes exact versions only, no floating v10 tag
+      - run: uv sync --locked --python 3.12
+      - run: uv python install 3.11
+      - run: uv run gauntlet/cross.py build --python 3.11 --python-platform ${{ matrix.platform }} --dir cross
+      - uses: actions/upload-artifact@v7
+        with:
+          name: cross-${{ matrix.name }}
+          path: cross
+
+  cross-run:
+    name: Cross run (${{ matrix.name }})
+    needs: cross-build
+    strategy:
+      fail-fast: false
+      matrix:
+        include: *cross
+    runs-on: ${{ matrix.run }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+      - run: uv sync --locked --python 3.12
+      - run: uv python install 3.11
+      - uses: actions/download-artifact@v8
+        with:
+          name: cross-${{ matrix.name }}
+          path: cross
+      - name: Run the bundles built elsewhere
+        run: uv run gauntlet/cross.py run --python 3.11 --dir cross --check --out cross
+      - name: Keep the results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: cross-results-${{ matrix.name }}
+          path: gauntlet/results/cross.json
+          if-no-files-found: ignore

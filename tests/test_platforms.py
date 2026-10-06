@@ -1,0 +1,68 @@
+"""Target platforms for cross builds (ADR-0014): uv's names, CPU naming per OS, and wheel tags."""
+
+from __future__ import annotations
+
+import pytest
+
+from bundleup import UsageError
+from bundleup._platforms import parse
+
+
+@pytest.mark.parametrize(
+    ("name", "sys_platform", "machine", "musl"),
+    [
+        ("linux", "linux", "x86_64", False),
+        ("x86_64-manylinux_2_28", "linux", "x86_64", False),
+        ("aarch64-unknown-linux-gnu", "linux", "aarch64", False),
+        ("x86_64-unknown-linux-musl", "linux", "x86_64", True),
+        ("macos", "darwin", "arm64", False),  # macOS calls aarch64 "arm64"
+        ("x86_64-apple-darwin", "darwin", "x86_64", False),
+        ("windows", "win32", "AMD64", False),  # Windows calls x86_64 "AMD64"
+        ("aarch64-pc-windows-msvc", "win32", "ARM64", False),
+    ],
+)
+def test_names(name: str, sys_platform: str, machine: str, musl: bool) -> None:
+    platform = parse(name)
+    assert (platform.sys_platform, platform.machine, platform.musl) == (sys_platform, machine, musl)
+    assert platform.name == name  # passed to uv exactly as given
+
+
+@pytest.mark.parametrize(
+    "name", ["wasm32-pyodide2024", "aarch64-linux-android", "sparc-sun-solaris"]
+)
+def test_unsupported_names_are_usage_errors(name: str) -> None:
+    with pytest.raises(UsageError) as e:
+        parse(name)
+    assert e.value.exit_code == 2 and "x86_64-manylinux_2_28" in (e.value.hint or "")
+
+
+@pytest.mark.parametrize(
+    ("name", "tag", "fits"),
+    [
+        ("linux", "py3-none-any", True),
+        ("linux", "cp311-cp311-manylinux_2_17_x86_64", True),
+        ("linux", "cp311-cp311-manylinux1_x86_64.manylinux2014_x86_64", True),
+        ("linux", "cp311-cp311-musllinux_1_2_x86_64", False),
+        ("x86_64-unknown-linux-musl", "cp311-cp311-musllinux_1_2_x86_64", True),
+        ("linux", "cp311-cp311-manylinux_2_17_aarch64", False),
+        ("linux", "cp311-cp311-macosx_11_0_arm64", False),  # built on the host by mistake
+        ("macos", "cp311-cp311-macosx_11_0_arm64", True),
+        ("macos", "cp311-cp311-macosx_10_9_universal2", True),
+        ("macos", "cp311-cp311-macosx_10_9_x86_64", False),
+        ("windows", "cp311-cp311-win_amd64", True),
+        ("windows", "cp311-cp311-win32", False),
+        ("aarch64-pc-windows-msvc", "cp311-cp311-win_arm64", True),
+    ],
+)
+def test_wheel_tags(name: str, tag: str, fits: bool) -> None:
+    assert parse(name).accepts(tag) is fits
+
+
+def test_markers() -> None:
+    markers = parse("aarch64-apple-darwin").markers(python_full_version="3.11.9")
+    assert markers["sys_platform"] == "darwin"
+    assert markers["platform_system"] == "Darwin"
+    assert markers["platform_machine"] == "arm64"
+    assert markers["python_version"] == "3.11"
+    assert markers["os_name"] == "posix"
+    assert parse("windows").markers(python_full_version="3.12.1")["os_name"] == "nt"

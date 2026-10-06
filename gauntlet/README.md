@@ -63,6 +63,18 @@ byte-identical, nothing unexplained). See [testing-strategy.md](../docs/testing-
 `--conditions --check` on every push: Linux x64 (3.9, 3.11, 3.12), Linux arm64 and Windows x64
 (3.11, 3.12), macOS arm64 (Apple's 3.9, 3.12). Each job uploads its results JSON as an artifact.
 
+## Cross-target builds
+
+```bash
+uv run gauntlet/cross.py build --python 3.11 --python-platform x86_64-manylinux_2_28 --dir out
+uv run gauntlet/cross.py run --python 3.11 --dir out --check    # on the target platform
+```
+
+[cross.py](cross.py) builds every project on one machine for another platform, then runs the
+bundles on that platform with the hostile conditions and `matches-venv` (against a normal install
+made on the target). CI runs three pairs on every push: macOS → Linux x86_64, Linux → Windows,
+Linux → macOS arm64.
+
 ## Breadth smoke test (nightly)
 
 ```bash

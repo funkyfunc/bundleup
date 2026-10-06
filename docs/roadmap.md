@@ -105,7 +105,8 @@ merged; ask if unsure.
    - **Budget and fair use:** batch size and matrix width are configuration; cap agent triage per
      night; keep batches modest (tens of projects a night), since GitHub's terms forbid
      "disproportionate burden".
-7. **Cross-target builds** (`--python`, `--python-platform` in uv's vocabulary;
+7. ~~**Cross-target builds**~~ **Done 2026-10-05** (`--python-platform`; CI builds on macOS → runs on
+   Linux, Linux → Windows, Linux → macOS; [`gauntlet/cross.py`](../gauntlet/cross.py)). Was: (`--python`, `--python-platform` in uv's vocabulary;
    [ADR-0014](adr/0014-output-formats-and-target-presets.md), accepted): build a Linux bundle from
    a Mac. Gauntlet coverage for at least manylinux x86_64 + CPython 3.11.
 8. **Runtime hardening:** `BUNDLEUP_CACHE` override, cache order, per-build locks, stale-cache

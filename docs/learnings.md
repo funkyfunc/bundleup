@@ -6,6 +6,17 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-05** · cross-target · `uv pip install --target --python-platform X` installs another
+  platform's wheels from any machine, and builds pure-Python sdists fine. A compiled sdist is
+  built for *this* machine: uv itself rejects the result ("not compatible with the target"), and
+  bundleup also checks every wheel tag against the target. Bytecode only depends on the Python
+  version, so a local interpreter of the target version compiles it. Evidence:
+  [`_platforms.py`](../src/bundleup/_platforms.py), `tests/test_platforms.py`.
+- **2026-10-05** · testing · A corpus oracle that compares raw output flags programs that print
+  their install path (`--version` "from …/site-packages"), list things in set order (twine), or
+  differ only in traceback frames (the loader's vs a console-script launcher's). The first corpus
+  run filed six such false positives (#1-#6); normalise those, and pin `PYTHONHASHSEED`. Evidence:
+  [gauntlet/corpus.py](../gauntlet/corpus.py).
 - **2026-10-05** · testing · The 100 most-downloaded PyPI packages (incl. pandas, scipy, pyarrow,
   grpcio, cryptography) bundle and match a normal install on Linux x64/arm64, macOS and Windows with
   no failures. Breadth beyond that and real program runs are the next risk. Evidence:

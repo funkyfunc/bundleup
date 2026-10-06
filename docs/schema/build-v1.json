@@ -31,7 +31,8 @@
                 "python_full_version": { "type": "string" },
                 "implementation": { "type": "string" },
                 "platform": { "type": "string", "description": "sys.platform, e.g. darwin, linux, win32" },
-                "machine": { "type": ["string", "null"], "description": "null: runs on any CPU" }
+                "machine": { "type": ["string", "null"], "description": "null: runs on any CPU" },
+                "python_platform": { "type": ["string", "null"], "description": "uv's platform name when built for another platform; null when built for this machine (added within version 1)" }
               }
             },
             "duration_s": { "type": "number", "minimum": 0 },

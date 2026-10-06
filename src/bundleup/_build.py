@@ -29,13 +29,14 @@ from typing import Any, Callable, Literal
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.utils import canonicalize_name
 
-from . import __version__, _verify
+from . import __version__, _platforms, _verify
 from ._errors import (
     ISSUES_URL,
     BundleMismatchError,
     BundleupError,
     EntryPointError,
     LockfileOutdatedError,
+    NoCompatibleWheelError,
     ProjectError,
     PythonMismatchError,
     PythonNotFoundError,
@@ -67,6 +68,8 @@ class BuildOptions:
     python: str | None = None  # a version ("3.12") or an interpreter path; default: uv's choice
     entry: str | None = None  # a [project.scripts] name, "module:function" or "module"
     lock_mode: Literal["locked", "frozen"] | None = None  # as uv's --locked / --frozen
+    # Another OS/CPU, in uv's terms (e.g. "x86_64-manylinux_2_28"); default: this machine.
+    python_platform: str | None = None
 
 
 @dataclass(frozen=True)
@@ -86,7 +89,7 @@ def _ignore(event: ProgressEvent) -> None:
 
 @dataclass(frozen=True)
 class Target:
-    """The interpreter a bundle is built for, as reported by that interpreter."""
+    """What a bundle is built for: this machine's interpreter, or another platform (ADR-0014)."""
 
     executable: str
     version: tuple[int, int]
@@ -96,6 +99,7 @@ class Target:
     abiflags: str | None
     implementation: str
     markers: dict[str, str]  # the PEP 508 environment uv.lock's markers are evaluated against
+    python_platform: _platforms.Platform | None = None  # set when building for another platform
 
     def describe(self, native: bool) -> str:
         where = PLATFORM_NAMES.get(self.platform, self.platform)
@@ -110,6 +114,7 @@ class Target:
             "implementation": self.implementation,
             "platform": self.platform,
             "machine": self.machine if native else None,  # None: runs on any CPU
+            "python_platform": self.python_platform.name if self.python_platform else None,
         }
 
 
@@ -250,8 +255,17 @@ def script_metadata(text: str) -> dict[str, Any]:  # Any: TOML values have no fi
     return tomllib.loads(content)
 
 
-def find_python(uv: str, source: Source, *, request: str | None, progress: Progress) -> Target:
-    """The interpreter to build for: --python if given, else what uv would use for the project."""
+def find_python(
+    uv: str,
+    source: Source,
+    *,
+    request: str | None,
+    python_platform: str | None,
+    progress: Progress,
+) -> Target:
+    """The target: --python if given, else what uv would use for the project; on another platform
+    if `python_platform` is set (then this interpreter only compiles bytecode for the version)."""
+    platform = _platforms.parse(python_platform) if python_platform else None
     if request and Path(request).is_file():
         exe = request  # a path: no need to ask uv (which would run the interpreter to inspect it)
     else:
@@ -267,6 +281,24 @@ def find_python(uv: str, source: Source, *, request: str | None, progress: Progr
     probe = [exe, "-I", "-S", "-c", PROBE]
     info = json.loads(run(probe, what=f"inspecting {exe}", progress=progress, error=ProjectError))
     major, minor = info["version"]
+    if platform is not None:
+        if info["markers"]["implementation_name"] != "cpython":
+            raise UsageError(
+                "building for another platform needs a CPython interpreter of the target version",
+                hint=f"pass --python {major}.{minor}",
+            )
+        full = info["markers"]["python_full_version"]
+        return Target(
+            executable=info["executable"] or exe,
+            version=(major, minor),
+            full_version=full,
+            platform=platform.sys_platform,
+            machine=platform.machine,
+            abiflags=None if platform.sys_platform == "win32" else "",  # no sys.abiflags on Windows
+            implementation="cpython",
+            markers=platform.markers(python_full_version=full),
+            python_platform=platform,
+        )
     return Target(
         # Use the real interpreter from here on: uv re-inspects shims like macOS's
         # /usr/bin/python3 on every call, but caches what it learns about a real interpreter.
@@ -391,24 +423,39 @@ def install(
     """Install the exported set into `site`, the directory that becomes the payload."""
     # The export is the complete, pinned set, so --no-deps installs exactly the lock. Relative
     # paths in it (the project itself, workspace members) resolve against the working directory.
-    run(
-        [
-            uv,
-            "pip",
-            "install",
-            "--quiet",
-            "--no-deps",
-            "--target",
-            str(site),
-            "--python",
-            target.executable,
-            "-r",
-            str(reqs),
-        ],
-        cwd=source.workdir,
-        what="uv pip install",
-        progress=progress,
-    )
+    try:
+        run(
+            [
+                uv,
+                "pip",
+                "install",
+                "--quiet",
+                "--no-deps",
+                "--target",
+                str(site),
+                "--python",
+                target.executable,
+                *(
+                    ["--python-platform", target.python_platform.name]
+                    if target.python_platform
+                    else []
+                ),
+                "-r",
+                str(reqs),
+            ],
+            cwd=source.workdir,
+            what="uv pip install",
+            progress=progress,
+        )
+    except UvError as e:
+        if target.python_platform and "is not compatible with the target" in (e.detail or ""):
+            raise NoCompatibleWheelError(
+                f"a package has no build for {target.python_platform.name}",
+                detail=e.detail,
+                hint="it only publishes source with compiled code, which uv can only build for "
+                "this machine; build on the target platform, or pin a version with wheels for it",
+            ) from None
+        raise
     for name in SKIP_TOP:
         p = site / name
         if p.is_dir():
@@ -473,6 +520,30 @@ def console_scripts(site: Path, name: str) -> dict[str, str]:
                 scripts[key.strip()] = value.strip()
         return scripts
     return {}
+
+
+def check_wheel_platforms(site: Path, target: Target) -> None:
+    """For another platform, every installed wheel must be built for it. uv builds source-only
+    packages on this machine, so a compiled one would otherwise ship this machine's binaries."""
+    platform = target.python_platform
+    if platform is None:
+        return
+    wrong = []
+    for wheel in sorted(site.glob("*.dist-info/WHEEL")):
+        tags = [
+            line.split(":", 1)[1].strip()
+            for line in wheel.read_text(encoding="utf-8").splitlines()
+            if line.startswith("Tag:")
+        ]
+        if tags and not any(platform.accepts(tag) for tag in tags):
+            wrong.append(f"{wheel.parent.name.removesuffix('.dist-info')}: {', '.join(tags)}")
+    if wrong:
+        raise NoCompatibleWheelError(
+            f"{len(wrong)} package(s) have no build for {platform.name}",
+            detail="\n".join(wrong),
+            hint="these were probably built from source on this machine; build on the target "
+            "platform, or pin versions that publish wheels for it",
+        )
 
 
 def inspect_site(site: Path) -> tuple[int, bool]:
@@ -696,7 +767,13 @@ def build(
     steps.start("python")
     uv = find_uv()
     source = load_source(options.path)
-    target = find_python(uv, source, request=options.python, progress=report)
+    target = find_python(
+        uv,
+        source,
+        request=options.python,
+        python_platform=options.python_platform,
+        progress=report,
+    )
     check_requires_python(source, target)
     with tempfile.TemporaryDirectory(prefix="bundleup-") as tmp:
         stage = Path(tmp)
@@ -705,6 +782,7 @@ def build(
         reqs, pylock = export(uv, source, lock_mode=options.lock_mode, stage=stage, progress=report)
         steps.start("install")
         install(uv, source, target=target, reqs=reqs, site=site, progress=report)
+        check_wheel_platforms(site, target)
         entry_spec = resolve_entry(source, site, entry=options.entry)
         packages, native = inspect_site(site)
         version = project_version(site, source)

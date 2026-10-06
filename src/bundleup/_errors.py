@@ -84,6 +84,12 @@ class BundleMismatchError(BundleupError):
     exit_code = ExitCode.INTERNAL_ERROR
 
 
+class NoCompatibleWheelError(BundleupError):
+    """A package has no build for the target platform (e.g. compiled code built for the host)."""
+
+    code = "incompatible-wheel"
+
+
 class NotABundleError(BundleupError):
     """The file isn't a bundleup bundle, or was made before bundles carried a manifest."""
 

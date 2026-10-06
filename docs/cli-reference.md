@@ -32,8 +32,8 @@ bugs: https://github.com/funkyfunc/bundleup/issues
 ## `bundleup build`
 
 ```
-usage: bundleup build [-h] [-o FILE] [--python VERSION] [--entry NAME] [--locked | --frozen]
-                      [--json] [-q] [-v] [--color WHEN]
+usage: bundleup build [-h] [-o FILE] [--python VERSION] [--entry NAME] [--python-platform PLATFORM]
+                      [--locked | --frozen] [--json] [-q] [-v] [--color WHEN]
                       [path]
 
 Bundle a project (pyproject.toml + uv.lock) or a PEP 723 script.
@@ -45,10 +45,11 @@ options:
   -h, --help            show this help message and exit
   -o FILE, --output FILE
                         output file (default: dist/<name>.pyz) [env: BUNDLEUP_OUTPUT]
-  --python VERSION      a version like 3.12, or a path (default: what uv picks for the project)
-                        [env: BUNDLEUP_PYTHON]
-  --entry NAME          a [project.scripts] name, module:function or module (default: the only
-                        script) [env: BUNDLEUP_ENTRY]
+  --python VERSION      a version (3.12) or a path; default: uv's choice [env: BUNDLEUP_PYTHON]
+  --entry NAME          a script name, module:function or module [env: BUNDLEUP_ENTRY]
+  --python-platform PLATFORM
+                        another OS/CPU in uv's terms, e.g. x86_64-manylinux_2_28 [env:
+                        BUNDLEUP_PYTHON_PLATFORM]
   --locked              fail if uv.lock is out of date (as in uv; the default when CI is set)
   --frozen              use uv.lock as is, without checking it (as in uv)
   --json                print one JSON document on stdout
@@ -58,12 +59,9 @@ options:
 
 examples:
   bundleup build                    bundle the project here into dist/<name>.pyz
-  bundleup build path/to/script.py  bundle a PEP 723 script and its dependencies
-  bundleup build --python 3.9       build for Python 3.9 (a bundle runs on one version)
-  bundleup verify dist/app.pyz      check a bundle (and its unpacked copy) against its manifest
+  bundleup build --python 3.11 --python-platform linux   build for Linux x86_64
 
 docs: https://github.com/funkyfunc/bundleup
-bugs: https://github.com/funkyfunc/bundleup/issues
 ```
 
 ## `bundleup verify`
