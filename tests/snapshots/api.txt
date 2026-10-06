@@ -1,10 +1,14 @@
-__all__ = ['BuildOptions', 'BuildResult', 'BundleMismatchError', 'BundleupError', 'EntryPointError', 'ExitCode', 'LockfileOutdatedError', 'NoCompatibleWheelError', 'NotABundleError', 'ProgressEvent', 'ProjectError', 'PythonMismatchError', 'PythonNotFoundError', 'Target', 'UsageError', 'UvError', 'UvNotFoundError', 'VerifyReport', '__version__', 'build', 'verify']
+__all__ = ['BuildOptions', 'BuildResult', 'BundleMismatchError', 'BundleupError', 'CachedBundle', 'CleanReport', 'EntryPointError', 'ExitCode', 'LockfileOutdatedError', 'NoCompatibleWheelError', 'NotABundleError', 'ProgressEvent', 'ProjectError', 'PythonMismatchError', 'PythonNotFoundError', 'Target', 'UsageError', 'UvError', 'UvNotFoundError', 'VerifyReport', '__version__', 'build', 'clean_cache', 'list_cache', 'verify']
 build(options: 'BuildOptions', *, progress: 'Callable[[ProgressEvent], None] | None' = None) -> 'BuildResult'
 verify(bundle: 'Path') -> 'VerifyReport'
+list_cache() -> 'list[CachedBundle]'
+clean_cache(*, older_than_days: 'float' = 30, build: 'bool' = False, dry_run: 'bool' = False) -> 'CleanReport'
 BuildOptions: path: Path, output: Path | None, python: str | None, entry: str | None, lock_mode: Literal['locked', 'frozen'] | None, python_platform: str | None
 BuildResult: output: Path, size_bytes: int, name: str, version: str | None, packages: int, native: bool, target: Target, project_dir: Path, duration_s: float, timings: dict[str, float]
 ProgressEvent: kind: Literal['step', 'command'], text: str
 VerifyReport: bundle: Path, name: str, files: int, problems: list[str], cache: Path | None, cache_problems: list[str]
+CachedBundle: path: Path, name: str, size_bytes: int, last_used: float
+CleanReport: removed: list[Path], freed_bytes: int, dry_run: bool
 ExitCode: OK=0, BUILD_FAILED=1, USAGE_ERROR=2, INTERNAL_ERROR=3, INTERRUPTED=130
 BundleMismatchError: code='bundle-mismatch' exit_code=3
 BundleupError: code='build-failed' exit_code=1

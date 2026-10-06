@@ -167,7 +167,8 @@ fits a build tool. Everything here applies to TTY output only; rules 10–15 sti
 
 ## Implementation status (2026-10-05)
 
-Commands: `build` and `verify` ([ADR-0019](adr/0019-manifest-and-verify-command.md)). Implemented in
+Commands: `build`, `verify` ([ADR-0019](adr/0019-manifest-and-verify-command.md)) and
+`cache list|clean` ([ADR-0022](adr/0022-cache-command.md)). Implemented in
 `src/bundleup/_cli.py`, `_errors.py`, `_term.py` and the public API
 ([ADR-0018](adr/0018-package-layout-and-lazy-api.md)), with contract tests in `tests/test_cli.py`
 and the generated [CLI reference](cli-reference.md):

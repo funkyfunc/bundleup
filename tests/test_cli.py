@@ -207,12 +207,17 @@ def api_description() -> str:
     lines = [f"__all__ = {sorted(bundleup.__all__)}"]
     lines.append(f"build{inspect.signature(bundleup.build)}")
     lines.append(f"verify{inspect.signature(bundleup.verify)}")
-    for cls in (
+    lines.append(f"list_cache{inspect.signature(bundleup.list_cache)}")
+    lines.append(f"clean_cache{inspect.signature(bundleup.clean_cache)}")
+    public_types = (
         bundleup.BuildOptions,
         bundleup.BuildResult,
         bundleup.ProgressEvent,
         bundleup.VerifyReport,
-    ):
+        bundleup.CachedBundle,
+        bundleup.CleanReport,
+    )
+    for cls in public_types:
         lines.append(f"{cls.__name__}: " + ", ".join(f"{f.name}: {f.type}" for f in fields(cls)))
     lines.append("ExitCode: " + ", ".join(f"{c.name}={c.value}" for c in bundleup.ExitCode))
     for name in sorted(bundleup.__all__):

@@ -109,9 +109,9 @@ merged; ask if unsure.
    Linux, Linux → Windows, Linux → macOS; [`gauntlet/cross.py`](../gauntlet/cross.py)). Was: (`--python`, `--python-platform` in uv's vocabulary;
    [ADR-0014](adr/0014-output-formats-and-target-presets.md), accepted): build a Linux bundle from
    a Mac. Gauntlet coverage for at least manylinux x86_64 + CPython 3.11.
-8. **Runtime hardening:** `BUNDLEUP_CACHE` override and cache order (done in milestone 1); per-build
-   unpack lock (**done 2026-10-05**: 16 simultaneous first runs 3.2 s → 0.55 s); stale-cache cleanup
-   (waiting) and isolated `sys.path` (**done 2026-10-05**, [ADR-0021](adr/0021-isolate-from-machine-packages.md)).
+8. ~~**Runtime hardening**~~ **Done 2026-10-05:** `BUNDLEUP_CACHE` override and cache order (milestone 1);
+   per-build unpack lock (16 simultaneous first runs 3.2 s → 0.55 s); `bundleup cache list|clean`
+   ([ADR-0022](adr/0022-cache-command.md)); isolated `sys.path` ([ADR-0021](adr/0021-isolate-from-machine-packages.md)).
 9. ~~**Faster large builds**~~ **Done 2026-10-05** ([findings](findings/2026-10-05-faster-builds.md),
    [ADR-0020](adr/0020-parallel-zip-and-bytecode-cache.md)). Was: threaded compression, per-wheel `.pyc` cache
    ([findings](findings/2026-10-04-large-project-and-rust.md)).

@@ -14,6 +14,7 @@ positional arguments:
   <command>
     build        bundle a project or script into one .pyz
     verify       check a bundle against its manifest
+    cache        list or clean up unpacked bundles
 
 options:
   -h, --help     show this help message and exit
@@ -80,4 +81,52 @@ options:
   -q, --quiet    -q: warnings and errors only; -qq: errors
   -v, --verbose  -v: show the traceback if bundleup crashes
   --color WHEN   auto, always or never (default: auto; also NO_COLOR, FORCE_COLOR)
+```
+
+## `bundleup cache`
+
+```
+usage: bundleup cache [-h] <command> ...
+
+Bundles unpack once into a cache on the machine that runs them. List those copies, or remove the ones not used lately.
+
+positional arguments:
+  <command>
+    list      show unpacked bundles, their size and when each was last used
+    clean     remove unpacked bundles not used lately
+
+options:
+  -h, --help  show this help message and exit
+```
+
+## `bundleup cache list`
+
+```
+usage: bundleup cache list [-h] [--json] [-q] [-v] [--color WHEN]
+
+options:
+  -h, --help     show this help message and exit
+  --json         print one JSON document on stdout
+  -q, --quiet    -q: warnings and errors only; -qq: errors
+  -v, --verbose  -v: show the traceback if bundleup crashes
+  --color WHEN   auto, always or never (default: auto; also NO_COLOR, FORCE_COLOR)
+```
+
+## `bundleup cache clean`
+
+```
+usage: bundleup cache clean [-h] [--older-than DAYS] [--build] [-n] [--json] [-q] [-v]
+                            [--color WHEN]
+
+Remove unpacked bundles not used for --older-than days, plus leftovers of interrupted unpacks. A bundle that's removed unpacks again on its next run.
+
+options:
+  -h, --help         show this help message and exit
+  --older-than DAYS  remove copies not used for this many days (default: 30; 0 removes all)
+  --build            also clear the build cache (compiled bytecode)
+  -n, --dry-run      show what would be removed
+  --json             print one JSON document on stdout
+  -q, --quiet        -q: warnings and errors only; -qq: errors
+  -v, --verbose      -v: list each path removed
+  --color WHEN       auto, always or never (default: auto; also NO_COLOR, FORCE_COLOR)
 ```

@@ -83,7 +83,10 @@ Do these **as you go**, not only at the end:
   wheels checked against the target; CI proves three build→run pairs.
 - **Nightly corpus** (item 6): 20 PyPI CLIs + 2 repos run installed vs bundled; failures become
   `corpus-failure` issues (agent triage deferred).
-- Next: see [docs/roadmap.md](docs/roadmap.md) "Next up".
+- **Runtime hardening** (item 8): unpack lock for simultaneous first runs; bundles hide the
+  machine's own packages unless `BUNDLEUP_INHERIT_PATH=1` ([ADR-0021](docs/adr/0021-isolate-from-machine-packages.md));
+  `bundleup cache list|clean` ([ADR-0022](docs/adr/0022-cache-command.md)).
+- Next: see [docs/roadmap.md](docs/roadmap.md) "Next up" (item 10, `bundleup check`).
 
 ## Layout
 
@@ -92,9 +95,9 @@ MISSION.md              goal and scope
 pyproject.toml, src/bundleup/  the package (ADR-0018): __init__.py (public API), _cli.py, _build.py,
                         _verify.py (lock and RECORD checks), _errors.py, _term.py, _loader.py
                         (the bundle's __main__), _platforms.py (cross targets), _zipwriter.py
-                        (parallel zip), _bytecode.py (bytecode cache)
+                        (parallel zip), _bytecode.py (bytecode cache), _cache.py (cache list/clean)
 tests/snapshots/        CLI output and API snapshots; docs/cli-reference.md is generated too
-docs/schema/            JSON Schema of `bundleup build --json`
+docs/schema/            JSON Schemas of each command's `--json` (build, verify, cache)
 tests/                  pytest: loader/CLI edge cases the gauntlet doesn't reach
 docs/roadmap.md         "Next up" work list, then possible future directions
 docs/python-for-js-reviewers.md  code style rules + review guide for the JS-fluent owner

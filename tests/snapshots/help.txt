@@ -6,6 +6,7 @@ positional arguments:
   <command>
     build        bundle a project or script into one .pyz
     verify       check a bundle against its manifest
+    cache        list or clean up unpacked bundles
 
 options:
   -h, --help     show this help message and exit

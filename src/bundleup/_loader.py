@@ -121,9 +121,30 @@ def _private(root: str) -> bool:
 def _find() -> "str | None":
     for root, shared in _roots(_ARCHIVE):
         path = os.path.join(root, DIRNAME)
-        if os.path.isdir(path) and (not shared or _private(root)):
+        try:
+            found = os.stat(path)
+        except OSError:
+            continue
+        is_dir = found.st_mode & 0o170000 == 0o040000
+        if is_dir and (not shared or _private(root)):
+            _mark_used(path, found.st_mtime)
             return path
     return None
+
+
+USED_EVERY = 86400.0  # seconds: how often a running bundle refreshes its "last used" time
+
+
+def _mark_used(path: str, mtime: float) -> None:
+    """Record that this unpacked copy is in use, for `bundleup cache clean` (ADR-0022): bump the
+    directory's timestamp, at most once a day, so warm starts almost never write anything."""
+    import time
+
+    if time.time() - mtime > USED_EVERY:
+        try:  # noqa: SIM105 (contextlib.suppress would add an import to the loader)
+            os.utime(path)
+        except OSError:
+            pass  # a read-only cache: it just won't look recently used
 
 
 class _Window(object):

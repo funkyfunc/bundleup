@@ -18,6 +18,8 @@ bundleup build path/to/script.py  # a PEP 723 script with inline dependencies
 bundleup build --python 3.9     # build for another Python (a bundle runs on one Python version)
 bundleup build --python 3.11 --python-platform linux   # build on a Mac for Linux x86_64
 bundleup build --json           # the result as JSON on stdout, for scripts and agents
+bundleup verify dist/app.pyz    # check a bundle (and its unpacked copy) against its manifest
+bundleup cache clean            # remove unpacked bundles not used for 30 days
 python dist/<name>.pyz          # run it: no install, no network
 ```
 

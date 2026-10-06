@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from ._verify import VerifyReport
 
 SCHEMA_VERSION = 1  # of the --json document; additive changes only within a version
-COMMANDS = ["build", "verify"]
+COMMANDS = ["build", "verify", "cache"]
 DOCS_URL = "https://github.com/funkyfunc/bundleup"
 
 DESCRIPTION = (
@@ -159,7 +159,52 @@ def parsers() -> dict[str, argparse.ArgumentParser]:
     )
     verify.add_argument("bundle", type=Path, help="the .pyz to check")
     _add_output_options(verify, verbose="-v: show the traceback if bundleup crashes")
-    return {"bundleup": top, "build": build, "verify": verify}
+    cache = commands.add_parser(
+        "cache",
+        help="list or clean up unpacked bundles",
+        description="Bundles unpack once into a cache on the machine that runs them. "
+        "List those copies, or remove the ones not used lately.",
+        formatter_class=_HelpFormatter,
+        allow_abbrev=False,
+    )
+    cache_commands = cache.add_subparsers(
+        dest="cache_command", metavar="<command>", parser_class=_Parser, required=True
+    )
+    listing = cache_commands.add_parser(
+        "list",
+        help="show unpacked bundles, their size and when each was last used",
+        formatter_class=_HelpFormatter,
+        allow_abbrev=False,
+    )
+    _add_output_options(listing, verbose="-v: show the traceback if bundleup crashes")
+    clean = cache_commands.add_parser(
+        "clean",
+        help="remove unpacked bundles not used lately",
+        description="Remove unpacked bundles not used for --older-than days, plus leftovers of "
+        "interrupted unpacks. A bundle that's removed unpacks again on its next run.",
+        formatter_class=_HelpFormatter,
+        allow_abbrev=False,
+    )
+    clean.add_argument(
+        "--older-than",
+        type=float,
+        default=30,
+        metavar="DAYS",
+        help="remove copies not used for this many days (default: 30; 0 removes all)",
+    )
+    clean.add_argument(
+        "--build", action="store_true", help="also clear the build cache (compiled bytecode)"
+    )
+    clean.add_argument("-n", "--dry-run", action="store_true", help="show what would be removed")
+    _add_output_options(clean, verbose="-v: list each path removed")
+    return {
+        "bundleup": top,
+        "build": build,
+        "verify": verify,
+        "cache": cache,
+        "cache list": listing,
+        "cache clean": clean,
+    }
 
 
 def _add_output_options(command: argparse.ArgumentParser, *, verbose: str) -> None:
@@ -380,6 +425,49 @@ def _run_verify(opts: argparse.Namespace) -> ExitCode:
     return code
 
 
+def _ago(seconds: float) -> str:
+    days = seconds / 86400
+    if days >= 1:
+        return f"{days:.0f} day{'s' if round(days) != 1 else ''} ago"
+    hours = seconds / 3600
+    return f"{hours:.0f} hour{'s' if round(hours) != 1 else ''} ago" if hours >= 1 else "just now"
+
+
+def _run_cache(opts: argparse.Namespace) -> ExitCode:
+    import time
+
+    from ._cache import clean_cache, list_cache  # deferred: --help and --version stay instant
+
+    err = sys.stderr
+    style = Style(err, opts.color)
+    command = f"cache {opts.cache_command}"
+    if opts.cache_command == "list":
+        bundles = list_cache()
+        if opts.json:
+            result: dict[str, object] = {"bundles": [b.to_json_dict() for b in bundles]}
+            _emit_json(command, ExitCode.OK, result, [])
+            return ExitCode.OK
+        now = time.time()
+        for b in bundles:
+            when = style.dim(f"last used {_ago(now - b.last_used)}")
+            print(f"{style.bold(b.name)}  {_size(b.size_bytes)}  {when}  {b.path}", file=err)
+        total = sum(b.size_bytes for b in bundles)
+        count = f"{len(bundles)} unpacked bundle{'s' if len(bundles) != 1 else ''}"
+        print(style.dim(f"{count}, {_size(total)}"), file=err)
+        return ExitCode.OK
+    report = clean_cache(older_than_days=opts.older_than, build=opts.build, dry_run=opts.dry_run)
+    if opts.json:
+        _emit_json(command, ExitCode.OK, report.to_json_dict(), [])
+    elif opts.quiet == 0:
+        verb = "Would remove" if report.dry_run else "Removed"
+        items = f"{len(report.removed)} item{'s' if len(report.removed) != 1 else ''}"
+        print(f"{style.bold(verb)} {items} ({_size(report.freed_bytes)})", file=err)
+        if opts.verbose >= 1:
+            for path in report.removed:
+                print(style.dim(f"  {path}"), file=err)
+    return ExitCode.OK
+
+
 def _first_word(argv: list[str]) -> str:
     words = [a for a in argv if not a.startswith("-")]
     return words[0] if words else ""
@@ -431,7 +519,11 @@ def main(argv: list[str] | None = None) -> int:
     except _UsageProblem as e:
         return _usage_error(str(e), args)
     try:
-        return _run_verify(opts) if opts.command == "verify" else _run_build(opts)
+        if opts.command == "verify":
+            return _run_verify(opts)
+        if opts.command == "cache":
+            return _run_cache(opts)
+        return _run_build(opts)
     except KeyboardInterrupt:
         print("interrupted", file=sys.stderr)
         return ExitCode.INTERRUPTED
