@@ -522,16 +522,14 @@ def hostile(
         )
     record("concurrent-first-run", next((r for r in runs if not passed(r)), runs[0]))
 
-    # A broken copy of every top-level package in the user's site-packages (like an old
-    # `pip install --user`), with the machine's packages visible: the bundle's must still win.
+    # A broken copy of every top-level package in the user's site-packages, like an old
+    # `pip install --user`: the bundle must not see it (ADR-0021). Not tested with
+    # BUNDLEUP_INHERIT_PATH=1: there, a stale *regular* package beats a bundle's namespace
+    # package (PEP 420), whatever the order (gauntlet 08 shows it).
     if tool == "bundleup":
         home, cwd = fresh_dirs(stage, "usersite")
         plant_shadows(py, bundle, home)
-        inherit = {"BUNDLEUP_INHERIT_PATH": "1"}
-        record(
-            "user-site-conflict",
-            run_bundle(py, bundle, args=args, home=home, cwd=cwd, extra_env=inherit),
-        )
+        record("user-site-conflict", run_bundle(py, bundle, args=args, home=home, cwd=cwd))
 
     if WINDOWS:  # Windows ignores the read-only attribute on directories: nothing to test
         return out

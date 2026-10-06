@@ -70,7 +70,8 @@ def test_tampered_unpacked_copy_is_caught(bundle: Path, home: Path) -> None:
 
 def test_extra_file_in_unpacked_copy_is_caught(bundle: Path, home: Path) -> None:
     run(bundle)
-    (next(home.iterdir()) / "planted.py").write_text("import os\n")
+    [unpacked] = [p for p in home.iterdir() if p.is_dir() and not p.name.startswith(".")]
+    (unpacked / "planted.py").write_text("import os\n")
     assert bundleup.verify(bundle).cache_problems == [
         "extra file: planted.py isn't in the manifest"
     ]

@@ -28,7 +28,8 @@ bundleup reads `pyproject.toml` + `uv.lock` (or the script's `# /// script` bloc
 unpacks to a cache (`~/Library/Caches/bundleup`, `~/.cache/bundleup`, or a temp directory if
 those aren't writable), so later runs start as fast as an installed virtualenv. A bundle only sees
 its own packages and the standard library; set `BUNDLEUP_INHERIT_PATH=1` to also let it use
-packages installed on the machine. If it's started
+packages installed on the machine (they come after the bundle's, but a machine package can still
+win over a bundled namespace package of the same name: a Python rule, PEP 420). If it's started
 with the wrong Python or on the wrong platform, it says so in one sentence.
 
 ## Why

@@ -6,6 +6,16 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-05** · runtime · A PEP 420 namespace package (directories without `__init__.py`) loses to
+  a *regular* package of the same name anywhere later on `sys.path`: Python keeps scanning after
+  a namespace portion and takes the first regular package. So with `BUNDLEUP_INHERIT_PATH=1` a stale
+  `pip install --user` copy can shadow a bundle's namespace package despite the bundle coming
+  first; the default isolation (ADR-0021) prevents it. Found by the `user-site-conflict` condition
+  on gauntlet 08 in CI. Evidence: [gauntlet/run_bundlers.py](../gauntlet/run_bundlers.py).
+- **2026-10-05** · testing · A test that picked "the first directory entry" in the cache broke
+  once the unpack lock added `.lock-*` files beside the unpacked copies (and passed on macOS by
+  directory-order luck). Select cache entries by their name pattern. Evidence:
+  `tests/test_verify_command.py`.
 - **2026-10-05** · runtime · Without a lock, 16 simultaneous first runs of the NumPy bundle each
   unpacked a full copy (3.2 s wall, 28 s CPU; correct thanks to the atomic rename, but wasteful). A
   best-effort lock file in the cache root (flock / msvcrt, released by the OS if the holder dies,
