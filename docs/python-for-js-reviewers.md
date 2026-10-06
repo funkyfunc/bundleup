@@ -61,8 +61,32 @@ Then spot-check the code against the smell list below.
   global state.
 - **No cleverness:** no metaprogramming, monkeypatching, deep inheritance or dynamic attribute
   tricks unless an ADR explains why.
-- **Loader code (`_loader.py`) must run on Python 3.9:** no `match`, no `X | Y` type syntax at run
-  time, no 3.10+ standard-library APIs.
+- **Loader code (`_loader.py`) is special.** It runs on the user's Python before anything else,
+  so it must run on Python 3.9 and *compile* on any Python 3 (to print "this app needs Python X"),
+  and its warm path imports nothing beyond `os` and `sys`. That means: `os.path` instead of
+  `pathlib`; `%` formatting instead of f-strings; quoted annotations and `# type:` comments for
+  variables; typing names imported only under `TYPE_CHECKING = False` (importing `typing` costs
+  4–7 ms). `tests/test_bundle.py` checks it parses with Python 3.5's grammar.
+
+## The checks
+
+Ruff (formatter and linter) and pyright (type checker) enforce most of the rules above, configured
+in `pyproject.toml` ([ADR-0015](adr/0015-engineering-tooling.md)). Git hooks run them on commit and
+the tests on push; CI runs everything on every push.
+
+```bash
+uv run ruff format .          # format (like Prettier)
+uv run ruff check --fix .     # lint (like ESLint), including "every signature has types" (ANN)
+uv run pyright                # type check (like tsc --noEmit)
+uv run pytest -q tests        # tests (like vitest/jest)
+uvx pre-commit install        # once per clone: run the above as git hooks
+```
+
+| JS habit | Here |
+|---|---|
+| `// eslint-disable-next-line rule` | `# noqa: RULE (why)`, always with a reason |
+| `// @ts-expect-error` | `# pyright: ignore[rule]`, always with a reason |
+| `"type": "module"` + `tsconfig` targets | `target-version = "py39"` (Ruff) and `pythonVersion = "3.9"` (pyright) |
 
 ## Smells to spot in review
 

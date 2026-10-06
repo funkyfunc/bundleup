@@ -1,11 +1,11 @@
-"""Measure build time, first run and warm start, sequentially and repeatedly, for bundleup and the
-tools it's compared against, plus an installed venv as the floor.
+"""Measure build time, first run and warm start, sequentially and repeatedly, for bundleup and
+the tools it's compared against, plus an installed venv as the floor.
 
-run_bundlers.py checks correctness and runs builds in parallel, so its timings are noisy. This script
-runs one thing at a time and reports medians, so speed claims can be reproduced.
+run_bundlers.py checks correctness and runs builds in parallel, so its timings are noisy. This
+script runs one thing at a time and reports medians, so speed claims can be reproduced.
 
 - warm start: the bundle (or venv) has already run once; median of --runs runs.
-- first run: every run gets a fresh HOME and TMPDIR, so nothing is cached; median of --cold-runs runs.
+- first run: every run gets a fresh HOME and TMPDIR, so nothing is cached; median of --cold-runs.
 - build: median of --builds builds with uv's (and the tools') caches warm.
 
 Usage:
@@ -29,16 +29,30 @@ import subprocess
 import sys
 import time
 import tomllib
+from dataclasses import asdict, dataclass
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).parent))
-import run_bundlers as rb  # noqa: E402  (reuse input preparation and build commands)
+import run_bundlers as rb
 
 BENCH = rb.WORK / "bench"
 TOOLS = ["venv", "bundleup", "shiv", "pex"]
 
 
-def timed(cmd, cwd, env) -> float:
+@dataclass(frozen=True)
+class Row:
+    """One line of results; also the JSON written with --out."""
+
+    tool: str
+    project: str
+    python: str
+    build_ms: float | None
+    first_run_ms: float | None
+    warm_ms: float | None
+    warm_min_ms: float
+
+
+def timed(cmd: list[str], cwd: Path, env: dict[str, str]) -> float:
     start = time.perf_counter()
     r = subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True)
     elapsed = time.perf_counter() - start
@@ -47,9 +61,14 @@ def timed(cmd, cwd, env) -> float:
     return elapsed
 
 
-def env_for(home: Path) -> dict:
+def env_for(home: Path) -> dict[str, str]:
     (home / "tmp").mkdir(parents=True, exist_ok=True)
-    return {"PATH": "/usr/bin:/bin", "HOME": str(home), "TMPDIR": str(home / "tmp"), "LANG": "en_US.UTF-8"}
+    return {
+        "PATH": "/usr/bin:/bin",
+        "HOME": str(home),
+        "TMPDIR": str(home / "tmp"),
+        "LANG": "en_US.UTF-8",
+    }
 
 
 def fresh(path: Path) -> Path:
@@ -58,47 +77,70 @@ def fresh(path: Path) -> Path:
     return path
 
 
-def build(tool: str, project: Path, meta: dict, py: str, stage: Path) -> tuple[list[str], float]:
-    """Build once and return (command that runs the result, build seconds)."""
-    args = meta.get("args", [])
-    if tool == "venv":
-        venv = stage / "venv"
-        shutil.rmtree(venv, ignore_errors=True)
-        env = {**os.environ, "UV_PROJECT_ENVIRONMENT": str(venv)}
-        rb.sh(["uv", "sync", "--frozen", "--no-dev", "--no-editable", "--python", py, "-q"], cwd=project,
-              env=env).check_returncode()
-        script = next(iter(tomllib.loads((project / "pyproject.toml").read_text())["project"]["scripts"]))
-        return [str(venv / "bin" / script), *args], 0.0
-    out = stage / ("app.pex" if tool == "pex" else "app.pyz")
+def median_ms(seconds: list[float]) -> float | None:
+    return round(statistics.median(seconds) * 1000, 1) if seconds else None
+
+
+def install_venv(project: Path, meta: rb.Meta, py: str, stage: Path) -> list[str]:
+    """Install the project into a venv the normal way; return the command that runs it."""
+    venv = stage / "venv"
+    shutil.rmtree(venv, ignore_errors=True)
+    env = {**os.environ, "UV_PROJECT_ENVIRONMENT": str(venv)}
+    sync = ["uv", "sync", "--frozen", "--no-dev", "--no-editable", "--python", py, "-q"]
+    rb.sh(sync, cwd=project, env=env).check_returncode()
+    scripts = tomllib.loads((project / "pyproject.toml").read_text())["project"]["scripts"]
+    return [str(venv / "bin" / next(iter(scripts))), *meta.get("args", [])]
+
+
+def build(tool: str, project: Path, *, meta: rb.Meta, py: str, stage: Path) -> float:
+    """Build a bundle at stage/app.pyz (or app.pex) and return the build time in seconds."""
+    out = bundle_path(tool, stage)
     if tool == "bundleup":
         cmd = [str(rb.BUNDLEUP), str(project), "--python", py, "-o", str(out), "--quiet"]
     else:
-        reqs, wheels, script_dir = rb.prepare(project, meta, stage / "inputs")
-        cmd = rb.build_command(tool, py, reqs, wheels, script_dir, meta["entry"], out)
+        inputs = rb.prepare(project, meta, stage / "inputs")
+        cmd = rb.build_command(tool, py, inputs=inputs, entry=meta["entry"], out=out)
     start = time.perf_counter()
     rb.sh(cmd).check_returncode()
-    return [py, str(out), *args], time.perf_counter() - start
+    return time.perf_counter() - start
 
 
-def bench(tool, project, version, runs, cold_runs, builds) -> dict:
+def bundle_path(tool: str, stage: Path) -> Path:
+    return stage / ("app.pex" if tool == "pex" else "app.pyz")
+
+
+def bench(tool: str, project: Path, *, version: str, runs: int, cold_runs: int, builds: int) -> Row:
     meta = rb.load(project)
     py = rb.python_path(version)
     stage = fresh(BENCH / tool / meta["id"] / version)
-    times = []
-    for _ in range(builds if tool != "venv" else 1):
-        cmd, t = build(tool, project, meta, py, stage)
-        times.append(t)
+    build_times: list[float] = []
+    if tool == "venv":
+        cmd = install_venv(project, meta, py, stage)
+    else:
+        for _ in range(builds):
+            build_times.append(build(tool, project, meta=meta, py=py, stage=stage))
+        cmd = [py, str(bundle_path(tool, stage)), *meta.get("args", [])]
     cwd = fresh(stage / "cwd")
-    cold = []
+    cold: list[float] = []
     if tool != "venv":
         for i in range(cold_runs):
             cold.append(timed(cmd, cwd, env_for(fresh(stage / f"cold-home-{i}"))))
     env = env_for(fresh(stage / "warm-home"))
     timed(cmd, cwd, env)  # populate caches and __pycache__
     warm = [timed(cmd, cwd, env) for _ in range(runs)]
-    ms = lambda xs: round(statistics.median(xs) * 1000, 1) if xs else None
-    return {"tool": tool, "project": meta["id"], "python": version, "build_ms": ms(times) if tool != "venv" else None,
-            "first_run_ms": ms(cold), "warm_ms": ms(warm), "warm_min_ms": round(min(warm) * 1000, 1)}
+    return Row(
+        tool=tool,
+        project=meta["id"],
+        python=version,
+        build_ms=median_ms(build_times),
+        first_run_ms=median_ms(cold),
+        warm_ms=median_ms(warm),
+        warm_min_ms=round(min(warm) * 1000, 1),
+    )
+
+
+def cell(value: float | None) -> str:
+    return "–" if value is None else f"{value:,.0f}"
 
 
 def main() -> int:
@@ -113,21 +155,32 @@ def main() -> int:
     opts = parser.parse_args()
     rb.sh(["uv", "sync", "--quiet"], cwd=rb.ROOT.parent).check_returncode()
 
-    projects = [p for p in sorted(rb.PROJECTS.iterdir())
-                if (p / "gauntlet.toml").exists() and any(p.name.startswith(o) for o in opts.only)]
-    rows = []
+    projects = [
+        p
+        for p in sorted(rb.PROJECTS.iterdir())
+        if (p / "gauntlet.toml").exists() and any(p.name.startswith(o) for o in opts.only)
+    ]
+    rows: list[Row] = []
     print("| Tool | Project | Python | Build (ms) | First run (ms) | Warm start (ms) |")
     print("|---|---|---|---|---|---|")
     for project in projects:
         for version in opts.python or ["3.12"]:
             for tool in opts.tool or TOOLS:
-                r = bench(tool, project, version, opts.runs, opts.cold_runs, opts.builds)
+                r = bench(
+                    tool,
+                    project,
+                    version=version,
+                    runs=opts.runs,
+                    cold_runs=opts.cold_runs,
+                    builds=opts.builds,
+                )
                 rows.append(r)
-                cell = lambda v: "–" if v is None else f"{v:,.0f}"
-                print(f"| {tool} | {r['project']} | {version} | {cell(r['build_ms'])} | {cell(r['first_run_ms'])} "
-                      f"| {cell(r['warm_ms'])} |", flush=True)
+                times = f"{cell(r.build_ms)} | {cell(r.first_run_ms)} | {cell(r.warm_ms)}"
+                print(f"| {tool} | {r.project} | {version} | {times} |", flush=True)
     if opts.out:
-        (rb.RESULTS / f"{opts.out}.json").write_text(json.dumps(rows, indent=2))
+        (rb.RESULTS / f"{opts.out}.json").write_text(
+            json.dumps([asdict(r) for r in rows], indent=2)
+        )
     return 0
 
 

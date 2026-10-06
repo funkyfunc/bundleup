@@ -1,6 +1,6 @@
 # ADR-0015: Enforce code quality with Ruff, a type checker, git hooks and CI
 
-- **Status:** Accepted (tooling direction); Proposed (specific tool choices and rule sets)
+- **Status:** Accepted (direction 2026-10-04; tool choices and rule sets 2026-10-05)
 - **Date:** 2026-10-04
 - **Deciders:** the user asked for Ruff, a type checker and git hooks; tool choices proposed by an
   agent
@@ -30,6 +30,20 @@ gauntlet, but no formatter, linter, type checker, hooks or CI.
    Linux** across Python 3.9, 3.11 and 3.12. This also closes the long-standing "no Linux runs" gap.
 5. Adopt at a checkpoint: one commit that adds the config and reformats existing code, so the
    reformat doesn't mix with feature changes.
+
+## Implementation (confirmed by the user 2026-10-05)
+
+What landed, including where it differs from the proposal above:
+
+| Choice | Value | Why |
+|---|---|---|
+| Ruff rules | `E, F, W, I, B, UP, SIM, RUF` **plus `ANN`** | `ANN` turns "type hints on every signature" ([review guide](../python-for-js-reviewers.md)) from guidance into a check |
+| Line length | 100 | The code ran to ~120 and the docs wrap at ~100; 88 (Ruff's default) would split most signatures |
+| Targets | `py39` for `src/` and `tests/`; `py311` for `gauntlet/*.py` | The harness scripts use `tomllib`; gauntlet *projects* are excluded (17 uses 3.12-only syntax on purpose) |
+| Loader exceptions | `UP004`, `UP031`, `UP032` off in `_loader.py` | It must compile on any Python 3 to print its version message |
+| Type checker | `pyright[nodejs]`, standard mode, on `src/`, `tests/` and `gauntlet/*.py` | The `nodejs` extra avoids a run-time Node download; the harness is code agents edit too |
+| Hooks | `.pre-commit-config.yaml`, local hooks calling `uv run --frozen …` | Same pinned tool versions as CI and the lockfile; works with `pre-commit` or `prek` |
+| Hook stages | commit: format, lint, types (~1–4 s); push: pytest (~3 s) | As decided above |
 
 ## Consequences
 

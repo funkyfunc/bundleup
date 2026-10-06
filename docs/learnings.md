@@ -6,6 +6,22 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-04** · runtime · Importing `typing` costs 6.7 ms on macOS's Python 3.9 and 3.9 ms on
+  3.12, more than the loader's whole margin over a venv. pyright honours a module-level
+  `TYPE_CHECKING = False` (no import), so the loader is fully typed for free with quoted annotations
+  and `# type:` comments. Evidence: `python -X importtime -c "import typing"`; `src/bundleup/_loader.py`.
+- **2026-10-04** · tooling · Ruff doesn't read `# type:` comments, so names used only there look
+  unused (F401) and need an explained `noqa`. Variable annotations (`x: int = 1`) are Python 3.6+
+  syntax even in a function body. `ast.parse(src, feature_version=(3, 5))` checks a file against an
+  older grammar. Evidence: `tests/test_bundle.py::test_loader_parses_on_any_python_3`.
+- **2026-10-04** · tooling · pre-commit hooks without `stages` run at every installed stage, so
+  commit-time checks also re-run on push unless pinned to `stages: [pre-commit]`. Ruff skips
+  excluded paths passed explicitly by a hook only with `force-exclude = true`. Evidence:
+  `.pre-commit-config.yaml`.
+- **2026-10-04** · tooling · The `pyright` PyPI wrapper ships the matching pyright release in the
+  wheel (so `uv.lock` pins it), but needs Node.js: it uses `node` from `PATH`, otherwise downloads
+  one with nodeenv at run time. The `nodejs` extra brings Node in as a wheel instead, which is why
+  the dev group uses `pyright[nodejs]`. Evidence: the package's README (PyPI `pyright` 1.1.414).
 - **2026-10-04** · testing · The gauntlet proves bundles *run and behave*; nothing yet proves a
   bundle contains *exactly* the locked files. Planned: lock-vs-bundle check, wheel `RECORD` hash
   verification, differential test against a `uv sync` venv, a top-PyPI import smoke test. Evidence:

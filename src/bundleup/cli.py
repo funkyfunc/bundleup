@@ -22,39 +22,72 @@ examples:
 
 
 def parser() -> argparse.ArgumentParser:
-    p = argparse.ArgumentParser(prog="bundleup", description=DESCRIPTION,
-                                formatter_class=argparse.RawDescriptionHelpFormatter)
-    p.add_argument("path", nargs="?", default=".", help="project directory or .py script (default: .)")
-    p.add_argument("-o", "--output", type=Path, help="output file (default: dist/<name>.pyz next to the input)")
-    p.add_argument("-p", "--python", help="Python to build for: a version like 3.12 or a path "
-                                          "(default: the one uv picks for the project)")
-    p.add_argument("-e", "--entry", help="what to run: a [project.scripts] name, module:function, or module "
-                                         "(default: the project's only script)")
+    p = argparse.ArgumentParser(
+        prog="bundleup",
+        description=DESCRIPTION,
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+    )
+    p.add_argument(
+        "path", nargs="?", default=".", help="project directory or .py script (default: .)"
+    )
+    p.add_argument(
+        "-o", "--output", type=Path, help="output file (default: dist/<name>.pyz next to the input)"
+    )
+    p.add_argument(
+        "-p",
+        "--python",
+        help="Python to build for: a version like 3.12 or a path "
+        "(default: the one uv picks for the project)",
+    )
+    p.add_argument(
+        "-e",
+        "--entry",
+        help="what to run: a [project.scripts] name, module:function, or module "
+        "(default: the project's only script)",
+    )
     lock = p.add_mutually_exclusive_group()
-    lock.add_argument("--locked", dest="lock_mode", action="store_const", const="locked",
-                      help="fail if uv.lock is out of date (as in uv)")
-    lock.add_argument("--frozen", dest="lock_mode", action="store_const", const="frozen",
-                      help="use uv.lock as is, without checking it (as in uv)")
+    lock.add_argument(
+        "--locked",
+        dest="lock_mode",
+        action="store_const",
+        const="locked",
+        help="fail if uv.lock is out of date (as in uv)",
+    )
+    lock.add_argument(
+        "--frozen",
+        dest="lock_mode",
+        action="store_const",
+        const="frozen",
+        help="use uv.lock as is, without checking it (as in uv)",
+    )
     p.add_argument("-q", "--quiet", action="store_true", help="print nothing on success")
     p.add_argument("-V", "--version", action="version", version=f"bundleup {__version__}")
     return p
 
 
 def size(n: int) -> str:
+    """A byte count for people: 884.8 KB, 9.5 MB."""
+    value = float(n)
     for unit in ("B", "KB", "MB", "GB"):
-        if n < 1000 or unit == "GB":
-            return f"{n:.0f} {unit}" if unit == "B" else f"{n:.1f} {unit}"
-        n /= 1000
+        if value < 1000 or unit == "GB":
+            return f"{value:.0f} {unit}" if unit == "B" else f"{value:.1f} {unit}"
+        value /= 1000
     return ""
 
 
-def main(argv=None) -> int:
+def main(argv: list[str] | None = None) -> int:
     opts = parser().parse_args(argv)
     from .build import BuildError, build  # deferred so --help and --version stay instant
 
     start = time.perf_counter()
     try:
-        result = build(Path(opts.path), opts.output, opts.python, opts.entry, opts.lock_mode)
+        result = build(
+            Path(opts.path),
+            output=opts.output,
+            python=opts.python,
+            entry=opts.entry,
+            lock_mode=opts.lock_mode,
+        )
     except BuildError as e:
         print(f"bundleup: error: {e}", file=sys.stderr)
         return 1

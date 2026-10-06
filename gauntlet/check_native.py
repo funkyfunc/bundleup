@@ -1,4 +1,4 @@
-"""Run every gauntlet project the normal way (installed with uv), to prove the projects themselves work.
+"""Run every gauntlet project the normal way (installed with uv), to prove the projects work.
 
 This is the control group: a project that fails here is a broken test, not a bundler failure.
 
@@ -33,7 +33,9 @@ def load(project: Path) -> dict:
         header = (project / meta["script"]).read_text()
         requires = header.split("requires-python = ", 1)[1].split("\n", 1)[0].strip('"')
     else:
-        requires = tomllib.loads((project / "pyproject.toml").read_text())["project"]["requires-python"]
+        requires = tomllib.loads((project / "pyproject.toml").read_text())["project"][
+            "requires-python"
+        ]
     meta["requires_python"] = requires
     return meta
 
@@ -42,7 +44,9 @@ def command(project: Path, meta: dict, python: str) -> list[str]:
     args = meta.get("args", [])
     if "script" in meta:
         return ["uv", "run", "--quiet", "--python", python, "--script", meta["script"], *args]
-    script_name = next(iter(tomllib.loads((project / "pyproject.toml").read_text())["project"]["scripts"]))
+    script_name = next(
+        iter(tomllib.loads((project / "pyproject.toml").read_text())["project"]["scripts"])
+    )
     return ["uv", "run", "--quiet", "--frozen", "--python", python, script_name, *args]
 
 
@@ -66,12 +70,17 @@ def main() -> int:
             if py not in SpecifierSet(meta["requires_python"]):
                 print(f"SKIP  {meta['id']:<32} py{py} (requires {meta['requires_python']})")
                 continue
-            result = subprocess.run(command(project, meta, py), cwd=project, capture_output=True, text=True)
+            result = subprocess.run(
+                command(project, meta, py), cwd=project, capture_output=True, text=True
+            )
             ok = result.returncode == 0 and f"GAUNTLET OK {meta['id']}" in result.stdout
             print(f"{'PASS' if ok else 'FAIL'}  {meta['id']:<32} py{py}")
             if not ok:
                 failures += 1
-                print("      " + (result.stderr or result.stdout).strip().replace("\n", "\n      ")[-1500:])
+                print(
+                    "      "
+                    + (result.stderr or result.stdout).strip().replace("\n", "\n      ")[-1500:]
+                )
     return 1 if failures else 0
 
 

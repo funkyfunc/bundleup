@@ -99,6 +99,8 @@ uv run gauntlet/report.py gauntlet/results/<name>.json > gauntlet/results/<name>
 uv run gauntlet/run_bundlers.py --tool bundleup --conditions --out <name>   # just bundleup
 uv run gauntlet/bench.py 03 13 --python 3.12 --python 3.9                   # speed claims
 uv run pytest -q tests                                                      # loader/CLI edge cases
+uv run ruff format . && uv run ruff check . && uv run pyright               # the checks (ADR-0015)
+uvx pre-commit install                                                      # git hooks, once per clone
 uv run bundleup <project-or-script> [-p 3.9] [-o out.pyz]                   # try it
 ```
 
@@ -108,6 +110,9 @@ uv run bundleup <project-or-script> [-p 3.9] [-o out.pyz]                   # tr
   with pex.
 - **The control group must pass** before trusting any bundler result. A failure there is a broken
   test.
+- **The checks must pass** (Ruff format + lint, pyright, pytest) before committing; the git hooks
+  run them. Fix what they flag following [python-for-js-reviewers.md](docs/python-for-js-reviewers.md);
+  every `noqa` / `pyright: ignore` carries a reason.
 - **Use uv** for all Python tooling. Standalone scripts use PEP 723 headers and run with `uv run`.
 - **Mind the target Pythons:** the runtime bootstrap must work on macOS's system Python 3.9.
 - **Git:** commit only when asked. Commit messages describe the change only. No AI attribution
