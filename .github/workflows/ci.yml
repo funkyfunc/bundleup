@@ -20,7 +20,7 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.2.0 # publishes exact versions only, no floating v10 tag
       - run: uv sync --locked
       - run: uv run --locked ruff format --check .
       - run: uv run --locked ruff check --output-format github .
@@ -35,7 +35,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.2.0 # publishes exact versions only, no floating v10 tag
       - run: uv sync --locked --python 3.12
       - run: uv run --locked pytest -q tests
 
@@ -59,7 +59,7 @@ jobs:
     timeout-minutes: 60
     steps:
       - uses: actions/checkout@v7
-      - uses: astral-sh/setup-uv@v10
+      - uses: astral-sh/setup-uv@v10.2.0 # publishes exact versions only, no floating v10 tag
       - run: uv sync --locked --python 3.12 # installs this repo's bundleup into .venv
       - name: Install the target Python
         if: ${{ !(runner.os == 'macOS' && matrix.python == '3.9') }}
