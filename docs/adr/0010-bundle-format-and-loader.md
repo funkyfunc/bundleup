@@ -1,6 +1,7 @@
 # ADR-0010: Bundle format, loader and cache layout
 
-- **Status:** Accepted (2026-10-05)
+- **Status:** Accepted (2026-10-05); the payload's compression level is superseded by
+  [ADR-0020](0020-parallel-zip-and-bytecode-cache.md)
 - **Date:** 2026-10-04
 - **Deciders:** an agent (milestone 1); accepted as written by the user, including
   `PYTHONPATH` for child processes on by default

@@ -18,7 +18,7 @@ and change only the old one's status line.
 | [0007](0007-gauntlet-is-the-contract.md) | The gauntlet is the acceptance test, and claims must be measured | Accepted |
 | [0008](0008-prototype-in-python.md) | Build in Python first, with a measured path to Rust | Accepted |
 | [0009](0009-name-bundleup.md) | Name the project `bundleup` | Accepted |
-| [0010](0010-bundle-format-and-loader.md) | Bundle format, loader and cache layout | Accepted |
+| [0010](0010-bundle-format-and-loader.md) | Bundle format, loader and cache layout | Accepted (compression level superseded by 0020) |
 | [0011](0011-cli-and-build-pipeline.md) | CLI shape and build pipeline | Accepted (pipeline); CLI superseded by 0016 |
 | [0012](0012-lead-with-what-it-does.md) | Describe bundleup by what it does, with use cases as examples | Accepted |
 | [0013](0013-agent-sandboxes-as-headline-use-case.md) | Agent sandboxes as the headline use case, served by target profiles and skill output | Accepted (positioning); features Proposed |
@@ -28,4 +28,4 @@ and change only the old one's status line.
 | [0017](0017-platform-matrix-and-corpus-testing.md) | Free platform matrix on GitHub Actions, plus nightly corpus testing with AI triage | Accepted (agent triage deferred) |
 | [0018](0018-package-layout-and-lazy-api.md) | Private modules, and a public API that loads lazily | Accepted |
 | [0019](0019-manifest-and-verify-command.md) | Every bundle carries a manifest; `bundleup verify` checks it | Accepted |
-| [0020](0020-parallel-zip-and-bytecode-cache.md) | Compress the payload in parallel at level 6; cache compiled bytecode per wheel | Proposed |
+| [0020](0020-parallel-zip-and-bytecode-cache.md) | Compress the payload in parallel at level 6; cache compiled bytecode per wheel | Accepted |

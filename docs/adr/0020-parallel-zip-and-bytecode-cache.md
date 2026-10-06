@@ -1,10 +1,9 @@
 # ADR-0020: Compress the payload in parallel at level 6, and cache compiled bytecode per wheel
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-05)
 - **Date:** 2026-10-05
-- **Deciders:** an agent (roadmap item 9); awaiting the user. Once accepted, it supersedes
-  [ADR-0010](0010-bundle-format-and-loader.md)'s "deflated (level 1)" detail only, and ADR-0010's
-  status line gets a pointer here
+- **Deciders:** an agent (roadmap item 9); accepted by the user. Supersedes
+  [ADR-0010](0010-bundle-format-and-loader.md)'s "deflated (level 1)" detail only
 
 ## Context
 

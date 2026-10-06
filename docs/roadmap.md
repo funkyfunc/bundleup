@@ -113,7 +113,7 @@ merged; ask if unsure.
    unpack lock (**done 2026-10-05**: 16 simultaneous first runs 3.2 s → 0.55 s); stale-cache cleanup
    and isolated `sys.path` (**waiting for the owner's decision**: both change default behaviour).
 9. ~~**Faster large builds**~~ **Done 2026-10-05** ([findings](findings/2026-10-05-faster-builds.md),
-   [ADR-0020](adr/0020-parallel-zip-and-bytecode-cache.md) Proposed). Was: threaded compression, per-wheel `.pyc` cache
+   [ADR-0020](adr/0020-parallel-zip-and-bytecode-cache.md)). Was: threaded compression, per-wheel `.pyc` cache
    ([findings](findings/2026-10-04-large-project-and-rust.md)).
 10. **`bundleup check`**, the pre-ship analyzer, including the compatibility pre-check
    (native code that doesn't match the target).

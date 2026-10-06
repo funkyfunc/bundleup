@@ -63,7 +63,7 @@ Do these **as you go**, not only at the end:
   (ADR-0011, at the user's request).
 - **Builds are 2-9× faster than pex** after parallel compression and a per-wheel bytecode cache
   (gauntlet 21: 2.5 s vs pex 5.5 s; [findings](docs/findings/2026-10-05-faster-builds.md),
-  [ADR-0020](docs/adr/0020-parallel-zip-and-bytecode-cache.md), **Proposed**). Rust stays reserved
+  [ADR-0020](docs/adr/0020-parallel-zip-and-bytecode-cache.md)). Rust stays reserved
   for the analyzer's scanner ([findings](docs/findings/2026-10-04-large-project-and-rust.md)).
 - Engineering tooling done (Ruff, pyright, hooks; [ADR-0015](docs/adr/0015-engineering-tooling.md)).
 - **CI** (public repo, free): checks, tests on 4 OSes, and the gauntlet on Linux x64/arm64, Windows
