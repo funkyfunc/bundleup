@@ -66,7 +66,10 @@ merged; ask if unsure.
      ([`gauntlet/smoke.py`](../gauntlet/smoke.py), [`nightly.yml`](../.github/workflows/nightly.yml)):
      bundle the top few hundred PyPI packages and import
      each one's top-level modules; turn every failure into a gauntlet project or a learning.
-   - **Real-world suites:** run a few real projects' own test suites against their bundles.
+   - ~~**Real-world suites**~~ **Done 2026-10-06** ([`gauntlet/suites.py`](../gauntlet/suites.py),
+     [`suites.yml`](../.github/workflows/suites.yml), [findings](findings/2026-10-06-formats-checks-and-suites.md)):
+     click, packaging, markupsafe and itsdangerous's own suites pass identically in a venv and
+     from their bundles on four OSes.
 5. ~~**Align the CLI with the style guide**~~ **Done 2026-10-05** (see the style guide's
    "Implementation status" for the rules still open). Was: **Align the CLI with the style guide** ([cli-style-guide.md](cli-style-guide.md),
    [ADR-0016](adr/0016-cli-and-api-conventions.md)): `bundleup build [PATH]` (verbs), stderr/stdout split,

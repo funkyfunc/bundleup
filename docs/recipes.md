@@ -46,7 +46,8 @@ precompiled for the runtime (Lambda's `/var/task` is read-only). Set the functio
 the Python shown (`python3.13` by default) and its handler to the one printed
 (`handler app.handler`; for a script `handler.py`, `handler.<function>`). bundleup refuses a
 function over Lambda's 250 MB unzipped limit and warns over the 50 MB direct-upload limit.
-Tested in CI: every gauntlet project runs inside AWS's own Lambda image on x86_64 and arm64.
+Tested in CI: every gauntlet project except the `.pth` one (below) runs inside AWS's own Lambda
+image on x86_64 and arm64.
 
 Known limits: Lambda doesn't run `.pth` files from `/var/task` (bundleup warns,
 `pth-not-run`), and has no `/dev/shm`, so `multiprocessing.Pool` and `Queue` don't work there

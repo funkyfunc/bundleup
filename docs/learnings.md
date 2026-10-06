@@ -6,6 +6,13 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-06** · testing · A real test suite can run *from* a bundle: make a throwaway project
+  depending on the package, pytest and the test deps, bundle it with `--entry pytest:console_main`,
+  and run it from a clone with a `src/` layout (so the clone can't shadow the package) and
+  `--import-mode=importlib`. Read pytest's summary line by pattern: other output can follow it.
+  Lambda's runtime interface emulator image runs locally in Docker, so Lambda zips can be tested
+  in CI; there a `python -c` child finds the function's packages via the working directory
+  (`/var/task`). Evidence: [findings](findings/2026-10-06-formats-checks-and-suites.md).
 - **2026-10-06** · ecosystem · uv 0.12 installs a `pylock.toml` directly, without a preview
   flag, but refuses it alongside other requirements ("Cannot specify additional requirements
   alongside a `pylock.toml` file") and rejects one with no `packages` array. `pip lock`'s output

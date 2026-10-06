@@ -57,8 +57,7 @@ Do these **as you go**, not only at the end:
   ([findings](docs/findings/2026-10-04-milestone-1.md)). Design in
   [ADR-0010](docs/adr/0010-bundle-format-and-loader.md) (format, loader, cache; accepted) and
   [ADR-0011](docs/adr/0011-cli-and-build-pipeline.md) (pipeline accepted; its CLI is superseded by
-  [ADR-0016](docs/adr/0016-cli-and-api-conventions.md): verbs, `bundleup build [PATH]`, not built
-  yet).
+  [ADR-0016](docs/adr/0016-cli-and-api-conventions.md): verbs, `bundleup build [PATH]`).
 - bundleup depends on the `uv` package (bundled binary) but prefers a uv ≥ 0.9 on `PATH`
   (ADR-0011, at the user's request).
 - **Builds are 2-9× faster than pex** after parallel compression and a per-wheel bytecode cache
@@ -72,9 +71,8 @@ Do these **as you go**, not only at the end:
   wheel's `RECORD` exactly (`src/bundleup/_verify.py`); the gauntlet's `matches-venv` condition
   compares each bundle with a `uv sync` install. Every bundle carries `manifest.json`;
   `bundleup verify` checks a bundle and its unpacked copy against it
-  ([ADR-0019](docs/adr/0019-manifest-and-verify-command.md)). Still to do from roadmap item 4:
-  real-world test suites. The nightly top-PyPI smoke test exists: the top 100 pass on all four
-  OSes ([findings](docs/findings/2026-10-05-ci-and-correctness.md)).
+  ([ADR-0019](docs/adr/0019-manifest-and-verify-command.md)). Item 4 is done. The nightly top-PyPI smoke
+  test: the top 100 pass on all four OSes ([findings](docs/findings/2026-10-05-ci-and-correctness.md)).
 - **CLI follows the style guide** (ADR-0016): `bundleup build [PATH]`, `--json`, `error:`/`hint:`,
   exit codes, a typed library API with lazy exports
   ([ADR-0018](docs/adr/0018-package-layout-and-lazy-api.md)). Open rules are listed
@@ -87,6 +85,9 @@ Do these **as you go**, not only at the end:
 - **Output formats and presets** (roadmap item 11, [ADR-0025](docs/adr/0025-dir-and-lambda-formats-and-presets.md),
   **Proposed**): `--format dir|lambda`, `--target lambda|lambda-arm64|claude-api`,
   `bundleup targets`; `gauntlet/formats.py` (CI runs Lambda zips in AWS's Lambda image).
+- **Real-world suites** (item 4 done): click, packaging, markupsafe, itsdangerous tests pass
+  identically from bundles on four OSes, nightly (`suites.yml`;
+  [findings](docs/findings/2026-10-06-formats-checks-and-suites.md)).
 - **`pylock.toml` input** (roadmap item 12, [ADR-0026](docs/adr/0026-pylock-toml-input.md),
   **Proposed**): used when a project has no `uv.lock`. The roadmap's "Next up" list is done.
 - **Weekly nightly summary** (`weekly.yml`, Mondays): a findings page on a `weekly/<date>` branch;
@@ -98,7 +99,9 @@ Do these **as you go**, not only at the end:
 - **Runtime hardening** (item 8): unpack lock for simultaneous first runs; bundles hide the
   machine's own packages unless `BUNDLEUP_INHERIT_PATH=1` ([ADR-0021](docs/adr/0021-isolate-from-machine-packages.md));
   `bundleup cache list|clean` ([ADR-0022](docs/adr/0022-cache-command.md)).
-- Next: see [docs/roadmap.md](docs/roadmap.md) "Next up" (item 10, `bundleup check`).
+- Next: roadmap items 1-12 are done; [docs/roadmap.md](docs/roadmap.md) "Next up" lists proposed
+  items 13-17 for the owner to order. ADRs 0023-0026 are **Proposed** (written 2026-10-05/06
+  while the owner was away).
 
 ## Layout
 
@@ -131,9 +134,10 @@ gauntlet/corpus*.py, corpus.toml  nightly corpus: real CLIs run installed vs bun
 gauntlet/weekly_summary.py  weekly findings page from the nightly smoke + corpus results (weekly.yml)
 gauntlet/cross.py       cross-target gauntlet: build on one OS for another, run on the target
 gauntlet/formats.py     `dir` and Lambda outputs: run as a host app would, Lambda in AWS's image
+gauntlet/suites.py, suites.toml  real projects' test suites, venv vs bundle (CI only, suites.yml)
 .github/workflows/       ci.yml (every push: checks, tests, gauntlet matrix); nightly.yml (smoke
-                        test); corpus.yml (corpus run + corpus-failure issues); weekly.yml
-                        (Monday summary of both)
+                        test); corpus.yml (corpus run + corpus-failure issues); suites.yml (test
+                        suites); weekly.yml (Monday summary of the nightly runs)
 gauntlet/report.py      results JSON -> markdown
 gauntlet/results/       committed results
 gauntlet/.work/         scratch (git-ignored)
