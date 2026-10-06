@@ -99,27 +99,59 @@ def console_script(venv: Path, command: str) -> str:
 
 
 def normalise(text: str, replacements: list[tuple[str, str]]) -> str:
+    """Make output comparable: one path style, each environment's locations replaced by a
+    placeholder, and a crash reduced to its final exception line (the frames differ by design:
+    a console-script launcher vs bundleup's loader)."""
+    text = text.replace("\\", "/")
     for old, new in replacements:
-        text = text.replace(old, new)
-    return text.replace("\\", "/").strip()
+        text = text.replace(old.replace("\\", "/"), new)
+    text = text.strip()
+    if "Traceback (most recent call last):" in text:
+        text = text.splitlines()[-1]
+    return text
+
+
+def installed_command(entry: Entry, venv: Path) -> list[str]:
+    """How a user runs the installed program: its console script, or (for an app that has
+    none, like awscli) its entry function under the program's name."""
+    command = entry["command"]
+    if "entry" not in entry:
+        folder, suffix = ("Scripts", ".exe") if rb.WINDOWS else ("bin", "")
+        return [str(venv / folder / (command + suffix))]
+    module, function = entry["entry"].split(":")
+    call = f"import sys; sys.argv[0] = {command!r}; from {module} import {function}; "
+    return [str(rb.venv_python(venv)), "-c", call + f"sys.exit({function}())"]
+
+
+def site_packages(venv: Path) -> str:
+    purelib = "import sysconfig; print(sysconfig.get_paths()['purelib'])"
+    return rb.sh([str(rb.venv_python(venv)), "-c", purelib]).stdout.strip()
 
 
 def compare_run(entry: Entry, args: list[str], *, py: str, venv: Path, bundle: Path) -> str:
     """'' if the installed program and the bundle behave the same, else what differed."""
     command = entry["command"]
-    script = (
-        venv / ("Scripts" if rb.WINDOWS else "bin") / (command + (".exe" if rb.WINDOWS else ""))
-    )
-    home, _ = rb.fresh_dirs(bundle.parent.parent, "run")
-    env = rb.run_env(home)
+    stage = bundle.parent.parent
+    home, _ = rb.fresh_dirs(stage, "run")
+    cache = stage / "run-cache"
+    shutil.rmtree(cache, ignore_errors=True)
+    # Same hash seed both ways: some programs list things in set order (twine's subcommands).
+    env = rb.run_env(home) | {"PYTHONHASHSEED": "0"}
     (home / "tmp").mkdir(parents=True, exist_ok=True)
     timeout = rb.RUN_TIMEOUT
-    normal = rb.sh([str(script), *args], cwd=home, env=env, timeout=timeout)
-    bundled_cmd = rb.without_network([py, str(bundle), *args], env)
-    bundled = rb.sh(bundled_cmd, cwd=home, env=env, timeout=timeout)
-    # The program's own path shows up in usage lines; the rest of each environment varies too.
-    paths = [(str(script), command), (str(script)[: -len(".exe")], command), (str(bundle), command)]
-    paths += [(str(venv), "<ENV>"), (str(home), "<HOME>"), (str(bundle.parent.parent), "<STAGE>")]
+    installed = installed_command(entry, venv)
+    normal = rb.sh([*installed, *args], cwd=home, env=env, timeout=timeout)
+    bundle_env = env | {"BUNDLEUP_CACHE": str(cache)}
+    bundled_cmd = rb.without_network([py, str(bundle), *args], bundle_env)
+    bundled = rb.sh(bundled_cmd, cwd=home, env=bundle_env, timeout=timeout)
+    unpacked = (
+        [str(p) for p in cache.iterdir() if not p.name.startswith(".")] if cache.exists() else []
+    )
+    # Where each copy of the program lives shows up in output (`--version` "from <path>"): the
+    # venv's site-packages and the bundle's unpacked copy are the same place, logically.
+    paths = [(site, "<SITE>") for site in [site_packages(venv), *unpacked]]
+    paths += [(installed[0], command), (str(bundle), command)]
+    paths += [(str(venv), "<ENV>"), (str(home), "<HOME>"), (str(stage), "<STAGE>")]
     if normal.returncode != bundled.returncode:
         return (
             f"exit-code: `{command} {' '.join(args)}` exited {normal.returncode} installed, "

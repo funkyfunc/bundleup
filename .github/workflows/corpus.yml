@@ -38,7 +38,7 @@ jobs:
   issues:
     name: File failures as issues
     needs: corpus
-    if: ${{ always() }}
+    if: ${{ !cancelled() }} # a cancelled run files nothing
     runs-on: ubuntu-24.04
     permissions:
       contents: read
