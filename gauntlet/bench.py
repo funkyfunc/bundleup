@@ -63,12 +63,7 @@ def timed(cmd: list[str], cwd: Path, env: dict[str, str]) -> float:
 
 def env_for(home: Path) -> dict[str, str]:
     (home / "tmp").mkdir(parents=True, exist_ok=True)
-    return {
-        "PATH": "/usr/bin:/bin",
-        "HOME": str(home),
-        "TMPDIR": str(home / "tmp"),
-        "LANG": "en_US.UTF-8",
-    }
+    return rb.run_env(home)
 
 
 def fresh(path: Path) -> Path:
@@ -147,7 +142,7 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("only", nargs="*", default=["03", "13", "21"], help="project id prefixes")
     parser.add_argument("--tool", action="append", choices=TOOLS)
-    parser.add_argument("--python", action="append", choices=list(rb.PYTHONS))
+    parser.add_argument("--python", action="append", help="e.g. 3.9, 3.12 (default: 3.12)")
     parser.add_argument("--runs", type=int, default=20)
     parser.add_argument("--cold-runs", type=int, default=10)
     parser.add_argument("--builds", type=int, default=3)

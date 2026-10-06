@@ -1,0 +1,77 @@
+# CI (ADR-0015, ADR-0017): checks and tests on every push; the gauntlet across the platform
+# matrix in docs/roadmap.md "Next up" item 2. Free on standard runners because the repo is public.
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Lint and type check
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+      - run: uv sync --locked
+      - run: uv run --locked ruff format --check .
+      - run: uv run --locked ruff check --output-format github .
+      - run: uv run --locked pyright
+
+  tests:
+    name: Tests (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+      - run: uv sync --locked --python 3.12
+      - run: uv run --locked pytest -q tests
+
+  gauntlet:
+    name: Gauntlet (${{ matrix.os }}, Python ${{ matrix.python }})
+    needs: checks
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { os: ubuntu-24.04, python: "3.9" }
+          - { os: ubuntu-24.04, python: "3.11" }
+          - { os: ubuntu-24.04, python: "3.12" }
+          - { os: ubuntu-24.04-arm, python: "3.11" }
+          - { os: ubuntu-24.04-arm, python: "3.12" }
+          - { os: windows-2025, python: "3.11" }
+          - { os: windows-2025, python: "3.12" }
+          - { os: macos-15, python: "3.9" } # Apple's /usr/bin/python3, the "user's Python"
+          - { os: macos-15, python: "3.12" }
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10
+      - run: uv sync --locked --python 3.12 # installs this repo's bundleup into .venv
+      - name: Install the target Python
+        if: ${{ !(runner.os == 'macOS' && matrix.python == '3.9') }}
+        run: uv python install ${{ matrix.python }}
+      - name: Run the gauntlet
+        run: >
+          uv run gauntlet/run_bundlers.py --tool bundleup --conditions --check
+          --python ${{ matrix.python }} --out ci
+      - name: Keep the results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: gauntlet-${{ matrix.os }}-${{ matrix.python }}
+          path: gauntlet/results/ci.json
+          if-no-files-found: ignore

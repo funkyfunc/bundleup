@@ -28,6 +28,7 @@ print(json.dumps({"path": sys.path, "file": __file__, "pythonpath": os.environ.g
                   "site": os.environ.get("BUNDLEUP_SITE"), "argv": sys.argv[1:]}))
 """
 SYSTEM_PYTHON = "/usr/bin/python3"
+WINDOWS = sys.platform == "win32"
 
 
 @pytest.fixture(scope="module")
@@ -40,9 +41,21 @@ def bundle(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 def env_for(tmp: Path, **extra: str) -> dict[str, str]:
+    """A minimal environment with a fresh home, so every test starts with an empty cache."""
     home = tmp / "home"
     (home / "tmp").mkdir(parents=True, exist_ok=True)
-    return {"PATH": "/usr/bin:/bin", "HOME": str(home), "TMPDIR": str(home / "tmp"), **extra}
+    env = {"HOME": str(home), "TMPDIR": str(home / "tmp"), "PATH": "/usr/bin:/bin"}
+    if WINDOWS:
+        system_root = os.environ.get("SYSTEMROOT", r"C:\Windows")
+        env |= {
+            "SYSTEMROOT": system_root,  # Python can't start without it
+            "PATH": rf"{system_root}\System32",
+            "PROCESSOR_ARCHITECTURE": os.environ.get("PROCESSOR_ARCHITECTURE", ""),
+            "USERPROFILE": str(home),
+            "LOCALAPPDATA": str(home / "AppData" / "Local"),
+            "TEMP": str(home / "tmp"),
+        }
+    return env | extra
 
 
 def run(
@@ -76,9 +89,11 @@ def relabel(bundle: Path, out: Path, **config: object) -> Path:
 
 
 def test_runs_and_passes_arguments(bundle: Path, tmp_path: Path) -> None:
-    out = probe(bundle, env_for(tmp_path), "a", "--b")
+    env = env_for(tmp_path)
+    out = probe(bundle, env, "a", "--b")
     assert out["argv"] == ["a", "--b"]
-    assert "/Library/Caches/bundleup/" in out["file"] or "/.cache/bundleup/" in out["file"]
+    assert out["file"].startswith(env["HOME"])  # the user cache directory, inside the fresh home
+    assert "bundleup" in Path(out["file"]).parts
 
 
 def test_payload_sits_before_site_packages_and_on_pythonpath(bundle: Path, tmp_path: Path) -> None:
@@ -103,6 +118,7 @@ def test_bundleup_cache_override(bundle: Path, tmp_path: Path) -> None:
     assert out["file"].startswith(str(tmp_path / "c"))
 
 
+@pytest.mark.skipif(WINDOWS, reason="POSIX ownership and permission bits")
 def test_untrusted_shared_temp_dir_is_skipped(bundle: Path, tmp_path: Path) -> None:
     env = env_for(tmp_path)
     home = Path(env["HOME"])
@@ -126,35 +142,31 @@ def test_pycache_prefix_gets_the_precompiled_bytecode(bundle: Path, tmp_path: Pa
     out = probe(bundle, env_for(tmp_path, PYTHONPYCACHEPREFIX=str(prefix)))
     site = Path(out["site"])
     tag = sys.implementation.cache_tag
-    assert (prefix / str(site).lstrip("/") / "__bundleup_script__" / f"probe.{tag}.pyc").is_file()
+    relative = os.path.splitdrive(str(site))[1].lstrip("\\/")
+    assert (prefix / relative / "__bundleup_script__" / f"probe.{tag}.pyc").is_file()
     assert not list(site.rglob("*.pyc"))
 
 
 def test_wrong_python_version_is_explained(bundle: Path, tmp_path: Path) -> None:
     if not os.path.exists(SYSTEM_PYTHON):
         pytest.skip("needs a second Python")
-    r = run(bundle, env_for(tmp_path), python=SYSTEM_PYTHON)
-    if (
-        f"{sys.version_info[0]}.{sys.version_info[1]}"
-        in r.stderr.split("running on Python ")[-1][:5]
+    probe_version = [SYSTEM_PYTHON, "-c", "import sys; print(sys.version_info[:2])"]
+    if subprocess.run(probe_version, capture_output=True, text=True).stdout.strip() == str(
+        sys.version_info[:2]
     ):
-        pytest.skip("same version")
+        pytest.skip(f"{SYSTEM_PYTHON} is the same version as the test Python")
+    r = run(bundle, env_for(tmp_path), python=SYSTEM_PYTHON)
     assert r.returncode == 1
     assert f"bundled for Python {sys.version_info[0]}.{sys.version_info[1]}" in r.stderr
     assert "Traceback" not in r.stderr
 
 
 def test_wrong_platform_is_explained(bundle: Path, tmp_path: Path) -> None:
-    fake = relabel(
-        bundle,
-        tmp_path / "linux.pyz",
-        PLATFORM="linux",
-        TARGET="Python 3.12 on Linux x86_64",
-        MACHINE="x86_64",
-    )
+    # A platform no test machine has, so this fails everywhere.
+    fake = relabel(bundle, tmp_path / "other.pyz", PLATFORM="sunos5", TARGET="Python on Solaris")
     r = run(fake, env_for(tmp_path))
     assert r.returncode == 1
-    assert "bundled for Python 3.12 on Linux x86_64, but this machine is" in r.stderr
+    assert "bundled for Python on Solaris, but this machine is" in r.stderr
     assert "Traceback" not in r.stderr
 
 
@@ -177,7 +189,8 @@ def test_bundle_layout(bundle: Path) -> None:
         assert sorted(zf.namelist()) == ["__main__.py", "__main__.pyc", "payload.zip"]
         assert zf.getinfo("payload.zip").compress_type == zipfile.ZIP_STORED
     assert bundle.read_bytes().startswith(b"#!/usr/bin/env python3\n")
-    assert os.access(bundle, os.X_OK)
+    if not WINDOWS:
+        assert os.access(bundle, os.X_OK)
 
 
 def test_cli_version_and_help(capsys: pytest.CaptureFixture[str]) -> None:
@@ -203,10 +216,12 @@ def test_builds_without_uv_on_path(tmp_path: Path) -> None:
     """bundleup depends on the `uv` package, so it works where uv was never installed."""
     src = tmp_path / "probe.py"
     src.write_text(PROBE)
-    bundleup = Path(sys.executable).with_name("bundleup")
+    bundleup = Path(sys.executable).with_name("bundleup.exe" if WINDOWS else "bundleup")
+    env = dict(os.environ)  # the real environment (uv's cache, home), minus uv on PATH
+    env["PATH"] = env_for(tmp_path)["PATH"]
     r = subprocess.run(
         [str(bundleup), str(src), "-o", str(tmp_path / "p.pyz"), "--python", sys.executable, "-q"],
-        env={"PATH": "/usr/bin:/bin", "HOME": os.environ["HOME"]},
+        env=env,
         capture_output=True,
         text=True,
     )

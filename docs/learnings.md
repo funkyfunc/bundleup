@@ -6,6 +6,12 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-05** · testing · Inside a project, `uv python find 3.12` returns the project's own
+  `.venv` even with `--managed-python --no-project`; only running it from outside the repo (and
+  without `VIRTUAL_ENV`) finds a plain interpreter. Since milestone 1 the harness had run "3.12"
+  bundles on the repo venv, whose `packaging`/`pygments` could have masked a package missing from a
+  bundle. Fixed (the harness now refuses venvs); a clean re-run passed all 21 projects and every
+  hostile condition, so no result changed. Evidence: `gauntlet/run_bundlers.py` `python_path()`.
 - **2026-10-05** · process · Other sessions edit this repo concurrently: a `git add -A` commit swept
   in someone else's in-progress ADR and roadmap edits (undone before pushing). Stage explicit paths,
   and re-read docs from disk before relying on them. Evidence: CLAUDE.md "Working rules".

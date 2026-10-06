@@ -56,8 +56,10 @@ def _check() -> None:
             "Run it with Python %s instead, for example: python%s %s"
             % (want, here[0], here[1], sys.executable, want, want, os.path.basename(_ARCHIVE))
         )
-    machine = MACHINE and _machine()
-    if sys.platform != PLATFORM or machine != MACHINE:
+    # Only refuse a CPU that is known to differ: Windows reports it through an environment
+    # variable, which a stripped-down environment may lack.
+    machine = _machine() if MACHINE else ""
+    if sys.platform != PLATFORM or (machine and machine != MACHINE):
         names = {"darwin": "macOS", "linux": "Linux", "win32": "Windows"}
         _fail(
             "this app was bundled for %s, but this machine is %s %s."

@@ -4,7 +4,8 @@ The existing tools all get the same inputs: the project's locked dependencies ex
 (or the PEP 723 header) plus the project itself built as a wheel. bundleup is given the project
 directory (or script) directly, so its build time also includes the export and the project build.
 Each bundle is built with the target Python, then run with that Python from an empty directory, a
-fresh HOME, and network access denied (macOS sandbox-exec), cold and then warm.
+fresh HOME, and network access denied where the platform allows it (macOS: sandbox-exec; Linux:
+`sudo unshare --net`, as on CI runners; Windows: not blocked, recorded per result), cold then warm.
 
 Usage:
     uv run gauntlet/run_bundlers.py                         # everything, Python 3.9 + 3.12
@@ -21,12 +22,16 @@ from __future__ import annotations
 
 import argparse
 import concurrent.futures as cf
+import functools
+import getpass
 import json
+import os
 import re
 import shutil
 import stat
 import subprocess
 import sys
+import tempfile
 import time
 import tomllib
 from dataclasses import asdict, dataclass, field
@@ -48,9 +53,15 @@ TOOLS: dict[str, str | None] = {
     "zipapp-naive": None,
     "bundleup": None,
 }
-BUNDLEUP = ROOT.parent / ".venv" / "bin" / "bundleup"  # this repo's bundleup, from `uv sync`
-PYTHONS: dict[str, str | None] = {"3.9": "/usr/bin/python3", "3.12": None}  # None = ask uv
-NO_NETWORK = "(version 1)(allow default)(deny network*)"
+WINDOWS = sys.platform == "win32"
+# This repo's bundleup, installed by `uv sync`.
+BUNDLEUP = ROOT.parent / ".venv" / ("Scripts/bundleup.exe" if WINDOWS else "bin/bundleup")
+DEFAULT_PYTHONS = ["3.9", "3.12"]
+# The "user's Python" for a version, where the OS ships one worth testing; otherwise uv-managed.
+SYSTEM_PYTHONS = {"darwin": {"3.9": "/usr/bin/python3"}}
+NO_NETWORK = "(version 1)(allow default)(deny network*)"  # macOS sandbox-exec profile
+# Outcomes that mean "the project didn't do what gauntlet.toml says it should" (see --check).
+UNEXPECTED = {"run-fail", "build-fail", "late-fail", "harness-error"}
 BUILD_TIMEOUT = 900
 RUN_TIMEOUT = 300
 
@@ -72,6 +83,7 @@ class Result:
     error_kind: str = ""
     detail: str = ""
     extra: list[str] = field(default_factory=list)
+    network_blocked: bool = True
 
 
 @dataclass(frozen=True)
@@ -103,8 +115,78 @@ def sh(
     return subprocess.run(cmd, cwd=cwd, env=env, capture_output=True, text=True, timeout=timeout)
 
 
+@functools.cache
 def python_path(version: str) -> str:
-    return PYTHONS[version] or sh(["uv", "python", "find", version]).stdout.strip()
+    """The interpreter bundles are built with and run on: never a virtual environment.
+
+    Inside this repo, `uv python find` returns the repo's own .venv, whose site-packages (bundleup's
+    dependencies) could mask a package missing from a bundle. So ask from outside the repo, for a
+    uv-managed Python, and refuse anything that turns out to be a venv.
+    """
+    system = SYSTEM_PYTHONS.get(sys.platform, {}).get(version)
+    if system and Path(system).exists():
+        return system
+    env = {k: v for k, v in os.environ.items() if k != "VIRTUAL_ENV"}
+    found = sh(
+        ["uv", "python", "find", version, "--managed-python"],
+        cwd=Path(tempfile.gettempdir()),
+        env=env,
+    )
+    exe = found.stdout.strip()
+    if found.returncode or not exe:
+        raise RuntimeError(f"no uv-managed Python {version}; run: uv python install {version}")
+    is_venv = sh([exe, "-c", "import sys; print(sys.prefix != sys.base_prefix)"]).stdout.strip()
+    if is_venv != "False":
+        raise RuntimeError(f"{exe} is a virtual environment; the gauntlet needs a plain Python")
+    return exe
+
+
+@functools.cache
+def network_blocker() -> str | None:
+    """How this machine can run a process without network: "sandbox-exec", "unshare" or None."""
+    if sys.platform == "darwin" and shutil.which("sandbox-exec"):
+        return "sandbox-exec"
+    if sys.platform.startswith("linux") and shutil.which("unshare") and shutil.which("sudo"):
+        # Needs passwordless sudo (CI runners have it). A user-namespace `unshare -rn` would be
+        # simpler, but its fake root can write to read-only directories, which defeats the
+        # read-only hostile conditions.
+        if sh(["sudo", "-n", "unshare", "--net", "true"], timeout=30).returncode == 0:
+            return "unshare"
+    return None
+
+
+def without_network(cmd: list[str], env: dict[str, str]) -> list[str]:
+    """Wrap a command so it runs with no network access, if this machine supports that."""
+    blocker = network_blocker()
+    if blocker == "sandbox-exec":
+        return ["sandbox-exec", "-p", NO_NETWORK, *cmd]
+    if blocker == "unshare":
+        # sudo resets the environment, so pass it explicitly to the dropped-back-to-us command.
+        user = ["sudo", "-n", "-u", getpass.getuser(), "--"]
+        return ["sudo", "-n", "unshare", "--net", "--", *user, "env", "-i",
+                *(f"{k}={v}" for k, v in env.items()), *cmd]  # fmt: skip
+    return cmd
+
+
+def run_env(home: Path) -> dict[str, str]:
+    """A minimal environment with a fresh HOME (and on Windows, fresh profile directories)."""
+    tmp = home / "tmp"
+    env = {"HOME": str(home), "TMPDIR": str(tmp), "LANG": "en_US.UTF-8"}
+    if WINDOWS:
+        system_root = os.environ.get("SYSTEMROOT", r"C:\Windows")
+        env |= {
+            "SYSTEMROOT": system_root,  # Python can't start without it
+            # Always set in a real session; the loader reads the CPU from it.
+            "PROCESSOR_ARCHITECTURE": os.environ.get("PROCESSOR_ARCHITECTURE", ""),
+            "PATH": rf"{system_root}\System32",
+            "USERPROFILE": str(home),
+            "LOCALAPPDATA": str(home / "AppData" / "Local"),
+            "TEMP": str(tmp),
+            "TMP": str(tmp),
+        }
+    else:
+        env["PATH"] = "/usr/bin:/bin"
+    return env
 
 
 def load(project: Path) -> Meta:
@@ -211,15 +293,9 @@ def run_bundle(
     cwd: Path,
     extra_env: dict[str, str] | None = None,
 ) -> Run:
-    env = {
-        "PATH": "/usr/bin:/bin",
-        "HOME": str(home),
-        "TMPDIR": str(home / "tmp"),
-        "LANG": "en_US.UTF-8",
-        **(extra_env or {}),
-    }
+    env = run_env(home) | (extra_env or {})
     (home / "tmp").mkdir(parents=True, exist_ok=True)
-    cmd = ["sandbox-exec", "-p", NO_NETWORK, py, str(bundle), *args]
+    cmd = without_network([py, str(bundle), *args], env)
     start = time.perf_counter()
     try:
         r = sh(cmd, cwd=cwd, env=env, timeout=RUN_TIMEOUT)
@@ -245,7 +321,7 @@ def fresh_dirs(base: Path, name: str) -> tuple[Path, Path]:
 def one(tool: str, project: Path, version: str, conditions: bool) -> list[Result]:
     """Build one project with one tool for one Python, run it, and optionally run hostile cases."""
     meta = load(project)
-    res = Result(tool, meta["id"], version)
+    res = Result(tool, meta["id"], version, network_blocked=network_blocker() is not None)
     if version not in SpecifierSet(meta["requires_python"]):
         below = meta.get("expect_refuse_below")
         if not below:
@@ -317,6 +393,7 @@ def hostile(
 
     def record(condition: str, run: Run) -> None:
         r = Result(tool, meta["id"], version, condition=condition)
+        r.network_blocked = network_blocker() is not None
         r.outcome, r.cold_s = ("pass" if passed(run) else "run-fail"), round(run.elapsed, 2)
         if not passed(run):
             r.error_kind, r.detail = classify(run.output), run.output[-800:]
@@ -330,26 +407,30 @@ def hostile(
     home, _ = fresh_dirs(stage, "weird")
     record("path-with-spaces", run_bundle(py, copy, args=args, home=home, cwd=weird))
 
-    # 2. Read-only working directory (e.g. launched from / or a mounted volume).
-    home, cwd = fresh_dirs(stage, "rocwd")
-    cwd.chmod(stat.S_IRUSR | stat.S_IXUSR)
-    record("read-only-cwd", run_bundle(py, bundle, args=args, home=home, cwd=cwd))
-    cwd.chmod(0o755)
-
-    # 3. HOME not writable, so no cache can be created there.
-    home, cwd = fresh_dirs(stage, "rohome")
-    (home / "tmp").mkdir()
-    home.chmod(stat.S_IRUSR | stat.S_IXUSR)
-    record("read-only-home", run_bundle(py, bundle, args=args, home=home, cwd=cwd))
-    home.chmod(0o755)
-
-    # 4. Two cold starts at the same time sharing one HOME (first-run extraction race).
+    # 2. Two cold starts at the same time sharing one HOME (first-run extraction race).
     home, cwd = fresh_dirs(stage, "race")
     with cf.ThreadPoolExecutor(2) as pool:
         runs = list(
             pool.map(lambda _: run_bundle(py, bundle, args=args, home=home, cwd=cwd), range(2))
         )
     record("concurrent-first-run", next((r for r in runs if not passed(r)), runs[0]))
+
+    if WINDOWS:  # Windows ignores the read-only attribute on directories: nothing to test
+        return out
+
+    # 3. Read-only working directory (e.g. launched from / or a mounted volume).
+    home, cwd = fresh_dirs(stage, "rocwd")
+    cwd.chmod(stat.S_IRUSR | stat.S_IXUSR)
+    record("read-only-cwd", run_bundle(py, bundle, args=args, home=home, cwd=cwd))
+    cwd.chmod(0o755)
+
+    # 4. HOME not writable, so no cache can be created there.
+    home, cwd = fresh_dirs(stage, "rohome")
+    (home / "tmp").mkdir()
+    home.chmod(stat.S_IRUSR | stat.S_IXUSR)
+    record("read-only-home", run_bundle(py, bundle, args=args, home=home, cwd=cwd))
+    home.chmod(0o755)
+
     return out
 
 
@@ -357,13 +438,16 @@ def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("only", nargs="*", help="project id prefixes")
     parser.add_argument("--tool", action="append", choices=list(TOOLS))
-    parser.add_argument("--python", action="append", choices=list(PYTHONS))
+    parser.add_argument("--python", action="append", help="e.g. 3.9, 3.11 (default: 3.9 and 3.12)")
     parser.add_argument("--heavy", action="store_true")
     parser.add_argument(
         "--conditions", action="store_true", help="also run hostile conditions on passing bundles"
     )
     parser.add_argument("--jobs", type=int, default=6)
     parser.add_argument("--out", default="baseline")
+    parser.add_argument(
+        "--check", action="store_true", help="exit 1 if any result isn't what the project expects"
+    )
     opts = parser.parse_args()
 
     projects = []
@@ -380,7 +464,10 @@ def main() -> int:
     if "bundleup" in (opts.tool or TOOLS):
         sh(["uv", "sync", "--quiet"], cwd=ROOT.parent).check_returncode()
     jobs = [
-        (t, p, v) for t in (opts.tool or TOOLS) for p in projects for v in (opts.python or PYTHONS)
+        (t, p, v)
+        for t in (opts.tool or TOOLS)
+        for p in projects
+        for v in (opts.python or DEFAULT_PYTHONS)
     ]
     results: list[Result] = []
     with cf.ThreadPoolExecutor(opts.jobs) as pool:
@@ -400,6 +487,16 @@ def main() -> int:
     results.sort(key=lambda r: (r.project, r.tool, r.python, r.condition))
     (RESULTS / f"{opts.out}.json").write_text(json.dumps([asdict(r) for r in results], indent=2))
     print(f"\nwrote {RESULTS / (opts.out + '.json')}")
+    if network_blocker() is None:
+        print("note: network access was NOT blocked on this machine", file=sys.stderr)
+    unexpected = [r for r in results if r.outcome in UNEXPECTED]
+    if opts.check and unexpected:
+        print(f"{len(unexpected)} unexpected result(s):", file=sys.stderr)
+        for r in unexpected:
+            detail = r.detail.strip().splitlines()[-1:] or [""]
+            print(f"  {r.project} {r.tool} py{r.python} {r.condition}: {r.outcome} "
+                  f"{r.error_kind} {detail[0]}", file=sys.stderr)  # fmt: skip
+        return 1
     return 0
 
 
