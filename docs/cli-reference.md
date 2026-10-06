@@ -13,6 +13,7 @@ Make self-contained Python files: your code and its dependencies in one .pyz tha
 positional arguments:
   <command>
     build        bundle a project or script into one .pyz
+    verify       check a bundle against its manifest
 
 options:
   -h, --help     show this help message and exit
@@ -22,7 +23,7 @@ examples:
   bundleup build                    bundle the project here into dist/<name>.pyz
   bundleup build path/to/script.py  bundle a PEP 723 script and its dependencies
   bundleup build --python 3.9       build for Python 3.9 (a bundle runs on one version)
-  bundleup build --json             print the result as JSON on stdout
+  bundleup verify dist/app.pyz      check a bundle (and its unpacked copy) against its manifest
 
 docs: https://github.com/funkyfunc/bundleup
 bugs: https://github.com/funkyfunc/bundleup/issues
@@ -59,8 +60,26 @@ examples:
   bundleup build                    bundle the project here into dist/<name>.pyz
   bundleup build path/to/script.py  bundle a PEP 723 script and its dependencies
   bundleup build --python 3.9       build for Python 3.9 (a bundle runs on one version)
-  bundleup build --json             print the result as JSON on stdout
+  bundleup verify dist/app.pyz      check a bundle (and its unpacked copy) against its manifest
 
 docs: https://github.com/funkyfunc/bundleup
 bugs: https://github.com/funkyfunc/bundleup/issues
+```
+
+## `bundleup verify`
+
+```
+usage: bundleup verify [-h] [--json] [-q] [-v] [--color WHEN] bundle
+
+Check a bundle, and its unpacked copy on this machine, against its manifest.
+
+positional arguments:
+  bundle         the .pyz to check
+
+options:
+  -h, --help     show this help message and exit
+  --json         print one JSON document on stdout
+  -q, --quiet    -q: warnings and errors only; -qq: errors
+  -v, --verbose  -v: show the traceback if bundleup crashes
+  --color WHEN   auto, always or never (default: auto; also NO_COLOR, FORCE_COLOR)
 ```

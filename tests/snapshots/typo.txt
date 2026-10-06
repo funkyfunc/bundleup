@@ -1,2 +1,2 @@
-error: argument <command>: invalid choice: 'buld' (choose from build)
+error: unknown command `buld`
 hint: did you mean `bundleup build`?

@@ -82,3 +82,9 @@ class BundleMismatchError(BundleupError):
 
     code = "bundle-mismatch"
     exit_code = ExitCode.INTERNAL_ERROR
+
+
+class NotABundleError(BundleupError):
+    """The file isn't a bundleup bundle, or was made before bundles carried a manifest."""
+
+    code = "not-a-bundle"

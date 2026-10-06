@@ -53,7 +53,8 @@ merged; ask if unsure.
    - **Lockfile vs bundle check:** every locked runtime distribution present at the locked
      version; nothing extra (no dev dependencies); a build-time error if not.
    - **Wheel integrity:** every bundled file matches the sha256 in its wheel's `RECORD`.
-   - **Embedded manifest + `bundleup verify`:** the bundle records every file's hash;
+   - ~~**Embedded manifest + `bundleup verify`**~~ **Done 2026-10-05**
+     ([ADR-0019](adr/0019-manifest-and-verify-command.md)): the bundle records every file's hash;
      `bundleup verify app.pyz` (or `uvx bundleup verify`) re-checks it. The owner chose a command
      over a hook inside every bundle (2026-10-05); it lands after item 5 adds verb commands. Together with the two checks above and reproducible
      builds, this is a hash chain from `uv.lock` to every file that runs

@@ -16,6 +16,7 @@ from ._errors import (
     EntryPointError,
     ExitCode,
     LockfileOutdatedError,
+    NotABundleError,
     ProjectError,
     PythonMismatchError,
     PythonNotFoundError,
@@ -26,6 +27,7 @@ from ._errors import (
 
 if TYPE_CHECKING:
     from ._build import BuildOptions, BuildResult, ProgressEvent, Target, build
+    from ._verify import VerifyReport, verify
 
 __version__ = "0.0.1"
 
@@ -37,6 +39,7 @@ __all__ = [
     "EntryPointError",
     "ExitCode",
     "LockfileOutdatedError",
+    "NotABundleError",
     "ProgressEvent",
     "ProjectError",
     "PythonMismatchError",
@@ -45,13 +48,19 @@ __all__ = [
     "UsageError",
     "UvError",
     "UvNotFoundError",
+    "VerifyReport",
     "__version__",
     "build",
+    "verify",
 ]
 
 # Public names whose module is imported only when they're first used.
 _LAZY = {
-    name: "._build" for name in ("BuildOptions", "BuildResult", "ProgressEvent", "Target", "build")
+    **{
+        name: "._build"
+        for name in ("BuildOptions", "BuildResult", "ProgressEvent", "Target", "build")
+    },
+    **{name: "._verify" for name in ("VerifyReport", "verify")},
 }
 
 

@@ -6,6 +6,11 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-05** · testing · argparse's error wording changes even between patch releases
+  (`(choose from 'build')` vs `(choose from build)` across 3.12.x), so CLI snapshots must only
+  contain bundleup's own words. A corruption test that flipped a byte at a fixed offset landed in
+  the loader, not the payload, and showed `verify` wasn't checking the loader: target bytes by zip
+  offsets, and hash everything that runs. Evidence: [tests/test_verify_command.py](../tests/test_verify_command.py).
 - **2026-10-05** · cli · `uv export --locked` refuses a PEP 723 script that has no lockfile, so
   "CI implies `--locked`" must only apply when a lockfile exists. argparse's help layout and error
   wording change between Python versions (3.13: `-o, --output FILE`), so help snapshots are pinned

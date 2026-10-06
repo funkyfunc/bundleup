@@ -26,7 +26,7 @@ examples:
   bundleup build                    bundle the project here into dist/<name>.pyz
   bundleup build path/to/script.py  bundle a PEP 723 script and its dependencies
   bundleup build --python 3.9       build for Python 3.9 (a bundle runs on one version)
-  bundleup build --json             print the result as JSON on stdout
+  bundleup verify dist/app.pyz      check a bundle (and its unpacked copy) against its manifest
 
 docs: https://github.com/funkyfunc/bundleup
 bugs: https://github.com/funkyfunc/bundleup/issues

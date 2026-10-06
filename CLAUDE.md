@@ -70,8 +70,10 @@ Do these **as you go**, not only at the end:
   x64 and macOS arm64 × Python 3.9/3.11/3.12. bundleup passes everywhere, including Windows.
 - **Correctness checks:** every build fails unless the payload matches `uv.lock` and every
   wheel's `RECORD` exactly (`src/bundleup/_verify.py`); the gauntlet's `matches-venv` condition
-  compares each bundle with a `uv sync` install. Still to do from roadmap item 4: embedded
-  manifest + verify command, nightly top-PyPI smoke test, real-world test suites.
+  compares each bundle with a `uv sync` install. Every bundle carries `manifest.json`;
+  `bundleup verify` checks a bundle and its unpacked copy against it
+  ([ADR-0019](docs/adr/0019-manifest-and-verify-command.md)). Still to do from roadmap item 4:
+  nightly top-PyPI smoke test, real-world test suites.
 - **CLI follows the style guide** (ADR-0016): `bundleup build [PATH]`, `--json`, `error:`/`hint:`,
   exit codes, a typed library API with lazy exports
   ([ADR-0018](docs/adr/0018-package-layout-and-lazy-api.md), **Proposed**). Open rules are listed

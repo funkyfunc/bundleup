@@ -2,7 +2,8 @@
 #
 # Runs on the user's Python, before anything else in the bundle. It checks the Python version
 # and platform, makes sure the payload is extracted to a cache, puts it on sys.path, then starts
-# the app. It's a script, so the calls at the bottom are the program.
+# the app. The calls at the bottom are the program; `bundleup verify` imports the functions to find
+# a bundle's cache the same way.
 #
 # Constraints that make this file look different from the rest of the codebase:
 # - The warm path (already extracted) must stay a handful of stat calls: no imports beyond os and
@@ -74,8 +75,9 @@ def _check() -> None:
         )
 
 
-def _roots() -> "list[tuple[str, bool]]":
-    """Cache directories to try, best first, each with whether it's shared with other users.
+def _roots(archive: str) -> "list[tuple[str, bool]]":
+    """Cache directories to try for `archive`, best first, each with whether it's shared with
+    other users.
 
     Never the working directory.
     """
@@ -101,7 +103,7 @@ def _roots() -> "list[tuple[str, bool]]":
     if tmp:
         uid = os.getuid() if hasattr(os, "getuid") else 0
         roots.append((os.path.join(os.path.abspath(tmp), "bundleup-%d" % uid), True))
-    roots.append((os.path.join(os.path.dirname(_ARCHIVE), ".bundleup"), False))
+    roots.append((os.path.join(os.path.dirname(archive), ".bundleup"), False))
     return roots
 
 
@@ -117,7 +119,7 @@ def _private(root: str) -> bool:
 
 
 def _find() -> "str | None":
-    for root, shared in _roots():
+    for root, shared in _roots(_ARCHIVE):
         path = os.path.join(root, DIRNAME)
         if os.path.isdir(path) and (not shared or _private(root)):
             return path
@@ -220,7 +222,7 @@ def _extract() -> str:
     If another process wins the race, its copy is used and ours is thrown away.
     """
     problems = []  # type: list[str]
-    for root, shared in _roots():
+    for root, shared in _roots(_ARCHIVE):
         final = os.path.join(root, DIRNAME)
         tmp = os.path.join(root, ".tmp-%s-%d-%s" % (DIRNAME, os.getpid(), os.urandom(4).hex()))
         try:
@@ -293,7 +295,8 @@ def _run(site: str) -> None:
         runpy.run_path(os.path.join(site, target), run_name="__main__")
 
 
-_check()
-_site = _find() or _extract()
-_activate(_site)
-_run(_site)
+if __name__ == "__main__":
+    _check()
+    _site = _find() or _extract()
+    _activate(_site)
+    _run(_site)

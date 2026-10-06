@@ -22,9 +22,10 @@ from ._term import Style
 
 if TYPE_CHECKING:
     from ._build import BuildResult, ProgressEvent
+    from ._verify import VerifyReport
 
 SCHEMA_VERSION = 1  # of the --json document; additive changes only within a version
-COMMANDS = ["build"]
+COMMANDS = ["build", "verify"]
 DOCS_URL = "https://github.com/funkyfunc/bundleup"
 
 DESCRIPTION = (
@@ -36,7 +37,7 @@ examples:
   bundleup build                    bundle the project here into dist/<name>.pyz
   bundleup build path/to/script.py  bundle a PEP 723 script and its dependencies
   bundleup build --python 3.9       build for Python 3.9 (a bundle runs on one version)
-  bundleup build --json             print the result as JSON on stdout
+  bundleup verify dist/app.pyz      check a bundle (and its unpacked copy) against its manifest
 
 docs: {DOCS_URL}
 bugs: {ISSUES_URL}"""
@@ -131,21 +132,33 @@ def parsers() -> dict[str, argparse.ArgumentParser]:
         const="frozen",
         help="use uv.lock as is, without checking it (as in uv)",
     )
-    build.add_argument("--json", action="store_true", help="print one JSON document on stdout")
-    build.add_argument(
+    _add_output_options(build, verbose="-v: step timings; -vv: commands run")
+    verify = commands.add_parser(
+        "verify",
+        help="check a bundle against its manifest",
+        description="Check a bundle, and its unpacked copy on this machine, against its manifest.",
+        formatter_class=_HelpFormatter,
+        allow_abbrev=False,
+    )
+    verify.add_argument("bundle", type=Path, help="the .pyz to check")
+    _add_output_options(verify, verbose="-v: show the traceback if bundleup crashes")
+    return {"bundleup": top, "build": build, "verify": verify}
+
+
+def _add_output_options(command: argparse.ArgumentParser, *, verbose: str) -> None:
+    """--json, -q, -v and --color, the same for every command (rules 13-16)."""
+    command.add_argument("--json", action="store_true", help="print one JSON document on stdout")
+    command.add_argument(
         "-q", "--quiet", action="count", default=0, help="-q: warnings and errors only; -qq: errors"
     )
-    build.add_argument(
-        "-v", "--verbose", action="count", default=0, help="-v: step timings; -vv: commands run"
-    )
-    build.add_argument(
+    command.add_argument("-v", "--verbose", action="count", default=0, help=verbose)
+    command.add_argument(
         "--color",
         choices=["auto", "always", "never"],
         metavar="WHEN",
         default="auto",
         help="auto, always or never (default: auto; also NO_COLOR, FORCE_COLOR)",
     )
-    return {"bundleup": top, "build": build}
 
 
 def _env_path(name: str) -> Path | None:
@@ -203,13 +216,18 @@ def _size(n: int) -> str:
     return ""
 
 
+def _shown(path: Path) -> str:
+    """A path as people want to read it: relative if it's below the working directory."""
+    try:
+        relative = os.path.relpath(path)
+    except ValueError:  # another drive on Windows
+        return str(path)
+    return str(path) if relative.startswith("..") else relative
+
+
 def _success_lines(result: BuildResult, style: Style) -> list[str]:
     """At most two lines (rule 11): what was made and where, then the target in dim."""
-    try:
-        shown = os.path.relpath(result.output)
-        shown = str(result.output) if shown.startswith("..") else shown
-    except ValueError:  # another drive on Windows
-        shown = str(result.output)
+    shown = _shown(result.output)
     name = f"{result.name} {result.version}" if result.version else result.name
     path = style.link(style.bold(shown), result.output.as_uri())
     first = (
@@ -222,14 +240,14 @@ def _success_lines(result: BuildResult, style: Style) -> list[str]:
 
 
 def _emit_json(
-    command: str, code: ExitCode, result: BuildResult | None, diags: list[Diagnostic]
+    command: str, code: ExitCode, result: dict[str, object] | None, diags: list[Diagnostic]
 ) -> None:
     document = {
         "schema_version": SCHEMA_VERSION,
         "command": command,
         "ok": code == ExitCode.OK,
         "exit_code": int(code),
-        "result": result.to_json_dict() if result else None,
+        "result": result,
         "diagnostics": [d.to_json_dict() for d in diags],
     }
     print(json.dumps(document, indent=2, sort_keys=True))
@@ -274,7 +292,7 @@ def _run_build(opts: argparse.Namespace) -> ExitCode:
     finally:
         status.clear()
     if opts.json:
-        _emit_json("build", ExitCode.OK, result, [])
+        _emit_json("build", ExitCode.OK, result.to_json_dict(), [])
     elif opts.quiet == 0:
         for line in _success_lines(result, style):
             print(line, file=err)
@@ -287,6 +305,63 @@ def _run_build(opts: argparse.Namespace) -> ExitCode:
     return ExitCode.OK
 
 
+def _verify_diagnostics(report: VerifyReport) -> list[Diagnostic]:
+    def listing(problems: list[str]) -> str:
+        more = f"\n... and {len(problems) - 20} more" if len(problems) > 20 else ""
+        return "\n".join(problems[:20]) + more
+
+    diags = []
+    if report.problems:
+        diags.append(
+            Diagnostic(
+                "verify-mismatch",
+                "error",
+                f"{_shown(report.bundle)} doesn't match its manifest",
+                hint="rebuild it, or get a fresh copy from where it came from",
+                detail=listing(report.problems),
+            )
+        )
+    if report.cache and report.cache_problems:
+        diags.append(
+            Diagnostic(
+                "cache-mismatch",
+                "error",
+                f"the unpacked copy at {report.cache} doesn't match the manifest",
+                hint=f"delete {report.cache}; the bundle unpacks again on its next run",
+                detail=listing(report.cache_problems),
+            )
+        )
+    return diags
+
+
+def _run_verify(opts: argparse.Namespace) -> ExitCode:
+    from ._verify import verify  # deferred: --help and --version stay instant
+
+    err = sys.stderr
+    style = Style(err, opts.color)
+    try:
+        report = verify(opts.bundle)
+    except BundleupError as e:
+        if opts.json:
+            _emit_json("verify", e.exit_code, None, [_diagnostic(e)])
+        else:
+            _print_diagnostic(_diagnostic(e), style, err)
+        return e.exit_code
+    diags = _verify_diagnostics(report)
+    code = ExitCode.OK if report.ok else ExitCode.BUILD_FAILED
+    if opts.json:
+        _emit_json("verify", code, report.to_json_dict(), diags)
+    elif diags:
+        for diag in diags:
+            _print_diagnostic(diag, style, err)
+    elif opts.quiet == 0:
+        files = f"{report.files:,} files match its manifest"
+        print(f"{style.bold('Verified')} {_shown(report.bundle)}: {files}", file=err)
+        cache = f"matches ({report.cache})" if report.cache else "not unpacked on this machine"
+        print(style.dim(f"  unpacked copy: {cache}"), file=err)
+    return code
+
+
 def _first_word(argv: list[str]) -> str:
     words = [a for a in argv if not a.startswith("-")]
     return words[0] if words else ""
@@ -295,9 +370,11 @@ def _first_word(argv: list[str]) -> str:
 def _usage_error(message: str, argv: list[str]) -> ExitCode:
     hint = "run `bundleup --help` to see the commands and options"
     word = _first_word(argv)
-    if "invalid choice" in message and word:
+    if word and word not in COMMANDS and "invalid choice" in message:
         import difflib  # only on this error path: keeps startup light (rule 35)
 
+        # Our own wording: argparse's changes between Python releases, even patch releases.
+        message = f"unknown command `{word}`"
         close = difflib.get_close_matches(word, COMMANDS, n=1)
         if close:
             hint = f"did you mean `bundleup {close[0]}`?"
@@ -336,7 +413,7 @@ def main(argv: list[str] | None = None) -> int:
     except _UsageProblem as e:
         return _usage_error(str(e), args)
     try:
-        return _run_build(opts)
+        return _run_verify(opts) if opts.command == "verify" else _run_build(opts)
     except KeyboardInterrupt:
         print("interrupted", file=sys.stderr)
         return ExitCode.INTERRUPTED

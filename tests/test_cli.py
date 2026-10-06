@@ -111,7 +111,6 @@ def test_bare_command_prints_help_and_fails(tmp_path: Path) -> None:
     check_snapshot("bare", r.stderr)
 
 
-@help_snapshot  # argparse words "invalid choice" differently across versions
 def test_unknown_command_suggests_the_closest(tmp_path: Path) -> None:
     r = cli("buld", cwd=tmp_path)
     assert r.returncode == 2 and r.stdout == ""
@@ -207,7 +206,13 @@ def test_json_usage_error(tmp_path: Path) -> None:
 def api_description() -> str:
     lines = [f"__all__ = {sorted(bundleup.__all__)}"]
     lines.append(f"build{inspect.signature(bundleup.build)}")
-    for cls in (bundleup.BuildOptions, bundleup.BuildResult, bundleup.ProgressEvent):
+    lines.append(f"verify{inspect.signature(bundleup.verify)}")
+    for cls in (
+        bundleup.BuildOptions,
+        bundleup.BuildResult,
+        bundleup.ProgressEvent,
+        bundleup.VerifyReport,
+    ):
         lines.append(f"{cls.__name__}: " + ", ".join(f"{f.name}: {f.type}" for f in fields(cls)))
     lines.append("ExitCode: " + ", ".join(f"{c.name}={c.value}" for c in bundleup.ExitCode))
     for name in sorted(bundleup.__all__):
@@ -238,15 +243,15 @@ def test_version_and_help_import_nothing_heavy(tmp_path: Path) -> None:
 
 
 def reference_markdown() -> str:
-    parsers = _cli.parsers()
-    top, build = parsers["bundleup"], parsers["build"]
+    sections = []
+    for name, command in _cli.parsers().items():
+        title = "bundleup" if name == "bundleup" else f"bundleup {name}"
+        sections.append(f"## `{title}`\n\n```\n{command.format_help()}```\n")
     return (
         "# Command-line reference\n\n"
         "Generated from the parser by `tests/test_cli.py` (rule 34 of the "
         "[CLI style guide](cli-style-guide.md)); don't edit by hand. Regenerate with\n"
-        "`UPDATE_SNAPSHOTS=1 uv run pytest -q tests/test_cli.py`.\n\n"
-        f"## `bundleup`\n\n```\n{top.format_help()}```\n\n"
-        f"## `bundleup build`\n\n```\n{build.format_help()}```\n"
+        "`UPDATE_SNAPSHOTS=1 uv run pytest -q tests/test_cli.py`.\n\n" + "\n".join(sections)
     )
 
 

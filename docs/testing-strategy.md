@@ -10,7 +10,7 @@ someone tries it on a personal project. Decided direction: [ADR-0017](adr/0017-p
 |---|---|---|---|
 | Unit tests (`tests/`) | Loader and CLI edge cases | Every commit (hooks) and CI | Exists |
 | Gauntlet (22 projects) | Bundles run and *behave* for known failure modes, incl. hostile conditions | CI, every push | Exists (Linux, Windows, macOS since 2026-10-05) |
-| Correctness checks | Bundles contain *exactly* the right files: lock vs bundle, wheel `RECORD` hashes, differential test vs a `uv sync` venv | Every build (lock, `RECORD`); CI (`matches-venv`) | Exists (2026-10-05); manifest + `--verify` to do |
+| Correctness checks | Bundles contain *exactly* the right files: lock vs bundle, wheel `RECORD` hashes, manifest, differential test vs a `uv sync` venv | Every build (lock, `RECORD`, manifest); `bundleup verify`; CI (`matches-venv`) | Exists (2026-10-05) |
 | Platform matrix | All of the above on Linux, Windows and macOS, x64 and arm64, Python 3.9–3.14 | CI | Exists for Linux x64/arm64, Windows x64, macOS arm64 × 3.9/3.11/3.12 |
 | **Corpus testing** | bundleup works on real projects nobody wrote for us | Nightly CI | Roadmap (below) |
 | Dogfooding and early users | Real workflows, starting with the owner's own skills | By hand | Ongoing |
@@ -36,7 +36,7 @@ Every file can be traced back through a chain of hashes:
 | `uv.lock` → bundle | Every locked runtime package is in the bundle at its locked version; nothing extra (no dev dependencies) |
 | Wheel → bundle | Every wheel has a `RECORD` file listing **every file it contains with its sha256 and size**. Each of those files must be in the bundle, byte-identical. Your own project goes through the same path: it's built into a wheel with its own `RECORD` |
 | Bundle → manifest | The bundle embeds a manifest of every file and its hash |
-| Manifest → extracted cache | At run time, extracted files can be re-checked against the manifest (`python app.pyz --verify`; also catches a corrupted or tampered cache) |
+| Manifest → extracted cache | Extracted files can be re-checked against the manifest with `bundleup verify app.pyz` ([ADR-0019](adr/0019-manifest-and-verify-command.md)); also catches a corrupted or tampered cache |
 | Build → rebuild | Reproducible builds: the same inputs give the same bytes, so anyone can rebuild and compare one hash (already tested) |
 
 If any link fails, the build (or `--verify`) fails with the file that differs.

@@ -1,4 +1,5 @@
-"""Build-time proof that a bundle contains exactly what uv.lock says, byte for byte.
+"""Proof that a bundle contains exactly what uv.lock says, byte for byte: at build time, and later
+with `bundleup verify`.
 
 Two links of the hash chain in docs/testing-strategy.md ("What correct means"):
 
@@ -18,14 +19,22 @@ import base64
 import csv
 import hashlib
 import io
+import json
+import os
 import sys
+import tempfile
+import zipfile
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from packaging.markers import Marker
 from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
+
+from . import _loader
+from ._errors import NotABundleError
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -157,3 +166,148 @@ def check_records(site: Path, written: dict[str, str]) -> list[str]:
         if not _added_on_purpose(path):
             problems.append(f"extra file: {path} isn't listed in any wheel's RECORD")
     return problems
+
+
+@dataclass(frozen=True)
+class VerifyReport:
+    """What `bundleup verify` found. `ok` is True only if every check passed."""
+
+    bundle: Path
+    name: str
+    files: int  # files the manifest lists
+    problems: list[str] = field(default_factory=list)  # the bundle file vs its manifest
+    cache: Path | None = None  # this machine's extracted copy, if there is one
+    cache_problems: list[str] = field(default_factory=list)
+
+    @property
+    def ok(self) -> bool:
+        return not self.problems and not self.cache_problems
+
+    def to_json_dict(self) -> dict[str, object]:
+        return {
+            "bundle": str(self.bundle),
+            "name": self.name,
+            "files": self.files,
+            "problems": self.problems,
+            "cache": None
+            if self.cache is None
+            else {"path": str(self.cache), "problems": self.cache_problems},
+        }
+
+
+def _hash_file(path: Path) -> str:
+    return record_hash(path.read_bytes())
+
+
+def _check_payload(payload: zipfile.ZipFile, files: dict[str, str]) -> list[str]:
+    problems = []
+    seen = set()
+    for info in payload.infolist():
+        seen.add(info.filename)
+        expected = files.get(info.filename)
+        if expected is None:
+            problems.append(f"extra file: {info.filename} isn't in the manifest")
+        elif record_hash(payload.read(info)) != expected:
+            problems.append(f"changed file: {info.filename}")
+    problems += [f"missing file: {path}" for path in sorted(set(files) - seen)]
+    return problems
+
+
+def _check_cache(cache: Path, files: dict[str, str]) -> list[str]:
+    """Compare an extracted copy with the manifest. Bytecode may be missing (some Pythons keep
+    it under sys.pycache_prefix instead) or rewritten by Python, so it's only checked if present."""
+    problems = []
+    for path, expected in sorted(files.items()):
+        local = cache / path
+        if not local.is_file():
+            if not path.endswith(".pyc"):
+                problems.append(f"missing file: {path}")
+        elif _hash_file(local) != expected:
+            problems.append(f"changed file: {path}")
+    for local in sorted(cache.rglob("*")):
+        rel = local.relative_to(cache).as_posix()
+        if local.is_file() and rel not in files and not rel.endswith(".pyc"):
+            problems.append(f"extra file: {rel} isn't in the manifest")
+    return problems
+
+
+def _find_cache(bundle: Path, cache_dir: str) -> Path | None:
+    """This machine's extracted copy, found the way the bundle's loader finds it."""
+    for root, shared in _loader._roots(str(bundle)):
+        candidate = os.path.join(root, cache_dir)
+        if os.path.isdir(candidate) and (not shared or _loader._private(root)):
+            return Path(candidate)
+    return None
+
+
+MANIFEST_KEYS = ("name", "files", "payload", "cache_dir", "loader")
+
+
+def _read_manifest(bundle: Path) -> dict[str, Any]:  # Any: JSON
+    try:
+        with zipfile.ZipFile(bundle) as outer:
+            manifest = json.loads(outer.read("manifest.json"))
+    except (OSError, zipfile.BadZipFile, KeyError, ValueError) as e:
+        raise NotABundleError(
+            f"{bundle} isn't a bundleup bundle with a manifest ({type(e).__name__}: {e})",
+            hint="bundles carry manifest.json since bundleup's `build` command; rebuild it",
+        ) from None
+    missing = [key for key in MANIFEST_KEYS if key not in manifest]
+    if missing:
+        raise NotABundleError(f"{bundle}'s manifest is incomplete (no {', '.join(missing)})")
+    return manifest
+
+
+def _check_loader(outer: zipfile.ZipFile, expected: dict[str, str]) -> list[str]:
+    """__main__.py and __main__.pyc run first on every start, so they're checked too."""
+    problems = []
+    for name, digest in sorted(expected.items()):
+        try:
+            data = outer.read(name)
+        except (KeyError, zipfile.BadZipFile) as e:
+            problems.append(f"corrupted: {name} can't be read ({type(e).__name__}: {e})")
+            continue
+        if record_hash(data) != digest:
+            problems.append(f"changed file: {name} (the loader)")
+    return problems
+
+
+def _check_payload_zip(outer: zipfile.ZipFile, manifest: dict[str, Any]) -> list[str]:  # Any: JSON
+    """payload.zip's hash, then every file inside it, against the manifest."""
+    try:
+        with tempfile.TemporaryFile() as spool:
+            digest = hashlib.sha256()
+            with outer.open("payload.zip") as source:  # can be hundreds of MB: stream it
+                for chunk in iter(lambda: source.read(1 << 20), b""):
+                    digest.update(chunk)
+                    spool.write(chunk)
+            if digest.hexdigest() != manifest["payload"]["sha256"]:
+                return ["changed file: payload.zip doesn't match its recorded hash"]
+            spool.seek(0)
+            with zipfile.ZipFile(spool) as payload:
+                return _check_payload(payload, manifest["files"])
+    except (OSError, KeyError, zipfile.BadZipFile) as e:
+        return [f"corrupted: payload.zip can't be read ({type(e).__name__}: {e})"]
+
+
+def _check_bundle(bundle: Path, manifest: dict[str, Any]) -> list[str]:  # Any: JSON
+    """The bundle file against its manifest. Corruption is a problem to report, not a crash."""
+    try:
+        with zipfile.ZipFile(bundle) as outer:
+            return _check_loader(outer, manifest["loader"]) + _check_payload_zip(outer, manifest)
+    except (OSError, zipfile.BadZipFile) as e:
+        return [f"corrupted: {bundle.name} can't be read ({type(e).__name__}: {e})"]
+
+
+def verify(bundle: Path) -> VerifyReport:
+    """Check a bundle against its embedded manifest, and this machine's unpacked copy too.
+
+    Raises NotABundleError if `bundle` isn't a bundleup bundle with a manifest.
+    """
+    bundle = bundle.absolute()
+    manifest = _read_manifest(bundle)
+    files: dict[str, str] = manifest["files"]
+    problems = _check_bundle(bundle, manifest)
+    cache = _find_cache(bundle, manifest["cache_dir"])
+    cache_problems = _check_cache(cache, files) if cache else []
+    return VerifyReport(bundle, manifest["name"], len(files), problems, cache, cache_problems)

@@ -1,0 +1,57 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/funkyfunc/bundleup/blob/main/docs/schema/verify-v1.json",
+  "title": "bundleup verify --json, schema version 1",
+  "description": "One document on stdout at exit. Within schema_version 1 changes are additive only: consumers must ignore unknown keys.",
+  "type": "object",
+  "required": ["schema_version", "command", "ok", "exit_code", "result", "diagnostics"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "command": { "const": "verify" },
+    "ok": { "type": "boolean" },
+    "exit_code": { "enum": [0, 1, 2, 3, 130] },
+    "result": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["bundle", "name", "files", "problems", "cache"],
+          "properties": {
+            "bundle": { "type": "string" },
+            "name": { "type": "string" },
+            "files": { "type": "integer", "minimum": 0, "description": "Files the manifest lists" },
+            "problems": { "type": "array", "items": { "type": "string" } },
+            "cache": {
+              "description": "This machine's unpacked copy; null if the bundle hasn't run here",
+              "oneOf": [
+                { "type": "null" },
+                {
+                  "type": "object",
+                  "required": ["path", "problems"],
+                  "properties": {
+                    "path": { "type": "string" },
+                    "problems": { "type": "array", "items": { "type": "string" } }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["code", "level", "message"],
+        "properties": {
+          "code": { "type": "string" },
+          "level": { "enum": ["error", "warning"] },
+          "message": { "type": "string" },
+          "hint": { "type": "string" },
+          "detail": { "type": "string" }
+        }
+      }
+    }
+  }
+}

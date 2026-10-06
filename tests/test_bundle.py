@@ -187,7 +187,8 @@ def test_reproducible_payload(tmp_path: Path) -> None:
 
 def test_bundle_layout(bundle: Path) -> None:
     with zipfile.ZipFile(bundle) as zf:
-        assert sorted(zf.namelist()) == ["__main__.py", "__main__.pyc", "payload.zip"]
+        expected = ["__main__.py", "__main__.pyc", "manifest.json", "payload.zip"]
+        assert sorted(zf.namelist()) == expected
         assert zf.getinfo("payload.zip").compress_type == zipfile.ZIP_STORED
     assert bundle.read_bytes().startswith(b"#!/usr/bin/env python3\n")
     if not WINDOWS:
