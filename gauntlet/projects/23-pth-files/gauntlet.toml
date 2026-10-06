@@ -1,0 +1,7 @@
+id = "23-pth-files"
+title = "Packages that set themselves up with .pth files"
+tier = 7
+exercises = "Python runs the .pth files in site-packages at start-up: lines starting with `import` run, other lines add directories to sys.path. setuptools' distutils-precedence.pth makes `import distutils` work on 3.12+ (where the standard library's is gone) and pywin32's adds its win32 directories on Windows. A bundler that only puts its packages on sys.path skips them. The project's own .pth adds a directory, which child processes must see too."
+entry = "g23_pth:main"
+expect = "pass"
+notes = "Found 2026-10-05: bundleup's loader ignored .pth files. Child processes get the directories but not the `import` lines (they don't run the loader)."

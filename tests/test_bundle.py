@@ -311,3 +311,32 @@ def test_machine_packages_are_hidden_unless_inherited(
     r = run(out, env, python=base_python())
     assert r.returncode == 0, r.stderr
     assert r.stdout.strip() == str(visible)
+
+
+def test_pth_files_are_processed_like_site_py(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from bundleup import _loader
+
+    (tmp_path / "extra").mkdir()
+    lines = [
+        "# a comment",
+        "extra",
+        "missing-directory",
+        # Old namespace-package .pth files read `sitedir` from their caller's frame, as site.py's.
+        "import sys; sys.modules['__g_sitedir__'] = sys._getframe(1).f_locals['sitedir']",
+        "import nonexistent_module_for_this_test",
+        "after-the-error",
+    ]
+    (tmp_path / "a.pth").write_text("\n".join(lines) + "\n")
+    (tmp_path / "after-the-error").mkdir()
+    monkeypatch.setattr(sys, "path", list(sys.path))
+    monkeypatch.delitem(sys.modules, "__g_sitedir__", raising=False)
+    _loader._add_pth(str(tmp_path), "a.pth", set())
+    added = [p for p in sys.path if p.startswith(os.path.normcase(str(tmp_path)))]
+    assert added == [os.path.normcase(str(tmp_path / "extra"))]
+    assert sys.modules["__g_sitedir__"] == str(tmp_path)
+    assert "error in a.pth line 5" in capsys.readouterr().err
+    del sys.modules["__g_sitedir__"]
+    (tmp_path / ".hidden.pth").write_text("")
+    assert b.pth_files(tmp_path) == ["a.pth"]

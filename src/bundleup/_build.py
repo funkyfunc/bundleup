@@ -734,6 +734,12 @@ def write_bundle(
             tmp.unlink()
 
 
+def pth_files(site: Path) -> list[str]:
+    """The payload's .pth files, which the loader processes like a venv's site-packages: sorted,
+    hidden ones skipped, as site.py does."""
+    return sorted(p.name for p in site.glob("*.pth") if not p.name.startswith("."))
+
+
 def safe_name(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-.") or "app"
 
@@ -832,6 +838,7 @@ def build(
             "ABIFLAGS": target.abiflags if native else None,
             "TARGET": target.describe(native),
             "ENTRY": entry_spec,
+            "PTH": pth_files(site),
         }
         loader, loader_pyc = stage / "__main__.py", stage / "__main__.pyc"
         loader.write_text(render_loader(config), encoding="utf-8")

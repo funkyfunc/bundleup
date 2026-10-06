@@ -30,6 +30,7 @@ ABIFLAGS = None  # type: str | None  # set when the bundle contains native code 
 TARGET = "Python 3.12 on macOS"
 # ("call", module, attr) | ("module", module, "") | ("script", path inside the payload, "")
 ENTRY = ("call", "app", "main")
+PTH = []  # type: list[str]  # .pth files at the payload's top level, in the order site.py reads them
 # --- end config ---
 
 _ARCHIVE = os.path.dirname(os.path.abspath(__file__))
@@ -347,8 +348,43 @@ def _activate(site: str) -> None:
         # accident. Children still see them: PYTHONPATH can only add to a path.
         del sys.path[index:]
     sys.path.insert(index, site)
-    os.environ["PYTHONPATH"] = os.pathsep.join([site] + [p for p in pythonpath if p != site])
+    added = []  # type: list[str]
+    if PTH:
+        known = set(os.path.normcase(os.path.abspath(p)) for p in sys.path if p)
+        before = len(sys.path)
+        for name in PTH:
+            _add_pth(site, name, known)
+        added = sys.path[before:]
+    # Children get the directories .pth files added, but their `import` lines don't run there.
+    ours = [site, *added]
+    os.environ["PYTHONPATH"] = os.pathsep.join(ours + [p for p in pythonpath if p not in ours])
     os.environ["BUNDLEUP_SITE"] = site
+
+
+def _add_pth(sitedir: str, name: str, known: "set[str]") -> None:
+    """Process one of the payload's .pth files as site.py would in a venv's site-packages: a line
+    starting with "import" runs, any other line is a directory to append to sys.path if it exists.
+    Examples: setuptools' distutils shim, pywin32's directories (gauntlet 23). The parameter keeps
+    site.py's name `sitedir`, since some .pth lines read it from their caller's frame."""
+    try:
+        with open(os.path.join(sitedir, name), encoding="utf-8-sig") as f:
+            lines = f.read().splitlines()
+    except (OSError, UnicodeDecodeError):
+        return
+    for number, line in enumerate(lines, 1):
+        if not line.strip() or line.startswith("#"):
+            continue
+        if line.startswith(("import ", "import\t")):
+            try:
+                exec(line)  # what site.py does with these lines
+            except Exception as e:  # as site.py: report it and skip the rest of the file
+                sys.stderr.write("%s: error in %s line %d: %r\n" % (NAME, name, number, e))
+                return
+            continue
+        path = os.path.normcase(os.path.abspath(os.path.join(sitedir, line.rstrip())))
+        if path not in known and os.path.exists(path):
+            sys.path.append(path)
+            known.add(path)
 
 
 def _run(site: str) -> None:

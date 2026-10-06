@@ -1,0 +1,19 @@
+[project]
+name = "g23-pth"
+version = "0.1.0"
+requires-python = ">=3.9"
+dependencies = ["setuptools==80.9.0", "pywin32==311; sys_platform == 'win32'"]
+
+[project.scripts]
+g23 = "g23_pth:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/g23_pth"]
+
+[tool.hatch.build.targets.wheel.force-include]
+"extra/g23_extra.pth" = "g23_extra.pth"
+"extra/g23_extra" = "g23_extra"

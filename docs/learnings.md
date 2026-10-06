@@ -6,6 +6,13 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-05** · runtime · Python runs `.pth` files only in site directories, never in
+  `PYTHONPATH` or `sys.path.insert` entries, so a bundler must process them itself. Without that,
+  setuptools' distutils shim and pywin32's directories are missing. pex, shiv and a plain zipapp
+  all fail; some old namespace-package `.pth` lines read `sitedir` from their caller's frame, so
+  the loader's function keeps that name. Evidence: gauntlet
+  [23-pth-files](../gauntlet/projects/23-pth-files/gauntlet.toml),
+  [ADR-0023](adr/0023-payload-behaves-like-site-packages.md).
 - **2026-10-05** · runtime · Some wheels are mostly a program: ruff's (and uv's, ninja's, cmake's)
   binary is a wheel *script*, installed to `bin/` (`Scripts/` on Windows), and the Python wrapper
   finds it next to the packages when installed with `--target`. bundleup dropped all of `bin/` as
