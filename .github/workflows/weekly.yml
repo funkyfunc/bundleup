@@ -1,0 +1,54 @@
+# Weekly summary of the nightly runs (roadmap item 6, step 7): gauntlet/weekly_summary.py reads the
+# past week's smoke and corpus results and writes docs/findings/<date>-nightly-summary.md on a
+# branch, then opens a pull request for the owner to merge. Runs only this repo's own script, never
+# third-party code.
+#
+# Opening the pull request needs the repo setting "Allow GitHub Actions to create and approve pull
+# requests" (Settings > Actions > General). Without it, the job opens an issue linking the branch
+# instead, so nothing is lost.
+name: Weekly nightly summary
+
+on:
+  schedule:
+    - cron: "23 8 * * 1" # Mondays, after that night's smoke and corpus runs
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  summary:
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write # push the summary branch
+      pull-requests: write
+      issues: write # the fallback when pull requests aren't allowed
+      actions: read # list runs and download their results
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+      - name: Write the summary
+        id: write
+        run: |
+          date=$(date -u +%F)
+          out=docs/findings/$date-nightly-summary.md
+          uv run gauntlet/weekly_summary.py --repo ${{ github.repository }} --out "$out"
+          echo "date=$date" >> "$GITHUB_OUTPUT"
+          echo "out=$out" >> "$GITHUB_OUTPUT"
+      - name: Push a branch and open a pull request
+        run: |
+          branch=weekly/${{ steps.write.outputs.date }}
+          title="Nightly summary for the week to ${{ steps.write.outputs.date }}"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git switch -c "$branch"
+          git add "${{ steps.write.outputs.out }}"
+          git commit -m "$title"
+          git push --force origin "$branch"
+          body="Written by the weekly job from the nightly smoke and corpus results. Add a line of analysis if anything changed, then merge."
+          if ! gh pr create --base main --head "$branch" --title "$title" --body "$body"; then
+            compare="${{ github.server_url }}/${{ github.repository }}/compare/main...$branch?expand=1"
+            gh issue create --title "$title" --body "Pull requests from Actions aren't allowed in this repo, so the summary is on the branch \`$branch\`. [Open a pull request]($compare) to merge it."
+          fi

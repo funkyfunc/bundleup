@@ -97,6 +97,12 @@ and compares exit codes and output. [corpus_issues.py](corpus_issues.py) groups 
 signature into `corpus-failure` issues. Runs nightly on GitHub's runners only
 ([`corpus.yml`](../.github/workflows/corpus.yml), ADR-0017): it runs third-party code.
 
+Every Monday [weekly_summary.py](weekly_summary.py) ([`weekly.yml`](../.github/workflows/weekly.yml))
+collects the week's smoke and corpus results into `docs/findings/<date>-nightly-summary.md` and
+proposes it as a pull request, so the results outlive GitHub's 90-day artifact limit. Try it
+locally (it only reads results through `gh`; nothing third-party runs):
+`uv run gauntlet/weekly_summary.py --repo funkyfunc/bundleup --out /tmp/summary.md`.
+
 ## Measuring speed
 
 ```bash

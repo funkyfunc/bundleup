@@ -75,7 +75,7 @@ merged; ask if unsure.
 6. **Nightly corpus testing with AI triage** (**steps 1-5 built 2026-10-05**:
    [`corpus.toml`](../gauntlet/corpus.toml), [`corpus.py`](../gauntlet/corpus.py),
    [`corpus_issues.py`](../gauntlet/corpus_issues.py), [`corpus.yml`](../.github/workflows/corpus.yml);
-   step 6 deferred by the owner, step 7 once there's a week of results) ([testing-strategy.md](testing-strategy.md),
+   step 6 deferred by the owner; step 7 built 2026-10-05: [`weekly.yml`](../.github/workflows/weekly.yml)) ([testing-strategy.md](testing-strategy.md),
    [ADR-0017](adr/0017-platform-matrix-and-corpus-testing.md), accepted 2026-10-05: issues first, agent
    triage (step 6) later). Real open-source projects,
    cloned and bundled every night, so bundleup is tested on code nobody wrote for us. Needs items
@@ -100,6 +100,9 @@ merged; ask if unsure.
       new gauntlet project**, proposes a fix as a pull request, and re-runs the gauntlet plus the
       original project. **The owner merges; agents never merge their own fixes.**
    7. **Weekly summary** in `docs/findings/`: pass rate by OS and Python, new and fixed signatures.
+      Built: every Monday, [`weekly_summary.py`](../gauntlet/weekly_summary.py) writes
+      `docs/findings/<date>-nightly-summary.md` on a branch and opens a pull request (or an issue
+      with a link, while Actions may not open pull requests).
    - **Safety:** third-party code runs only on ephemeral GitHub-hosted runners with no secrets, or
      in a throwaway VM/container on the System76 laptop. Never directly on personal machines.
    - **Budget and fair use:** batch size and matrix width are configuration; cap agent triage per

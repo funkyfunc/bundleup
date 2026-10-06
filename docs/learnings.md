@@ -6,6 +6,11 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-05** · tooling · This repo's Actions token can't open pull requests: the repo setting
+  "Allow GitHub Actions to create and approve pull requests" is off
+  (`gh api repos/funkyfunc/bundleup/actions/permissions/workflow` shows
+  `can_approve_pull_request_reviews: false`). The weekly summary job pushes a branch and falls back
+  to an issue with a "open a pull request" link. Evidence: [weekly.yml](../.github/workflows/weekly.yml).
 - **2026-10-05** · runtime · A PEP 420 namespace package (directories without `__init__.py`) loses to
   a *regular* package of the same name anywhere later on `sys.path`: Python keeps scanning after
   a namespace portion and takes the first regular package. So with `BUNDLEUP_INHERIT_PATH=1` a stale
