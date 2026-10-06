@@ -1,0 +1,63 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/funkyfunc/bundleup/blob/main/docs/schema/build-v1.json",
+  "title": "bundleup build --json, schema version 1",
+  "description": "One document on stdout at exit, on success and failure. Within schema_version 1 changes are additive only: consumers must ignore unknown keys (docs/cli-style-guide.md rules 16-20).",
+  "type": "object",
+  "required": ["schema_version", "command", "ok", "exit_code", "result", "diagnostics"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "command": { "type": "string" },
+    "ok": { "type": "boolean" },
+    "exit_code": { "enum": [0, 1, 2, 3, 130] },
+    "result": {
+      "oneOf": [
+        { "type": "null" },
+        {
+          "type": "object",
+          "required": ["output", "size_bytes", "name", "version", "packages", "native", "target", "duration_s", "timings"],
+          "properties": {
+            "output": { "type": "string", "description": "Relative to the project directory when inside it" },
+            "size_bytes": { "type": "integer", "minimum": 0 },
+            "name": { "type": "string" },
+            "version": { "type": ["string", "null"], "description": "null for a PEP 723 script" },
+            "packages": { "type": "integer", "minimum": 0 },
+            "native": { "type": "boolean", "description": "Contains compiled code, so tied to one CPU" },
+            "target": {
+              "type": "object",
+              "required": ["python", "python_full_version", "implementation", "platform", "machine"],
+              "properties": {
+                "python": { "type": "string", "pattern": "^[0-9]+\\.[0-9]+$" },
+                "python_full_version": { "type": "string" },
+                "implementation": { "type": "string" },
+                "platform": { "type": "string", "description": "sys.platform, e.g. darwin, linux, win32" },
+                "machine": { "type": ["string", "null"], "description": "null: runs on any CPU" }
+              }
+            },
+            "duration_s": { "type": "number", "minimum": 0 },
+            "timings": {
+              "type": "object",
+              "description": "Seconds per build step",
+              "propertyNames": { "enum": ["python", "export", "install", "compile", "zip", "verify", "write"] },
+              "additionalProperties": { "type": "number", "minimum": 0 }
+            }
+          }
+        }
+      ]
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "required": ["code", "level", "message"],
+        "properties": {
+          "code": { "type": "string", "description": "Stable slug; branch on this, not on message" },
+          "level": { "enum": ["error", "warning"] },
+          "message": { "type": "string" },
+          "hint": { "type": "string" },
+          "detail": { "type": "string" }
+        }
+      }
+    }
+  }
+}

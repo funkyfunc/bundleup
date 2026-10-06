@@ -37,7 +37,8 @@ can never collide with a project path, and it matches uv and cargo.
 8. **`--dry-run` / `-n`** resolves everything, prints the plan and where each setting came from,
    and writes nothing.
 9. **In CI (`CI` set), behave as `--locked`**: a stale lockfile is an error, not a silent bundle
-   missing a new dependency.
+   missing a new dependency. Only when a lockfile exists: a PEP 723 script often has none, and
+   `uv export --locked` refuses to start without one (found 2026-10-05).
 
 ### Output
 10. **stdout is for machine output only** (`--json`, listings). **All human messages, warnings and
@@ -163,3 +164,26 @@ fits a build tool. Everything here applies to TTY output only; rules 10–15 sti
 49. **Output-mode matrix:** `NO_COLOR`, `FORCE_COLOR`, `TERM=dumb`, piped (non-TTY) and a real TTY.
 50. **JSON contract test:** validate against the published schema; one document on stdout even
     with warnings.
+
+## Implementation status (2026-10-05)
+
+Implemented in `src/bundleup/_cli.py`, `_errors.py`, `_term.py` and the public API
+([ADR-0018](adr/0018-package-layout-and-lazy-api.md)), with contract tests in `tests/test_cli.py`
+and the generated [CLI reference](cli-reference.md):
+- verbs (`bundleup build`), uv's flag names, long forms, `allow_abbrev=False` (rules 1-4);
+- stdout/stderr split, two-line success, TTY-only status line, colour rules, ASCII fallback,
+  `-q`/`-qq`/`-v`/`-vv` (10-15), clickable output path (56);
+- `--json` with `schema_version`, stable `code` slugs, [JSON Schema](schema/build-v1.json)
+  (16-20); `error:`/`hint:` messages, uv output quoted under the message, exit codes 0/1/2/3/130,
+  "this is a bug" for crashes, a suggestion for mistyped commands (21-27);
+- `BUNDLEUP_OUTPUT`, `BUNDLEUP_PYTHON`, `BUNDLEUP_ENTRY` (28); CI implies `--locked` when a
+  lockfile exists (9);
+- help under ~30 lines with examples and `[env: ...]` (32-33), generated reference checked by a
+  test (34), startup budget checked by a test (35);
+- library API: `__all__`, `py.typed`, `build(BuildOptions, progress=...)`, frozen results with
+  `to_json_dict()`, one exception root, a library that never prints or exits, API snapshot test
+  (38-44); snapshots of every output mode and exit-code tests (47-50).
+
+Not yet: `--dry-run` (8); presets and `targets` (7, with ADR-0014); `[tool.bundleup]`
+configuration (29-31); `--strict` (27); progress counts per item (51); Ctrl-C and crash exit codes
+are tested in-process rather than through a subprocess (48).

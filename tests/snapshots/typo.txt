@@ -1,0 +1,2 @@
+error: argument <command>: invalid choice: 'buld' (choose from build)
+hint: did you mean `bundleup build`?

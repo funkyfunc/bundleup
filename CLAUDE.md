@@ -72,14 +72,21 @@ Do these **as you go**, not only at the end:
   wheel's `RECORD` exactly (`src/bundleup/_verify.py`); the gauntlet's `matches-venv` condition
   compares each bundle with a `uv sync` install. Still to do from roadmap item 4: embedded
   manifest + verify command, nightly top-PyPI smoke test, real-world test suites.
+- **CLI follows the style guide** (ADR-0016): `bundleup build [PATH]`, `--json`, `error:`/`hint:`,
+  exit codes, a typed library API with lazy exports
+  ([ADR-0018](docs/adr/0018-package-layout-and-lazy-api.md), **Proposed**). Open rules are listed
+  in the style guide's "Implementation status".
 - Next: see [docs/roadmap.md](docs/roadmap.md) "Next up".
 
 ## Layout
 
 ```
 MISSION.md              goal and scope
-pyproject.toml, src/bundleup/  the bundleup package: cli.py, build.py, _loader.py (bundle's __main__),
-                        _verify.py (build-time lock and RECORD checks)
+pyproject.toml, src/bundleup/  the package (ADR-0018): __init__.py (public API), _cli.py, _build.py,
+                        _verify.py (lock and RECORD checks), _errors.py, _term.py, _loader.py
+                        (the bundle's __main__)
+tests/snapshots/        CLI output and API snapshots; docs/cli-reference.md is generated too
+docs/schema/            JSON Schema of `bundleup build --json`
 tests/                  pytest: loader/CLI edge cases the gauntlet doesn't reach
 docs/roadmap.md         "Next up" work list, then possible future directions
 docs/python-for-js-reviewers.md  code style rules + review guide for the JS-fluent owner
@@ -111,7 +118,8 @@ uv run gauntlet/bench.py 03 13 --python 3.12 --python 3.9                   # sp
 uv run pytest -q tests                                                      # loader/CLI edge cases
 uv run ruff format . && uv run ruff check . && uv run pyright               # the checks (ADR-0015)
 uvx pre-commit install                                                      # git hooks, once per clone
-uv run bundleup <project-or-script> [-p 3.9] [-o out.pyz]                   # try it
+uv run bundleup build <project-or-script> [--python 3.9] [-o out.pyz] [-v]  # try it
+UPDATE_SNAPSHOTS=1 uv run pytest -q tests/test_cli.py                       # after an intended CLI change
 ```
 
 ## Working rules

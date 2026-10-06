@@ -91,7 +91,7 @@ def build(tool: str, project: Path, *, meta: rb.Meta, py: str, stage: Path) -> f
     """Build a bundle at stage/app.pyz (or app.pex) and return the build time in seconds."""
     out = bundle_path(tool, stage)
     if tool == "bundleup":
-        cmd = [str(rb.BUNDLEUP), str(project), "--python", py, "-o", str(out), "--quiet"]
+        cmd = [str(rb.BUNDLEUP), "build", str(project), "--python", py, "-o", str(out), "--quiet"]
     else:
         inputs = rb.prepare(project, meta, stage / "inputs")
         cmd = rb.build_command(tool, py, inputs=inputs, entry=meta["entry"], out=out)

@@ -6,6 +6,15 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-05** · cli · `uv export --locked` refuses a PEP 723 script that has no lockfile, so
+  "CI implies `--locked`" must only apply when a lockfile exists. argparse's help layout and error
+  wording change between Python versions (3.13: `-o, --output FILE`), so help snapshots are pinned
+  to the dev Python (`.python-version`). An `-X importtime` test caught `difflib` (a top-level
+  import) on the `--version` path. Evidence: [tests/test_cli.py](../tests/test_cli.py).
+- **2026-10-05** · ecosystem · Runtime hooks inside bundles are normal: shiv bundles read 10
+  `SHIV_*` variables and pex ~30 `PEX_*` (incl. `PEX_TOOLS`); neither has a verify mode. bundleup
+  verifies with a command (`bundleup verify`) instead, keeping the loader minimal. Evidence: the
+  baseline's built bundles (`_bootstrap/environment.py`, `.bootstrap/pex/variables.py`).
 - **2026-10-05** · runtime · A wheel's data files (the `.data/data/` scheme, e.g. sympy's
   `share/man/man1/isympy.1`) go to `<venv>/share/...` in a venv but to the payload root with
   `--target` (uv and pip alike), where `share/` even imports as a namespace package. Harmless for man

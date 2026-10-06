@@ -13,9 +13,10 @@ Dead simple to use, but also powerful and fast: esbuild's experience, for Python
 ## Usage
 
 ```bash
-bundleup                        # the project in this directory -> dist/<name>.pyz
-bundleup path/to/script.py      # a PEP 723 script with inline dependencies
-bundleup --python 3.9           # build for another Python (a bundle runs on one Python version)
+bundleup build                  # the project in this directory -> dist/<name>.pyz
+bundleup build path/to/script.py  # a PEP 723 script with inline dependencies
+bundleup build --python 3.9     # build for another Python (a bundle runs on one Python version)
+bundleup build --json           # the result as JSON on stdout, for scripts and agents
 python dist/<name>.pyz          # run it: no install, no network
 ```
 

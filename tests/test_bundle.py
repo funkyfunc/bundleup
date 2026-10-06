@@ -15,8 +15,8 @@ from typing import Any
 
 import pytest
 
-from bundleup import build as b
-from bundleup.cli import main
+from bundleup import _build as b
+from bundleup._cli import main
 
 PROBE = """\
 # /// script
@@ -36,7 +36,7 @@ def bundle(tmp_path_factory: pytest.TempPathFactory) -> Path:
     src = tmp_path_factory.mktemp("src") / "probe.py"
     src.write_text(PROBE)
     out = src.parent / "probe.pyz"
-    assert main([str(src), "-o", str(out), "--python", sys.executable, "-q"]) == 0
+    assert main(["build", str(src), "-o", str(out), "--python", sys.executable, "-q"]) == 0
     return out
 
 
@@ -180,7 +180,8 @@ def test_reproducible_payload(tmp_path: Path) -> None:
     src = tmp_path / "probe.py"
     src.write_text(PROBE)
     for name in ("one.pyz", "two.pyz"):
-        assert main([str(src), "-o", str(tmp_path / name), "--python", sys.executable, "-q"]) == 0
+        args = ["build", str(src), "-o", str(tmp_path / name), "--python", sys.executable, "-q"]
+        assert main(args) == 0
     assert (tmp_path / "one.pyz").read_bytes() == (tmp_path / "two.pyz").read_bytes()
 
 
@@ -203,7 +204,7 @@ def test_cli_version_and_help(capsys: pytest.CaptureFixture[str]) -> None:
 
 
 def test_cli_explains_missing_project(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    assert main([str(tmp_path)]) == 1
+    assert main(["build", str(tmp_path)]) == 1
     assert "has no pyproject.toml" in capsys.readouterr().err
 
 
@@ -220,7 +221,15 @@ def test_builds_without_uv_on_path(tmp_path: Path) -> None:
     env = dict(os.environ)  # the real environment (uv's cache, home), minus uv on PATH
     env["PATH"] = env_for(tmp_path)["PATH"]
     r = subprocess.run(
-        [str(bundleup), str(src), "-o", str(tmp_path / "p.pyz"), "--python", sys.executable, "-q"],
+        [
+            str(bundleup),
+            "build",
+            str(src),
+            "-o",
+            str(tmp_path / "p.pyz"),
+            "--python",
+            sys.executable,
+        ],
         env=env,
         capture_output=True,
         text=True,

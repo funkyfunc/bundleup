@@ -346,7 +346,7 @@ def one(tool: str, project: Path, version: str, conditions: bool) -> list[Result
     try:
         if inputs is None:  # bundleup reads the project itself
             src = project / meta["script"] if "script" in meta else project
-            b = sh([str(BUNDLEUP), str(src), "--python", py, "-o", str(out), "--quiet"])
+            b = sh([str(BUNDLEUP), "build", str(src), "--python", py, "-o", str(out), "--quiet"])
         elif tool == "zipapp-naive":
             b = build_naive(py, inputs=inputs, entry=meta["entry"], out=out, stage=stage)
         else:

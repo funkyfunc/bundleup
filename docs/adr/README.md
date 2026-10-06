@@ -26,3 +26,4 @@ and change only the old one's status line.
 | [0015](0015-engineering-tooling.md) | Enforce code quality with Ruff, a type checker, git hooks and CI | Accepted |
 | [0016](0016-cli-and-api-conventions.md) | CLI and Python API follow the style guide | Accepted (verbs) |
 | [0017](0017-platform-matrix-and-corpus-testing.md) | Free platform matrix on GitHub Actions, plus nightly corpus testing with AI triage | Proposed |
+| [0018](0018-package-layout-and-lazy-api.md) | Private modules, and a public API that loads lazily | Proposed |

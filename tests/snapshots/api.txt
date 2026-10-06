@@ -1,0 +1,16 @@
+__all__ = ['BuildOptions', 'BuildResult', 'BundleMismatchError', 'BundleupError', 'EntryPointError', 'ExitCode', 'LockfileOutdatedError', 'ProgressEvent', 'ProjectError', 'PythonMismatchError', 'PythonNotFoundError', 'Target', 'UsageError', 'UvError', 'UvNotFoundError', '__version__', 'build']
+build(options: 'BuildOptions', *, progress: 'Callable[[ProgressEvent], None] | None' = None) -> 'BuildResult'
+BuildOptions: path: Path, output: Path | None, python: str | None, entry: str | None, lock_mode: Literal['locked', 'frozen'] | None
+BuildResult: output: Path, size_bytes: int, name: str, version: str | None, packages: int, native: bool, target: Target, project_dir: Path, duration_s: float, timings: dict[str, float]
+ProgressEvent: kind: Literal['step', 'command'], text: str
+ExitCode: OK=0, BUILD_FAILED=1, USAGE_ERROR=2, INTERNAL_ERROR=3, INTERRUPTED=130
+BundleMismatchError: code='bundle-mismatch' exit_code=3
+BundleupError: code='build-failed' exit_code=1
+EntryPointError: code='no-entry-point' exit_code=1
+LockfileOutdatedError: code='lock-outdated' exit_code=1
+ProjectError: code='invalid-project' exit_code=1
+PythonMismatchError: code='python-mismatch' exit_code=1
+PythonNotFoundError: code='python-not-found' exit_code=1
+UsageError: code='usage' exit_code=2
+UvError: code='uv-failed' exit_code=1
+UvNotFoundError: code='uv-not-found' exit_code=1

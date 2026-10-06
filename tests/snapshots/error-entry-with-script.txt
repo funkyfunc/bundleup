@@ -1,0 +1,2 @@
+error: --entry is for projects; a script bundle runs the script
+hint: drop --entry

@@ -24,12 +24,25 @@ import zipfile
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Literal
 
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.utils import canonicalize_name
 
 from . import _verify
+from ._errors import (
+    ISSUES_URL,
+    BundleMismatchError,
+    BundleupError,
+    EntryPointError,
+    LockfileOutdatedError,
+    ProjectError,
+    PythonMismatchError,
+    PythonNotFoundError,
+    UsageError,
+    UvError,
+    UvNotFoundError,
+)
 
 if sys.version_info >= (3, 11):
     import tomllib
@@ -44,8 +57,30 @@ PLATFORM_NAMES = {"darwin": "macOS", "linux": "Linux", "win32": "Windows"}
 PEP723 = re.compile(r"(?m)^# /// (?P<type>[a-zA-Z0-9-]+)$\s(?P<content>(^#(| .*)$\s)+)^# ///$")
 
 
-class BuildError(Exception):
-    """A problem the user can fix; printed without a traceback."""
+@dataclass(frozen=True)
+class BuildOptions:
+    """What to bundle and how. Mirrors `bundleup build`'s flags."""
+
+    path: Path = Path()  # a project directory (with pyproject.toml) or a PEP 723 script
+    output: Path | None = None  # default: dist/<name>.pyz next to the input
+    python: str | None = None  # a version ("3.12") or an interpreter path; default: uv's choice
+    entry: str | None = None  # a [project.scripts] name, "module:function" or "module"
+    lock_mode: Literal["locked", "frozen"] | None = None  # as uv's --locked / --frozen
+
+
+@dataclass(frozen=True)
+class ProgressEvent:
+    """Reported while building: a step starting, or a command about to run."""
+
+    kind: Literal["step", "command"]
+    text: str
+
+
+Progress = Callable[[ProgressEvent], None]
+
+
+def _ignore(event: ProgressEvent) -> None:
+    pass
 
 
 @dataclass(frozen=True)
@@ -67,6 +102,15 @@ class Target:
             f" {self.machine}" if native else ""
         )
 
+    def to_json_dict(self, *, native: bool) -> dict[str, object]:
+        return {
+            "python": f"{self.version[0]}.{self.version[1]}",
+            "python_full_version": self.full_version,
+            "implementation": self.implementation,
+            "platform": self.platform,
+            "machine": self.machine if native else None,  # None: runs on any CPU
+        }
+
 
 @dataclass(frozen=True)
 class Source:
@@ -84,21 +128,52 @@ class Source:
 
 
 @dataclass(frozen=True)
-class Result:
+class BuildResult:
+    """A finished bundle. `to_json_dict()` is the `result` object of `bundleup build --json`."""
+
     output: Path
-    size: int
-    packages: int
-    native: bool
+    size_bytes: int
+    name: str
+    version: str | None  # the project's version; None for a script
+    packages: int  # distributions in the bundle, including the project itself
+    native: bool  # contains compiled code, so it's tied to one CPU
     target: Target
-    timings: dict[str, float]
+    project_dir: Path
+    duration_s: float
+    timings: dict[str, float]  # seconds per build step, keyed by the slugs in STEPS
+
+    def to_json_dict(self) -> dict[str, object]:
+        try:
+            output = self.output.relative_to(self.project_dir).as_posix()
+        except ValueError:
+            output = str(self.output)
+        return {
+            "output": output,
+            "size_bytes": self.size_bytes,
+            "name": self.name,
+            "version": self.version,
+            "packages": self.packages,
+            "native": self.native,
+            "target": self.target.to_json_dict(native=self.native),
+            "duration_s": round(self.duration_s, 3),
+            "timings": {step: round(seconds, 3) for step, seconds in self.timings.items()},
+        }
 
 
-def run(cmd: list[str], *, cwd: Path | None = None, what: str = "") -> str:
-    """Run a command and return its stdout, or raise BuildError with its output."""
+def run(
+    cmd: list[str],
+    *,
+    progress: Progress,
+    cwd: Path | None = None,
+    what: str = "",
+    error: type[BundleupError] = UvError,
+) -> str:
+    """Run a command and return its stdout, or raise `error` with its output as the detail."""
+    progress(ProgressEvent("command", " ".join(cmd)))
     proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True)
     if proc.returncode:
         detail = (proc.stderr or proc.stdout).strip()
-        raise BuildError(f"{what or cmd[0]} failed:\n{detail}")
+        raise error(f"{what or cmd[0]} failed", detail=detail)
     return proc.stdout
 
 
@@ -125,13 +200,15 @@ def find_uv() -> str:
         pass
     if on_path:
         return on_path  # too old or unrecognised, but better than nothing: uv's errors will say why
-    raise BuildError(
-        "bundleup needs uv to resolve and install dependencies, and couldn't find it.\n"
-        "Reinstall bundleup, or install uv: https://docs.astral.sh/uv/getting-started/installation/"
+    raise UvNotFoundError(
+        "bundleup needs uv to resolve and install dependencies, and couldn't find it",
+        hint="reinstall bundleup, or install uv: "
+        "https://docs.astral.sh/uv/getting-started/installation/",
     )
 
 
 def load_source(path: Path) -> Source:
+    """Read what's being bundled. Raises ProjectError if it isn't a project or a script."""
     path = path.resolve()
     if path.is_file() and path.suffix == ".py":
         meta = script_metadata(path.read_text(encoding="utf-8"))
@@ -139,22 +216,30 @@ def load_source(path: Path) -> Source:
     if path.is_dir():
         pyproject = path / "pyproject.toml"
         if not pyproject.exists():
-            raise BuildError(
-                f"{path} has no pyproject.toml. "
-                "Point bundleup at a project directory or a .py script."
+            raise ProjectError(
+                f"{path} has no pyproject.toml",
+                hint="point bundleup at a project directory or a .py script",
             )
-        project = tomllib.loads(pyproject.read_text(encoding="utf-8")).get("project") or {}
+        try:
+            project = tomllib.loads(pyproject.read_text(encoding="utf-8")).get("project") or {}
+        except tomllib.TOMLDecodeError as e:
+            raise ProjectError(f"{pyproject} isn't valid TOML: {e}") from None
         if "name" not in project:
-            raise BuildError(f"{pyproject} has no [project] name.")
+            raise ProjectError(
+                f"{pyproject} has no [project] name", hint='add `name = "..."` under [project]'
+            )
         return Source(path, project["name"], project.get("requires-python"), is_script=False)
-    raise BuildError(f"{path} is not a project directory or a .py script.")
+    raise ProjectError(
+        f"{path} is not a project directory or a .py script",
+        hint="pass a directory with pyproject.toml, or a PEP 723 script",
+    )
 
 
 def script_metadata(text: str) -> dict[str, Any]:  # Any: TOML values have no fixed type
     """The PEP 723 `script` block, parsed as TOML (empty if there is none)."""
     blocks = [m for m in PEP723.finditer(text) if m.group("type") == "script"]
     if len(blocks) > 1:
-        raise BuildError("the script has more than one `# /// script` block.")
+        raise ProjectError("the script has more than one `# /// script` block")
     if not blocks:
         return {}
     content = "".join(
@@ -164,14 +249,22 @@ def script_metadata(text: str) -> dict[str, Any]:  # Any: TOML values have no fi
     return tomllib.loads(content)
 
 
-def find_python(uv: str, source: Source, *, request: str | None) -> Target:
+def find_python(uv: str, source: Source, *, request: str | None, progress: Progress) -> Target:
     """The interpreter to build for: --python if given, else what uv would use for the project."""
     if request and Path(request).is_file():
         exe = request  # a path: no need to ask uv (which would run the interpreter to inspect it)
     else:
         cmd = _find_cmd(uv, source, request=request)
-        exe = run(cmd, cwd=source.workdir, what="finding a Python").strip()
-    info = json.loads(run([exe, "-I", "-S", "-c", PROBE], what=exe))
+        try:
+            exe = run(cmd, cwd=source.workdir, what="finding a Python", progress=progress).strip()
+        except UvError as e:
+            wanted = f"Python {request}" if request else "a Python for this project"
+            install = f"uv python install {request}" if request else "uv python install"
+            raise PythonNotFoundError(
+                f"couldn't find {wanted}", hint=f"install it with `{install}`", detail=e.detail
+            ) from None
+    probe = [exe, "-I", "-S", "-c", PROBE]
+    info = json.loads(run(probe, what=f"inspecting {exe}", progress=progress, error=ProjectError))
     major, minor = info["version"]
     return Target(
         # Use the real interpreter from here on: uv re-inspects shims like macOS's
@@ -239,14 +332,14 @@ def check_requires_python(source: Source, target: Target) -> None:
     try:
         spec = SpecifierSet(source.requires_python)
     except InvalidSpecifier:
-        raise BuildError(
+        raise ProjectError(
             f"{source.name} has an invalid requires-python: {source.requires_python!r}"
         ) from None
     if target.full_version not in spec:
-        raise BuildError(
+        raise PythonMismatchError(
             f"{source.name} needs Python {source.requires_python}, but the target is Python "
-            f"{target.full_version} ({target.executable}).\n"
-            f"Build for a matching Python, for example: bundleup --python {_suggest(spec)} ..."
+            f"{target.full_version} ({target.executable})",
+            hint=f"build for a matching Python: bundleup build --python {_suggest(spec)}",
         )
 
 
@@ -257,7 +350,9 @@ def _suggest(spec: SpecifierSet) -> str:
     return "<version>"
 
 
-def export(uv: str, source: Source, *, lock_mode: str | None, stage: Path) -> tuple[Path, Path]:
+def export(
+    uv: str, source: Source, *, lock_mode: str | None, stage: Path, progress: Progress
+) -> tuple[Path, Path]:
     """Export the locked runtime dependencies (and the project itself) twice from one lock:
     as requirements, which `uv pip install` takes, and as pylock.toml (PEP 751), which the
     lock-vs-bundle check reads (uv only installs pylock.toml as a preview feature)."""
@@ -270,13 +365,28 @@ def export(uv: str, source: Source, *, lock_mode: str | None, stage: Path) -> tu
     as_requirements = ["--no-hashes", "--no-header", "--no-annotate", "-o", str(reqs)]
     as_pylock = ["--format", "pylock.toml", "-o", str(pylock)]
     commands = [[uv, "export", "--quiet", *selection, *fmt] for fmt in (as_requirements, as_pylock)]
-    with ThreadPoolExecutor(2) as pool:  # independent reads of the same lock
-        for future in [pool.submit(run, c, cwd=source.workdir, what="uv export") for c in commands]:
-            future.result()
+    try:
+        with ThreadPoolExecutor(2) as pool:  # independent reads of the same lock
+            futures = [
+                pool.submit(run, c, cwd=source.workdir, what="uv export", progress=progress)
+                for c in commands
+            ]
+            for future in futures:
+                future.result()
+    except UvError as e:
+        if lock_mode == "locked" and "needs to be updated" in (e.detail or ""):
+            raise LockfileOutdatedError(
+                "uv.lock is out of date with pyproject.toml",
+                hint="run `uv lock`, then build again",
+                detail=e.detail,
+            ) from None
+        raise
     return reqs, pylock
 
 
-def install(uv: str, source: Source, *, target: Target, reqs: Path, site: Path) -> None:
+def install(
+    uv: str, source: Source, *, target: Target, reqs: Path, site: Path, progress: Progress
+) -> None:
     """Install the exported set into `site`, the directory that becomes the payload."""
     # The export is the complete, pinned set, so --no-deps installs exactly the lock. Relative
     # paths in it (the project itself, workspace members) resolve against the working directory.
@@ -296,6 +406,7 @@ def install(uv: str, source: Source, *, target: Target, reqs: Path, site: Path) 
         ],
         cwd=source.workdir,
         what="uv pip install",
+        progress=progress,
     )
     for name in SKIP_TOP:
         p = site / name
@@ -313,7 +424,10 @@ def resolve_entry(source: Source, site: Path, *, entry: str | None) -> tuple[str
     """What the loader runs: --entry, the project's console script, or the script itself."""
     if source.is_script:
         if entry:
-            raise BuildError("--entry is for projects; a script bundle runs the script.")
+            raise UsageError(
+                "--entry is for projects; a script bundle runs the script",
+                hint="drop --entry",
+            )
         return ("script", f"__bundleup_script__/{source.path.name}", "")
     scripts = console_scripts(site, source.name)
     if entry is None:
@@ -322,15 +436,14 @@ def resolve_entry(source: Source, site: Path, *, entry: str | None) -> tuple[str
         elif canonicalize_name(source.name) in scripts:
             entry = scripts[canonicalize_name(source.name)]
         elif not scripts:
-            raise BuildError(
-                f"{source.name} defines no [project.scripts], "
-                "so bundleup doesn't know what to run.\n"
-                "Add one to pyproject.toml, or pass --entry module:function (or --entry module)."
+            raise EntryPointError(
+                f"{source.name} defines no [project.scripts], so bundleup doesn't know what to run",
+                hint="add one to pyproject.toml, or pass --entry module:function",
             )
         else:
-            raise BuildError(
-                f"{source.name} defines several commands ({', '.join(sorted(scripts))}). "
-                f"Pick one with --entry {sorted(scripts)[0]}"
+            raise EntryPointError(
+                f"{source.name} defines several commands ({', '.join(sorted(scripts))})",
+                hint=f"pick one: --entry {sorted(scripts)[0]}",
             )
     elif entry in scripts:
         entry = scripts[entry]
@@ -386,7 +499,7 @@ py_compile.compile(sys.argv[1], cfile=sys.argv[2], dfile="__main__.py", doraise=
 """
 
 
-def precompile(target: Target, site: Path) -> None:
+def precompile(target: Target, site: Path, *, progress: Progress) -> None:
     """Compile everything with the target Python.
 
     Unchecked-hash .pycs never consult the source's mtime, which suits an immutable,
@@ -396,6 +509,8 @@ def precompile(target: Target, site: Path) -> None:
     run(
         [target.executable, "-I", "-c", COMPILE_SITE, str(site), str(workers)],
         what="compiling bytecode",
+        progress=progress,
+        error=BundleupError,
     )
 
 
@@ -430,12 +545,12 @@ def verify(site: Path, *, pylock: Path, target: Target, written: dict[str, str])
     problems = _verify.check_lock(locked, _verify.installed_distributions(site))
     problems += _verify.check_records(site, written)
     if problems:
-        shown = "\n".join(f"  {p}" for p in problems[:20])
-        more = f"\n  ... and {len(problems) - 20} more" if len(problems) > 20 else ""
-        raise BuildError(
-            "the bundle wouldn't match uv.lock exactly, so it wasn't written:\n"
-            f"{shown}{more}\n"
-            "This is a bug in bundleup; please report it: https://github.com/funkyfunc/bundleup/issues"
+        shown = "\n".join(problems[:20])
+        more = f"\n... and {len(problems) - 20} more" if len(problems) > 20 else ""
+        raise BundleMismatchError(
+            "the bundle wouldn't match uv.lock exactly, so it wasn't written",
+            detail=f"{shown}{more}",
+            hint=f"this is a bug in bundleup; please report it: {ISSUES_URL}",
         )
 
 
@@ -478,46 +593,82 @@ def safe_name(name: str) -> str:
     return re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-.") or "app"
 
 
+def project_version(site: Path, source: Source) -> str | None:
+    """The project's version as installed (so dynamic versions work); None for a script."""
+    if source.is_script:
+        return None
+    want = canonicalize_name(source.name)
+    for dist in _verify.installed_distributions(site):
+        if dist.name == want:
+            return dist.version
+    return None
+
+
+# Build steps: a stable slug (the keys of BuildResult.timings) and what people see while it runs.
+STEPS = {
+    "python": "finding the Python",
+    "export": "reading uv.lock",
+    "install": "installing",
+    "compile": "compiling",
+    "zip": "zipping",
+    "verify": "verifying",
+    "write": "writing",
+}
+
+
+class _Steps:
+    """Announces each build step through `progress` and times it."""
+
+    def __init__(self, progress: Progress) -> None:
+        self.progress = progress
+        self.timings: dict[str, float] = {}
+        self.current: str | None = None
+        self.started = self.mark = time.perf_counter()
+
+    def start(self, name: str) -> None:
+        self.finish()
+        self.current, self.mark = name, time.perf_counter()
+        self.progress(ProgressEvent("step", STEPS[name]))
+
+    def finish(self) -> None:
+        if self.current is not None:
+            self.timings[self.current] = time.perf_counter() - self.mark
+            self.current = None
+
+
 def build(
-    path: Path,
-    *,
-    output: Path | None = None,
-    python: str | None = None,
-    entry: str | None = None,
-    lock_mode: str | None = None,
-    clock: Callable[[], float] = time.perf_counter,
-) -> Result:
-    """Bundle the project or script at `path`. Raises BuildError for problems the user can fix."""
-    timings: dict[str, float] = {}
-    t = clock()
+    options: BuildOptions, *, progress: Callable[[ProgressEvent], None] | None = None
+) -> BuildResult:
+    """Bundle a project or PEP 723 script into one .pyz.
 
-    def lap(name: str) -> None:
-        nonlocal t
-        now = clock()
-        timings[name] = now - t
-        t = now
-
+    Raises a BundleupError subclass for every expected failure. Never prints; reports steps
+    and commands through `progress` if given.
+    """
+    report = progress or _ignore
+    steps = _Steps(report)
+    steps.start("python")
     uv = find_uv()
-    source = load_source(path)
-    target = find_python(uv, source, request=python)
+    source = load_source(options.path)
+    target = find_python(uv, source, request=options.python, progress=report)
     check_requires_python(source, target)
-    lap("python")
     with tempfile.TemporaryDirectory(prefix="bundleup-") as tmp:
         stage = Path(tmp)
         site = stage / "site"
-        reqs, pylock = export(uv, source, lock_mode=lock_mode, stage=stage)
-        lap("export")
-        install(uv, source, target=target, reqs=reqs, site=site)
-        lap("install")
-        entry_spec = resolve_entry(source, site, entry=entry)
+        steps.start("export")
+        reqs, pylock = export(uv, source, lock_mode=options.lock_mode, stage=stage, progress=report)
+        steps.start("install")
+        install(uv, source, target=target, reqs=reqs, site=site, progress=report)
+        entry_spec = resolve_entry(source, site, entry=options.entry)
         packages, native = inspect_site(site)
-        precompile(target, site)
-        lap("compile")
+        version = project_version(site, source)
+        steps.start("compile")
+        precompile(target, site, progress=report)
+        steps.start("zip")
         payload = stage / "payload.zip"
         digest, written = write_payload(site, payload)
-        lap("zip")
+        steps.start("verify")
         verify(site, pylock=pylock, target=target, written=written)
-        lap("verify")
+        steps.start("write")
         name = safe_name(source.name)
         config = {
             "NAME": source.name,
@@ -534,9 +685,21 @@ def build(
         run(
             [target.executable, "-I", "-c", COMPILE_LOADER, str(loader), str(loader_pyc)],
             what="compiling the loader",
+            progress=report,
+            error=BundleupError,
         )
-        if output is None:
-            output = source.workdir / "dist" / f"{name}.pyz"
+        output = (options.output or source.workdir / "dist" / f"{name}.pyz").absolute()
         write_bundle(output, payload=payload, loader=loader, loader_pyc=loader_pyc)
-        lap("write")
-    return Result(output, output.stat().st_size, packages, native, target, timings)
+        steps.finish()
+    return BuildResult(
+        output=output,
+        size_bytes=output.stat().st_size,
+        name=source.name,
+        version=version,
+        packages=packages,
+        native=native,
+        target=target,
+        project_dir=source.workdir,
+        duration_s=time.perf_counter() - steps.started,
+        timings=steps.timings,
+    )

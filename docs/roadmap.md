@@ -53,8 +53,9 @@ merged; ask if unsure.
    - **Lockfile vs bundle check:** every locked runtime distribution present at the locked
      version; nothing extra (no dev dependencies); a build-time error if not.
    - **Wheel integrity:** every bundled file matches the sha256 in its wheel's `RECORD`.
-   - **Embedded manifest + `--verify`:** the bundle records every file's hash; `python app.pyz
-     --verify` re-checks the extracted cache. Together with the two checks above and reproducible
+   - **Embedded manifest + `bundleup verify`:** the bundle records every file's hash;
+     `bundleup verify app.pyz` (or `uvx bundleup verify`) re-checks it. The owner chose a command
+     over a hook inside every bundle (2026-10-05); it lands after item 5 adds verb commands. Together with the two checks above and reproducible
      builds, this is a hash chain from `uv.lock` to every file that runs
      ([testing-strategy.md](testing-strategy.md) "What correct means").
    - **Differential test vs an installed venv:** for any project, compare the bundle with
@@ -63,7 +64,8 @@ merged; ask if unsure.
    - **Breadth smoke test (nightly CI):** bundle the top few hundred PyPI packages and import
      each one's top-level modules; turn every failure into a gauntlet project or a learning.
    - **Real-world suites:** run a few real projects' own test suites against their bundles.
-5. **Align the CLI with the style guide** ([cli-style-guide.md](cli-style-guide.md),
+5. ~~**Align the CLI with the style guide**~~ **Done 2026-10-05** (see the style guide's
+   "Implementation status" for the rules still open). Was: **Align the CLI with the style guide** ([cli-style-guide.md](cli-style-guide.md),
    [ADR-0016](adr/0016-cli-and-api-conventions.md)): `bundleup build [PATH]` (verbs), stderr/stdout split,
    `error:`/`hint:` messages, exit codes, `--json`, library API (`build()`, `BuildOptions`,
    `BundleupError`), snapshot tests.

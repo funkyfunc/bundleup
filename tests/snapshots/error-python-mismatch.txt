@@ -1,0 +1,2 @@
+error: future needs Python >=99, but the target is Python <VERSION> (<PYTHON>)
+hint: build for a matching Python: bundleup build --python <version>

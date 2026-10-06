@@ -1,0 +1,20 @@
+usage: bundleup [-h] [-V] <command> ...
+
+Make self-contained Python files: your code and its dependencies in one .pyz that runs with plain `python`.
+
+positional arguments:
+  <command>
+    build        bundle a project or script into one .pyz
+
+options:
+  -h, --help     show this help message and exit
+  -V, --version  show program's version number and exit
+
+examples:
+  bundleup build                    bundle the project here into dist/<name>.pyz
+  bundleup build path/to/script.py  bundle a PEP 723 script and its dependencies
+  bundleup build --python 3.9       build for Python 3.9 (a bundle runs on one version)
+  bundleup build --json             print the result as JSON on stdout
+
+docs: https://github.com/funkyfunc/bundleup
+bugs: https://github.com/funkyfunc/bundleup/issues
