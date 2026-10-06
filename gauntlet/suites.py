@@ -12,7 +12,7 @@ the same way with the same counts.
 
 # /// script
 # requires-python = ">=3.11"
-# dependencies = []
+# dependencies = ["packaging>=23"]
 # ///
 
 from __future__ import annotations
