@@ -12,20 +12,21 @@ import argparse
 import json
 import os
 import sys
-from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn, TextIO
 
 from . import __version__
-from ._errors import ISSUES_URL, BundleupError, ExitCode
+from ._errors import ISSUES_URL, BundleupError, CheckFailedError, Diagnostic, ExitCode
 from ._term import Style
 
 if TYPE_CHECKING:
-    from ._build import BuildResult, ProgressEvent
+    from ._build import BuildOptions, BuildResult, Progress, ProgressEvent
+    from ._check import CheckReport
+    from ._term import StatusLine
     from ._verify import VerifyReport
 
 SCHEMA_VERSION = 1  # of the --json document; additive changes only within a version
-COMMANDS = ["build", "verify", "cache"]
+COMMANDS = ["build", "check", "verify", "cache"]
 DOCS_URL = "https://github.com/funkyfunc/bundleup"
 
 DESCRIPTION = (
@@ -37,6 +38,7 @@ examples:
   bundleup build                    bundle the project here into dist/<name>.pyz
   bundleup build path/to/script.py  bundle a PEP 723 script and its dependencies
   bundleup build --python 3.9       build for Python 3.9 (a bundle runs on one version)
+  bundleup check                    report what won't survive bundling, and package sizes
   bundleup verify dist/app.pyz      check a bundle (and its unpacked copy) against its manifest
 
 docs: {DOCS_URL}
@@ -47,6 +49,13 @@ BUILD_EXAMPLES = f"""\
 examples:
   bundleup build                    bundle the project here into dist/<name>.pyz
   bundleup build --python 3.11 --python-platform linux   build for Linux x86_64
+
+docs: {DOCS_URL}"""
+
+CHECK_EXAMPLES = f"""\
+examples:
+  bundleup check                    check the project here for this machine's Python
+  bundleup check --python 3.11 --python-platform linux --strict   fail on any warning
 
 docs: {DOCS_URL}"""
 
@@ -96,60 +105,19 @@ def parsers() -> dict[str, argparse.ArgumentParser]:
         formatter_class=_HelpFormatter,
         allow_abbrev=False,
     )
-    build.add_argument(
-        "path", nargs="?", default=".", help="project directory or .py script (default: .)"
-    )
-    build.add_argument(
-        "-o",
-        "--output",
-        type=Path,
-        metavar="FILE",
-        default=_env_path("BUNDLEUP_OUTPUT"),
-        help=_env_help("output file (default: dist/<name>.pyz)", "BUNDLEUP_OUTPUT"),
-    )
-    build.add_argument(
-        "--python",
-        metavar="VERSION",
-        default=os.environ.get("BUNDLEUP_PYTHON"),
-        help=_env_help(
-            "a version (3.12) or a path; default: uv's choice",
-            "BUNDLEUP_PYTHON",
-        ),
-    )
-    build.add_argument(
-        "--entry",
-        metavar="NAME",
-        default=os.environ.get("BUNDLEUP_ENTRY"),
-        help=_env_help(
-            "a script name, module:function or module",
-            "BUNDLEUP_ENTRY",
-        ),
-    )
-    build.add_argument(
-        "--python-platform",
-        metavar="PLATFORM",
-        default=os.environ.get("BUNDLEUP_PYTHON_PLATFORM"),
-        help=_env_help(
-            "another OS/CPU in uv's terms, e.g. x86_64-manylinux_2_28",
-            "BUNDLEUP_PYTHON_PLATFORM",
-        ),
-    )
-    lock = build.add_mutually_exclusive_group()
-    lock.add_argument(
-        "--locked",
-        dest="lock_mode",
-        action="store_const",
-        const="locked",
-        help="fail if uv.lock is out of date (as in uv; the default when CI is set)",
-    )
-    lock.add_argument(
-        "--frozen",
-        dest="lock_mode",
-        action="store_const",
-        const="frozen",
-        help="use uv.lock as is, without checking it (as in uv)",
-    )
+    _add_build_options(build, output=True)
     _add_output_options(build, verbose="-v: step timings; -vv: commands run")
+    check = commands.add_parser(
+        "check",
+        help="report what won't survive bundling, without writing a bundle",
+        description="Install and compile like `build`, then report what won't work in a bundle "
+        "and how big each package is. Every build runs the same checks.",
+        epilog=CHECK_EXAMPLES,
+        formatter_class=_HelpFormatter,
+        allow_abbrev=False,
+    )
+    _add_build_options(check, output=False)
+    _add_output_options(check, verbose="-v: every package's size; -vv: commands run")
     verify = commands.add_parser(
         "verify",
         help="check a bundle against its manifest",
@@ -200,11 +168,75 @@ def parsers() -> dict[str, argparse.ArgumentParser]:
     return {
         "bundleup": top,
         "build": build,
+        "check": check,
         "verify": verify,
         "cache": cache,
         "cache list": listing,
         "cache clean": clean,
     }
+
+
+def _add_build_options(command: argparse.ArgumentParser, *, output: bool) -> None:
+    """What to bundle and for which Python: the same for `build` and `check`."""
+    command.add_argument(
+        "path", nargs="?", default=".", help="project directory or .py script (default: .)"
+    )
+    if output:
+        command.add_argument(
+            "-o",
+            "--output",
+            type=Path,
+            metavar="FILE",
+            default=_env_path("BUNDLEUP_OUTPUT"),
+            help=_env_help("output file (default: dist/<name>.pyz)", "BUNDLEUP_OUTPUT"),
+        )
+    command.add_argument(
+        "--python",
+        metavar="VERSION",
+        default=os.environ.get("BUNDLEUP_PYTHON"),
+        help=_env_help(
+            "a version (3.12) or a path; default: uv's choice",
+            "BUNDLEUP_PYTHON",
+        ),
+    )
+    command.add_argument(
+        "--entry",
+        metavar="NAME",
+        default=os.environ.get("BUNDLEUP_ENTRY"),
+        help=_env_help(
+            "a script name, module:function or module",
+            "BUNDLEUP_ENTRY",
+        ),
+    )
+    command.add_argument(
+        "--python-platform",
+        metavar="PLATFORM",
+        default=os.environ.get("BUNDLEUP_PYTHON_PLATFORM"),
+        help=_env_help(
+            "another OS/CPU in uv's terms, e.g. x86_64-manylinux_2_28",
+            "BUNDLEUP_PYTHON_PLATFORM",
+        ),
+    )
+    lock = command.add_mutually_exclusive_group()
+    lock.add_argument(
+        "--locked",
+        dest="lock_mode",
+        action="store_const",
+        const="locked",
+        help="fail if uv.lock is out of date (as in uv; the default when CI is set)",
+    )
+    lock.add_argument(
+        "--frozen",
+        dest="lock_mode",
+        action="store_const",
+        const="frozen",
+        help="use uv.lock as is, without checking it (as in uv)",
+    )
+    command.add_argument(
+        "--strict",
+        action="store_true",
+        help="warnings fail too (errors always do)",
+    )
 
 
 def _add_output_options(command: argparse.ArgumentParser, *, verbose: str) -> None:
@@ -241,22 +273,8 @@ def _has_lockfile(path: Path) -> bool:
     )
 
 
-@dataclass(frozen=True)
-class Diagnostic:
-    """One problem, as shown to people (stderr) and to machines (--json)."""
-
-    code: str
-    level: str  # "error" or "warning"
-    message: str
-    hint: str | None = None
-    detail: str | None = None
-
-    def to_json_dict(self) -> dict[str, object]:
-        return {k: v for k, v in self.__dict__.items() if v is not None}
-
-
 def _diagnostic(error: BundleupError) -> Diagnostic:
-    return Diagnostic(error.code, "error", error.message, error.hint, error.detail)
+    return Diagnostic.from_error(error)
 
 
 def _print_diagnostic(d: Diagnostic, style: Style, stream: TextIO) -> None:
@@ -315,48 +333,76 @@ def _emit_json(
     print(json.dumps(document, indent=2, sort_keys=True))
 
 
-def _run_build(opts: argparse.Namespace) -> ExitCode:
-    from ._build import BuildOptions, build  # deferred: --help and --version stay instant
+def _options(opts: argparse.Namespace) -> BuildOptions:
+    from ._build import BuildOptions
+
+    # In CI a stale lock must fail rather than silently bundle something else (rule 9). Without a
+    # lockfile there's nothing to be stale, and `uv export --locked` would refuse to start.
+    in_ci_with_lock = _in_ci() and _has_lockfile(Path(opts.path))
+    return BuildOptions(
+        path=Path(opts.path),
+        output=getattr(opts, "output", None),
+        python=opts.python,
+        entry=opts.entry,
+        lock_mode=opts.lock_mode or ("locked" if in_ci_with_lock else None),
+        python_platform=opts.python_platform,
+        strict=opts.strict,
+    )
+
+
+def _progress(opts: argparse.Namespace, style: Style) -> tuple[StatusLine, Progress]:
+    """A status line for the steps (TTY only), and the uv commands with -vv."""
     from ._term import StatusLine
 
-    err = sys.stderr
-    style = Style(err, opts.color)
     human = not opts.json
-    status = StatusLine(err, style, enabled=human and opts.quiet == 0)
+    status = StatusLine(sys.stderr, style, enabled=human and opts.quiet == 0)
 
     def on_progress(event: ProgressEvent) -> None:
         if event.kind == "step":
             status.show(f"{event.text}…" if style.arrow == "→" else f"{event.text}...")
         elif opts.verbose >= 2 and human:
             status.clear()
-            print(style.dim(f"$ {event.text}"), file=err)
+            print(style.dim(f"$ {event.text}"), file=sys.stderr)
 
-    # In CI a stale lock must fail rather than silently bundle something else (rule 9). Without a
-    # lockfile there's nothing to be stale, and `uv export --locked` would refuse to start.
-    in_ci_with_lock = _in_ci() and _has_lockfile(Path(opts.path))
-    lock_mode = opts.lock_mode or ("locked" if in_ci_with_lock else None)
-    options = BuildOptions(
-        path=Path(opts.path),
-        output=opts.output,
-        python=opts.python,
-        entry=opts.entry,
-        lock_mode=lock_mode,
-        python_platform=opts.python_platform,
-    )
+    return status, on_progress
+
+
+def _print_findings(diags: list[Diagnostic], opts: argparse.Namespace, style: Style) -> None:
+    """Warnings unless -qq; errors always (rule 15)."""
+    for d in diags:
+        if d.level == "error" or opts.quiet < 2:
+            _print_diagnostic(d, style, sys.stderr)
+
+
+def _failed(e: BundleupError, command: str, opts: argparse.Namespace, style: Style) -> ExitCode:
+    """Report a failure: a check failure's findings first, then the error itself."""
+    findings = e.diagnostics if isinstance(e, CheckFailedError) else []
+    if opts.json:
+        _emit_json(command, e.exit_code, None, [*findings, _diagnostic(e)])
+    else:
+        _print_findings(findings, opts, style)
+        _print_diagnostic(_diagnostic(e), style, sys.stderr)
+    return e.exit_code
+
+
+def _run_build(opts: argparse.Namespace) -> ExitCode:
+    from ._build import build  # deferred: --help and --version stay instant
+
+    err = sys.stderr
+    style = Style(err, opts.color)
+    status, on_progress = _progress(opts, style)
     try:
-        result = build(options, progress=on_progress)
+        result = build(_options(opts), progress=on_progress)
     except BundleupError as e:
         status.clear()
-        if human:
-            _print_diagnostic(_diagnostic(e), style, err)
-        else:
-            _emit_json("build", e.exit_code, None, [_diagnostic(e)])
-        return e.exit_code
+        return _failed(e, "build", opts, style)
     finally:
         status.clear()
     if opts.json:
-        _emit_json("build", ExitCode.OK, result.to_json_dict(), [])
-    elif opts.quiet == 0:
+        _emit_json("build", ExitCode.OK, result.to_json_dict(), result.diagnostics)
+        return ExitCode.OK
+    _print_findings(result.diagnostics, opts, style)
+    if opts.quiet == 0:
         for line in _success_lines(result, style):
             print(line, file=err)
         if opts.verbose >= 1:
@@ -366,6 +412,58 @@ def _run_build(opts: argparse.Namespace) -> ExitCode:
             )
             print(style.dim(f"  {steps}"), file=err)
     return ExitCode.OK
+
+
+def _check_lines(report: CheckReport, opts: argparse.Namespace, style: Style) -> list[str]:
+    """The summary: what was checked and the verdict, then sizes (every package with -v)."""
+    name = f"{report.name} {report.version}" if report.version else report.name
+    errors, warnings = len(report.errors), len(report.warnings)
+    counts = [
+        f"{n} {word}{'s' if n != 1 else ''}"
+        for n, word in ((errors, "error"), (warnings, "warning"))
+        if n
+    ]
+    verdict = ", ".join(counts) if counts else "no problems found"
+    target = report.target.describe(report.native)
+    lines = [f"{style.bold('Checked')} {name} for {target}: {verdict}"]
+    packages = f"{len(report.packages)} package{'s' if len(report.packages) != 1 else ''}"
+    largest = ", ".join(f"{p.name} {_size(p.size_bytes)}" for p in report.packages[:3])
+    lines.append(
+        style.dim(
+            f"  {packages}, {_size(report.size_bytes)} unpacked {style.dot} largest: {largest}"
+        )
+    )
+    if opts.verbose >= 1:
+        width = max(len(p.name) for p in report.packages)
+        for p in report.packages:
+            native = "  native" if p.native else ""
+            lines.append(style.dim(f"    {p.name:<{width}}  {_size(p.size_bytes):>10}{native}"))
+    return lines
+
+
+def _run_check(opts: argparse.Namespace) -> ExitCode:
+    from ._build import check  # deferred: --help and --version stay instant
+
+    err = sys.stderr
+    style = Style(err, opts.color)
+    status, on_progress = _progress(opts, style)
+    try:
+        report = check(_options(opts), progress=on_progress)
+    except BundleupError as e:
+        status.clear()
+        return _failed(e, "check", opts, style)
+    finally:
+        status.clear()
+    failed = not report.ok or (opts.strict and report.warnings)
+    code = ExitCode.BUILD_FAILED if failed else ExitCode.OK
+    if opts.json:
+        _emit_json("check", code, report.to_json_dict(), report.diagnostics)
+        return code
+    _print_findings(report.diagnostics, opts, style)
+    if opts.quiet == 0:
+        for line in _check_lines(report, opts, style):
+            print(line, file=err)
+    return code
 
 
 def _verify_diagnostics(report: VerifyReport) -> list[Diagnostic]:
@@ -519,6 +617,8 @@ def main(argv: list[str] | None = None) -> int:
     except _UsageProblem as e:
         return _usage_error(str(e), args)
     try:
+        if opts.command == "check":
+            return _run_check(opts)
         if opts.command == "verify":
             return _run_verify(opts)
         if opts.command == "cache":

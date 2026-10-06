@@ -18,6 +18,7 @@ bundleup build path/to/script.py  # a PEP 723 script with inline dependencies
 bundleup build --python 3.9     # build for another Python (a bundle runs on one Python version)
 bundleup build --python 3.11 --python-platform linux   # build on a Mac for Linux x86_64
 bundleup build --json           # the result as JSON on stdout, for scripts and agents
+bundleup check                  # what won't survive bundling, and each package's size
 bundleup verify dist/app.pyz    # check a bundle (and its unpacked copy) against its manifest
 bundleup cache clean            # remove unpacked bundles not used for 30 days
 python dist/<name>.pyz          # run it: no install, no network
@@ -31,6 +32,12 @@ its own packages and the standard library; set `BUNDLEUP_INHERIT_PATH=1` to also
 packages installed on the machine (they come after the bundle's, but a machine package can still
 win over a bundled namespace package of the same name: a Python rule, PEP 420). If it's started
 with the wrong Python or on the wrong platform, it says so in one sentence.
+
+Every build checks the code first: a file of your project that doesn't compile on the target
+Python stops the build, and anything that may not work in a bundle (a dependency's file that needs
+a newer Python, data files a package expects under `sys.prefix`) is a warning. `bundleup check`
+runs the same checks without writing a bundle and shows how big each package is; `--strict` makes
+warnings fail too.
 
 ## Why
 

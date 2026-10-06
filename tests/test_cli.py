@@ -25,6 +25,7 @@ from bundleup import _cli
 ROOT = Path(__file__).parent.parent
 SNAPSHOTS = Path(__file__).parent / "snapshots"
 SCHEMA = json.loads((ROOT / "docs" / "schema" / "build-v1.json").read_text())
+CHECK_SCHEMA = json.loads((ROOT / "docs" / "schema" / "check-v1.json").read_text())
 UPDATE = os.environ.get("UPDATE_SNAPSHOTS") == "1"
 # argparse's help layout changes between Python versions; help snapshots use the dev Python.
 HELP_PYTHON = (3, 12)
@@ -39,6 +40,8 @@ SCRIPT = """\
 # ///
 print("hi")
 """
+# Doesn't compile on any Python: the check's syntax-error finding, in the project's own code.
+BROKEN = SCRIPT.replace('print("hi")', 'print("hi"')
 
 
 def cli(*args: str, cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -130,6 +133,56 @@ def test_quiet_success_prints_nothing(tmp_path: Path, script: Path) -> None:
     assert (r.returncode, r.stdout, r.stderr) == (0, "", "")
 
 
+@help_snapshot
+def test_check_help(tmp_path: Path) -> None:
+    r = cli("check", "--help", cwd=tmp_path)
+    assert r.returncode == 0 and r.stderr == ""
+    assert len(r.stdout.splitlines()) <= 32  # rule 32
+    check_snapshot("check-help", r.stdout)
+
+
+def test_check_success(tmp_path: Path, script: Path) -> None:
+    r = cli("check", "app.py", cwd=tmp_path)
+    assert r.returncode == 0 and r.stdout == "", r.stderr
+    check_snapshot("check-success", redact(r.stderr, tmp_path))
+    assert not (tmp_path / "dist").exists()  # check never writes a bundle
+
+
+def redact_compiler(text: str) -> str:
+    """The compiler's wording differs between Python versions."""
+    return re.sub(r"(doesn't compile on Python <VERSION>): .*", r"\1: <MESSAGE>", text)
+
+
+def test_check_and_build_report_code_that_does_not_compile(tmp_path: Path) -> None:
+    (tmp_path / "app.py").write_text(BROKEN)
+    r = cli("check", "app.py", cwd=tmp_path)
+    assert r.returncode == 1 and r.stdout == ""
+    check_snapshot("check-syntax-error", redact_compiler(redact(r.stderr, tmp_path)))
+    r = cli("build", "app.py", "-o", "app.pyz", cwd=tmp_path)
+    assert r.returncode == 1 and not (tmp_path / "app.pyz").exists()
+    check_snapshot("error-check-failed", redact_compiler(redact(r.stderr, tmp_path)))
+    r = cli("build", "app.py", "--json", cwd=tmp_path)
+    document = json.loads(r.stdout)
+    jsonschema.validate(document, SCHEMA)
+    assert [d["code"] for d in document["diagnostics"]] == ["syntax-error", "check-failed"]
+    assert document["diagnostics"][0]["file"] == "__bundleup_script__/app.py"
+
+
+def test_check_json_matches_the_schema(tmp_path: Path, script: Path) -> None:
+    r = cli("check", "app.py", "--json", cwd=tmp_path)
+    assert r.returncode == 0 and r.stderr == ""
+    document = json.loads(r.stdout)
+    jsonschema.validate(document, CHECK_SCHEMA)
+    assert document["ok"] and document["diagnostics"] == []
+    assert [p["name"] for p in document["result"]["packages"]] == ["app"]
+    (tmp_path / "app.py").write_text(BROKEN)
+    r = cli("check", "app.py", "--json", cwd=tmp_path)
+    document = json.loads(r.stdout)
+    jsonschema.validate(document, CHECK_SCHEMA)
+    assert (r.returncode, document["ok"]) == (1, False)
+    assert document["diagnostics"][0]["line"] == 5
+
+
 def test_error_not_a_project(tmp_path: Path) -> None:
     r = cli("build", "nowhere", cwd=tmp_path)
     assert r.returncode == 1 and r.stdout == ""
@@ -206,6 +259,7 @@ def test_json_usage_error(tmp_path: Path) -> None:
 def api_description() -> str:
     lines = [f"__all__ = {sorted(bundleup.__all__)}"]
     lines.append(f"build{inspect.signature(bundleup.build)}")
+    lines.append(f"check{inspect.signature(bundleup.check)}")
     lines.append(f"verify{inspect.signature(bundleup.verify)}")
     lines.append(f"list_cache{inspect.signature(bundleup.list_cache)}")
     lines.append(f"clean_cache{inspect.signature(bundleup.clean_cache)}")
@@ -213,6 +267,9 @@ def api_description() -> str:
         bundleup.BuildOptions,
         bundleup.BuildResult,
         bundleup.ProgressEvent,
+        bundleup.Diagnostic,
+        bundleup.CheckReport,
+        bundleup.PackageSize,
         bundleup.VerifyReport,
         bundleup.CachedBundle,
         bundleup.CleanReport,

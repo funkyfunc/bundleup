@@ -32,3 +32,4 @@ and change only the old one's status line.
 | [0021](0021-isolate-from-machine-packages.md) | Bundles don't see the machine's own packages, unless asked to | Accepted |
 | [0022](0022-cache-command.md) | Unpacked bundles are cleaned up by a command, never by bundles themselves | Accepted |
 | [0023](0023-payload-behaves-like-site-packages.md) | The payload behaves like a venv's site-packages: wheel executables stay, `.pth` files run | Proposed |
+| [0024](0024-check-command-and-build-analysis.md) | `bundleup check` reports what won't survive bundling, and every build runs it | Proposed |

@@ -6,7 +6,9 @@ and the exit code the CLI uses. Scripts and agents branch on `code`, never on th
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 from enum import IntEnum
+from typing import Literal
 
 ISSUES_URL = "https://github.com/funkyfunc/bundleup/issues"
 
@@ -94,3 +96,37 @@ class NotABundleError(BundleupError):
     """The file isn't a bundleup bundle, or was made before bundles carried a manifest."""
 
     code = "not-a-bundle"
+
+
+@dataclass(frozen=True)
+class Diagnostic:
+    """One finding, shown to people (stderr) and to machines (`--json`). Branch on `code`."""
+
+    code: str  # stable slug, e.g. "syntax-error"
+    level: Literal["error", "warning"]
+    message: str
+    hint: str | None = None
+    detail: str | None = None  # e.g. uv's output or a list of files, shown under the message
+    package: str | None = None  # the distribution it's about, canonical name
+    file: str | None = None  # POSIX path inside the bundle
+    line: int | None = None
+
+    def to_json_dict(self) -> dict[str, object]:
+        return {k: v for k, v in self.__dict__.items() if v is not None}
+
+    @classmethod
+    def from_error(cls, error: BundleupError) -> Diagnostic:
+        return cls(error.code, "error", error.message, error.hint, error.detail)
+
+
+class CheckFailedError(BundleupError):
+    """The analysis found errors (or, with `strict`, warnings); nothing was written. Each finding
+    is in `diagnostics`."""
+
+    code = "check-failed"
+
+    def __init__(
+        self, message: str, *, diagnostics: list[Diagnostic], hint: str | None = None
+    ) -> None:
+        super().__init__(message, hint=hint)
+        self.diagnostics = diagnostics

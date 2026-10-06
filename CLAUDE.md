@@ -79,6 +79,13 @@ Do these **as you go**, not only at the end:
   exit codes, a typed library API with lazy exports
   ([ADR-0018](docs/adr/0018-package-layout-and-lazy-api.md)). Open rules are listed
   in the style guide's "Implementation status".
+- **`bundleup check`** (roadmap item 10, [ADR-0024](docs/adr/0024-check-command-and-build-analysis.md),
+  **Proposed**): code the target Python can't compile (error in the project, warning in a
+  dependency), data files outside packages, sizes; every build runs it; `--strict`. Wheel
+  executables (`bin/ruff`) and `.pth` files now work like a venv
+  ([ADR-0023](docs/adr/0023-payload-behaves-like-site-packages.md), **Proposed**; gauntlet 22-23).
+- **Weekly nightly summary** (`weekly.yml`, Mondays): a findings page on a `weekly/<date>` branch;
+  Actions can't open PRs in this repo (a setting), so it opens an issue linking the branch.
 - **Cross-target builds** (ADR-0014): `bundleup build --python 3.11 --python-platform linux` on a Mac;
   wheels checked against the target; CI proves three build→run pairs.
 - **Nightly corpus** (item 6): 20 PyPI CLIs + 2 repos run installed vs bundled; failures become
@@ -95,9 +102,10 @@ MISSION.md              goal and scope
 pyproject.toml, src/bundleup/  the package (ADR-0018): __init__.py (public API), _cli.py, _build.py,
                         _verify.py (lock and RECORD checks), _errors.py, _term.py, _loader.py
                         (the bundle's __main__), _platforms.py (cross targets), _zipwriter.py
-                        (parallel zip), _bytecode.py (bytecode cache), _cache.py (cache list/clean)
+                        (parallel zip), _bytecode.py (bytecode cache), _cache.py (cache list/clean),
+                        _check.py (the analysis behind `check` and every build)
 tests/snapshots/        CLI output and API snapshots; docs/cli-reference.md is generated too
-docs/schema/            JSON Schemas of each command's `--json` (build, verify, cache)
+docs/schema/            JSON Schemas of each command's `--json` (build, check, verify, cache)
 tests/                  pytest: loader/CLI edge cases the gauntlet doesn't reach
 docs/roadmap.md         "Next up" work list, then possible future directions
 docs/python-for-js-reviewers.md  code style rules + review guide for the JS-fluent owner
@@ -114,9 +122,11 @@ gauntlet/bench.py       sequential speed benchmark (build, first run, warm start
 gauntlet/snapshot.py    describes installed packages; the matches-venv condition compares two snapshots
 gauntlet/smoke.py       nightly breadth test: top PyPI packages bundled and compared with a venv
 gauntlet/corpus*.py, corpus.toml  nightly corpus: real CLIs run installed vs bundled; failures -> issues
+gauntlet/weekly_summary.py  weekly findings page from the nightly smoke + corpus results (weekly.yml)
 gauntlet/cross.py       cross-target gauntlet: build on one OS for another, run on the target
 .github/workflows/       ci.yml (every push: checks, tests, gauntlet matrix); nightly.yml (smoke
-                        test); corpus.yml (corpus run + corpus-failure issues)
+                        test); corpus.yml (corpus run + corpus-failure issues); weekly.yml
+                        (Monday summary of both)
 gauntlet/report.py      results JSON -> markdown
 gauntlet/results/       committed results
 gauntlet/.work/         scratch (git-ignored)
@@ -134,6 +144,7 @@ uv run pytest -q tests                                                      # lo
 uv run ruff format . && uv run ruff check . && uv run pyright               # the checks (ADR-0015)
 uvx pre-commit install                                                      # git hooks, once per clone
 uv run bundleup build <project-or-script> [--python 3.9] [-o out.pyz] [-v]  # try it
+uv run bundleup check <project-or-script> [--python 3.9] [-v]              # findings + sizes
 UPDATE_SNAPSHOTS=1 uv run pytest -q tests/test_cli.py                       # after an intended CLI change
 ```
 

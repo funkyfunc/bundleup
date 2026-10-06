@@ -22,18 +22,21 @@ import tempfile
 import time
 import zipfile
 from concurrent.futures import ThreadPoolExecutor
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable, Literal
 
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.utils import canonicalize_name
 
-from . import __version__, _bytecode, _platforms, _verify, _zipwriter
+from . import __version__, _bytecode, _check, _platforms, _verify, _zipwriter
+from ._check import CheckReport
 from ._errors import (
     ISSUES_URL,
     BundleMismatchError,
     BundleupError,
+    CheckFailedError,
+    Diagnostic,
     EntryPointError,
     LockfileOutdatedError,
     NoCompatibleWheelError,
@@ -70,6 +73,7 @@ class BuildOptions:
     lock_mode: Literal["locked", "frozen"] | None = None  # as uv's --locked / --frozen
     # Another OS/CPU, in uv's terms (e.g. "x86_64-manylinux_2_28"); default: this machine.
     python_platform: str | None = None
+    strict: bool = False  # warnings fail the build too (errors always do)
 
 
 @dataclass(frozen=True)
@@ -148,6 +152,8 @@ class BuildResult:
     project_dir: Path
     duration_s: float
     timings: dict[str, float]  # seconds per build step, keyed by the slugs in STEPS
+    # Warnings from the analysis (ADR-0024); in the --json document's `diagnostics`, not `result`.
+    diagnostics: list[Diagnostic] = field(default_factory=list)
 
     def to_json_dict(self) -> dict[str, object]:
         try:
@@ -761,6 +767,7 @@ STEPS = {
     "export": "reading uv.lock",
     "install": "installing",
     "compile": "compiling",
+    "check": "checking",
     "zip": "zipping",
     "verify": "verifying",
     "write": "writing",
@@ -797,35 +804,24 @@ def build(
     """
     report = progress or _ignore
     steps = _Steps(report)
-    steps.start("python")
-    uv = find_uv()
-    source = load_source(options.path)
-    target = find_python(
-        uv,
-        source,
-        request=options.python,
-        python_platform=options.python_platform,
-        progress=report,
-    )
-    check_requires_python(source, target)
     with tempfile.TemporaryDirectory(prefix="bundleup-") as tmp:
         stage = Path(tmp)
-        site = stage / "site"
-        steps.start("export")
-        reqs, pylock = export(uv, source, lock_mode=options.lock_mode, stage=stage, progress=report)
-        steps.start("install")
-        install(uv, source, target=target, reqs=reqs, site=site, progress=report)
-        check_wheel_platforms(site, target)
-        entry_spec = resolve_entry(source, site, entry=options.entry)
-        packages, native = inspect_site(site)
-        version = project_version(site, source)
-        steps.start("compile")
-        precompile(target, site, progress=report)
+        p = _prepare(options, stage=stage, steps=steps, progress=report)
+        source, target, site, native, version = p.source, p.target, p.site, p.native, p.version
+        failing = [d for d in p.diagnostics if d.level == "error" or options.strict]
+        if failing:
+            raise CheckFailedError(
+                f"found {_count(failing)}, so no bundle was written",
+                diagnostics=p.diagnostics,
+                hint="--strict makes warnings fail too; build without it to allow them"
+                if not any(d.level == "error" for d in failing)
+                else None,
+            )
         steps.start("zip")
         payload = stage / "payload.zip"
         digest, written = write_payload(site, payload)
         steps.start("verify")
-        locked = verify_payload(site, pylock=pylock, target=target, written=written)
+        locked = verify_payload(site, pylock=p.pylock, target=target, written=written)
         steps.start("write")
         name = safe_name(source.name)
         cache_dir = f"{name}-{digest[:16]}"
@@ -837,7 +833,7 @@ def build(
             "MACHINE": target.machine if native else None,
             "ABIFLAGS": target.abiflags if native else None,
             "TARGET": target.describe(native),
-            "ENTRY": entry_spec,
+            "ENTRY": p.entry,
             "PTH": pth_files(site),
         }
         loader, loader_pyc = stage / "__main__.py", stage / "__main__.pyc"
@@ -855,7 +851,7 @@ def build(
             version=version,
             target=target,
             native=native,
-            entry=entry_spec,
+            entry=p.entry,
             cache_dir=cache_dir,
             payload=payload,
             payload_sha256=digest,
@@ -879,10 +875,99 @@ def build(
         size_bytes=output.stat().st_size,
         name=source.name,
         version=version,
-        packages=packages,
+        packages=p.packages,
         native=native,
         target=target,
         project_dir=source.workdir,
         duration_s=time.perf_counter() - steps.started,
         timings=steps.timings,
+        diagnostics=p.diagnostics,
+    )
+
+
+def _count(diags: list[Diagnostic]) -> str:
+    errors = sum(d.level == "error" for d in diags)
+    warnings = len(diags) - errors
+    parts = [
+        f"{n} {word}{'s' if n != 1 else ''}"
+        for n, word in ((errors, "error"), (warnings, "warning"))
+        if n
+    ]
+    return " and ".join(parts)
+
+
+@dataclass(frozen=True)
+class _Prepared:
+    """A project installed and compiled in a staging directory, and what the analysis found."""
+
+    source: Source
+    target: Target
+    site: Path
+    pylock: Path
+    entry: tuple[str, str, str]
+    packages: int
+    native: bool
+    version: str | None
+    diagnostics: list[Diagnostic]
+    sizes: list[_check.PackageSize]
+
+
+def _prepare(options: BuildOptions, *, stage: Path, steps: _Steps, progress: Progress) -> _Prepared:
+    """The steps `build` and `check` share: find the Python, read the lock, install, compile,
+    analyze."""
+    steps.start("python")
+    uv = find_uv()
+    source = load_source(options.path)
+    target = find_python(
+        uv,
+        source,
+        request=options.python,
+        python_platform=options.python_platform,
+        progress=progress,
+    )
+    check_requires_python(source, target)
+    site = stage / "site"
+    steps.start("export")
+    reqs, pylock = export(uv, source, lock_mode=options.lock_mode, stage=stage, progress=progress)
+    steps.start("install")
+    install(uv, source, target=target, reqs=reqs, site=site, progress=progress)
+    check_wheel_platforms(site, target)
+    entry = resolve_entry(source, site, entry=options.entry)
+    packages, native = inspect_site(site)
+    version = project_version(site, source)
+    steps.start("compile")
+    precompile(target, site, progress=progress)
+    steps.start("check")
+
+    def run_python(cmd: list[str]) -> str:
+        return run(cmd, what="checking the code", progress=progress, error=BundleupError)
+
+    diagnostics, sizes = _check.analyze(
+        site, project=canonicalize_name(source.name), target=target, run=run_python
+    )
+    return _Prepared(
+        source, target, site, pylock, entry, packages, native, version, diagnostics, sizes
+    )
+
+
+def check(
+    options: BuildOptions, *, progress: Callable[[ProgressEvent], None] | None = None
+) -> CheckReport:
+    """Install, compile and analyze like `build`, without writing a bundle: what won't survive
+    bundling, and how big each package is. Findings are in the report (`ok` is False when
+    there are errors); raises a BundleupError subclass only when the build itself fails.
+    `options.output` and `options.strict` are ignored."""
+    report = progress or _ignore
+    steps = _Steps(report)
+    with tempfile.TemporaryDirectory(prefix="bundleup-") as tmp:
+        p = _prepare(options, stage=Path(tmp), steps=steps, progress=report)
+        steps.finish()
+    return CheckReport(
+        name=p.source.name,
+        version=p.version,
+        target=p.target,
+        native=p.native,
+        packages=p.sizes,
+        diagnostics=p.diagnostics,
+        duration_s=time.perf_counter() - steps.started,
     )

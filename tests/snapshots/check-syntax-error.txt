@@ -1,0 +1,4 @@
+error: app.py:5 doesn't compile on Python <VERSION>: <MESSAGE>
+hint: if it needs a newer Python, build for one with --python and raise requires-python so builds for Python <VERSION> are refused; otherwise fix it
+Checked app for Python <VERSION> on <PLATFORM>: 1 error
+  1 package, <SIZE> unpacked · largest: app <SIZE>

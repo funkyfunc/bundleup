@@ -118,8 +118,13 @@ merged; ask if unsure.
 9. ~~**Faster large builds**~~ **Done 2026-10-05** ([findings](findings/2026-10-05-faster-builds.md),
    [ADR-0020](adr/0020-parallel-zip-and-bytecode-cache.md)). Was: threaded compression, per-wheel `.pyc` cache
    ([findings](findings/2026-10-04-large-project-and-rust.md)).
-10. **`bundleup check`**, the pre-ship analyzer, including the compatibility pre-check
-   (native code that doesn't match the target).
+10. ~~**`bundleup check`**~~ **Done 2026-10-05** ([ADR-0024](adr/0024-check-command-and-build-analysis.md),
+   Proposed): code the target Python can't compile (an error in the project, a warning in a
+   dependency), data files outside packages, a size report, `--strict`; every build runs it. On
+   the way, two breakages found and fixed instead of warned about: wheel executables and `.pth`
+   files ([ADR-0023](adr/0023-payload-behaves-like-site-packages.md)). Was: the pre-ship analyzer,
+   including the compatibility pre-check (native code that doesn't match the target, already
+   enforced by cross builds).
 11. **`--format dir`** and **`--target lambda`** ([ADR-0014](adr/0014-output-formats-and-target-presets.md), accepted).
 12. **`pylock.toml` input** ([ADR-0006](adr/0006-delegate-to-uv-and-existing-files.md)): a hedge against depending on uv's own lockfile.
 

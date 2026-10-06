@@ -6,6 +6,12 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-05** · build · `compileall` with `quiet=2` skips files that don't compile without a
+  word, so a bundle built for 3.9 from code with a `match` statement built fine and crashed on
+  import. The build now treats "a `.py` with no `.pyc` after compiling" as a candidate and asks
+  the target interpreter why (`bundleup check`, ADR-0024). Across gauntlet 03, 10, 13-15 and 20-23
+  on 3.9 and 3.12 (torch, sympy, Django, boto3) no dependency file failed, so the check is quiet
+  in practice. Evidence: [ADR-0024](adr/0024-check-command-and-build-analysis.md).
 - **2026-10-05** · runtime · Python runs `.pth` files only in site directories, never in
   `PYTHONPATH` or `sys.path.insert` entries, so a bundler must process them itself. Without that,
   setuptools' distutils shim and pywin32's directories are missing. pex, shiv and a plain zipapp

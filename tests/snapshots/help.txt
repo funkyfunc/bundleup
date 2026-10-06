@@ -5,6 +5,7 @@ Make self-contained Python files: your code and its dependencies in one .pyz tha
 positional arguments:
   <command>
     build        bundle a project or script into one .pyz
+    check        report what won't survive bundling, without writing a bundle
     verify       check a bundle against its manifest
     cache        list or clean up unpacked bundles
 
@@ -16,6 +17,7 @@ examples:
   bundleup build                    bundle the project here into dist/<name>.pyz
   bundleup build path/to/script.py  bundle a PEP 723 script and its dependencies
   bundleup build --python 3.9       build for Python 3.9 (a bundle runs on one version)
+  bundleup check                    report what won't survive bundling, and package sizes
   bundleup verify dist/app.pyz      check a bundle (and its unpacked copy) against its manifest
 
 docs: https://github.com/funkyfunc/bundleup

@@ -13,6 +13,7 @@ Make self-contained Python files: your code and its dependencies in one .pyz tha
 positional arguments:
   <command>
     build        bundle a project or script into one .pyz
+    check        report what won't survive bundling, without writing a bundle
     verify       check a bundle against its manifest
     cache        list or clean up unpacked bundles
 
@@ -24,6 +25,7 @@ examples:
   bundleup build                    bundle the project here into dist/<name>.pyz
   bundleup build path/to/script.py  bundle a PEP 723 script and its dependencies
   bundleup build --python 3.9       build for Python 3.9 (a bundle runs on one version)
+  bundleup check                    report what won't survive bundling, and package sizes
   bundleup verify dist/app.pyz      check a bundle (and its unpacked copy) against its manifest
 
 docs: https://github.com/funkyfunc/bundleup
@@ -34,7 +36,7 @@ bugs: https://github.com/funkyfunc/bundleup/issues
 
 ```
 usage: bundleup build [-h] [-o FILE] [--python VERSION] [--entry NAME] [--python-platform PLATFORM]
-                      [--locked | --frozen] [--json] [-q] [-v] [--color WHEN]
+                      [--locked | --frozen] [--strict] [--json] [-q] [-v] [--color WHEN]
                       [path]
 
 Bundle a project (pyproject.toml + uv.lock) or a PEP 723 script.
@@ -53,6 +55,7 @@ options:
                         BUNDLEUP_PYTHON_PLATFORM]
   --locked              fail if uv.lock is out of date (as in uv; the default when CI is set)
   --frozen              use uv.lock as is, without checking it (as in uv)
+  --strict              warnings fail too (errors always do)
   --json                print one JSON document on stdout
   -q, --quiet           -q: warnings and errors only; -qq: errors
   -v, --verbose         -v: step timings; -vv: commands run
@@ -61,6 +64,40 @@ options:
 examples:
   bundleup build                    bundle the project here into dist/<name>.pyz
   bundleup build --python 3.11 --python-platform linux   build for Linux x86_64
+
+docs: https://github.com/funkyfunc/bundleup
+```
+
+## `bundleup check`
+
+```
+usage: bundleup check [-h] [--python VERSION] [--entry NAME] [--python-platform PLATFORM]
+                      [--locked | --frozen] [--strict] [--json] [-q] [-v] [--color WHEN]
+                      [path]
+
+Install and compile like `build`, then report what won't work in a bundle and how big each package is. Every build runs the same checks.
+
+positional arguments:
+  path                  project directory or .py script (default: .)
+
+options:
+  -h, --help            show this help message and exit
+  --python VERSION      a version (3.12) or a path; default: uv's choice [env: BUNDLEUP_PYTHON]
+  --entry NAME          a script name, module:function or module [env: BUNDLEUP_ENTRY]
+  --python-platform PLATFORM
+                        another OS/CPU in uv's terms, e.g. x86_64-manylinux_2_28 [env:
+                        BUNDLEUP_PYTHON_PLATFORM]
+  --locked              fail if uv.lock is out of date (as in uv; the default when CI is set)
+  --frozen              use uv.lock as is, without checking it (as in uv)
+  --strict              warnings fail too (errors always do)
+  --json                print one JSON document on stdout
+  -q, --quiet           -q: warnings and errors only; -qq: errors
+  -v, --verbose         -v: every package's size; -vv: commands run
+  --color WHEN          auto, always or never (default: auto; also NO_COLOR, FORCE_COLOR)
+
+examples:
+  bundleup check                    check the project here for this machine's Python
+  bundleup check --python 3.11 --python-platform linux --strict   fail on any warning
 
 docs: https://github.com/funkyfunc/bundleup
 ```

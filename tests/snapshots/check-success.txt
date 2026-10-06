@@ -1,0 +1,2 @@
+Checked app for Python <VERSION> on <PLATFORM>: no problems found
+  1 package, <SIZE> unpacked · largest: app <SIZE>

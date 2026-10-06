@@ -13,6 +13,8 @@ from typing import TYPE_CHECKING
 from ._errors import (
     BundleMismatchError,
     BundleupError,
+    CheckFailedError,
+    Diagnostic,
     EntryPointError,
     ExitCode,
     LockfileOutdatedError,
@@ -27,8 +29,9 @@ from ._errors import (
 )
 
 if TYPE_CHECKING:
-    from ._build import BuildOptions, BuildResult, ProgressEvent, Target, build
+    from ._build import BuildOptions, BuildResult, ProgressEvent, Target, build, check
     from ._cache import CachedBundle, CleanReport, clean_cache, list_cache
+    from ._check import CheckReport, PackageSize
     from ._verify import VerifyReport, verify
 
 __version__ = "0.0.1"
@@ -39,12 +42,16 @@ __all__ = [
     "BundleMismatchError",
     "BundleupError",
     "CachedBundle",
+    "CheckFailedError",
+    "CheckReport",
     "CleanReport",
+    "Diagnostic",
     "EntryPointError",
     "ExitCode",
     "LockfileOutdatedError",
     "NoCompatibleWheelError",
     "NotABundleError",
+    "PackageSize",
     "ProgressEvent",
     "ProjectError",
     "PythonMismatchError",
@@ -56,6 +63,7 @@ __all__ = [
     "VerifyReport",
     "__version__",
     "build",
+    "check",
     "clean_cache",
     "list_cache",
     "verify",
@@ -65,8 +73,9 @@ __all__ = [
 _LAZY = {
     **{
         name: "._build"
-        for name in ("BuildOptions", "BuildResult", "ProgressEvent", "Target", "build")
+        for name in ("BuildOptions", "BuildResult", "ProgressEvent", "Target", "build", "check")
     },
+    **{name: "._check" for name in ("CheckReport", "PackageSize")},
     **{name: "._verify" for name in ("VerifyReport", "verify")},
     **{name: "._cache" for name in ("CachedBundle", "CleanReport", "clean_cache", "list_cache")},
 }
