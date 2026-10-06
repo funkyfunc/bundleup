@@ -55,17 +55,20 @@ Do these **as you go**, not only at the end:
   equal to an installed venv (on 3.9, only when both use the same binary: `/usr/bin/python3`'s
   xcrun shim adds ~5 ms); builds 1.8–6× faster than pex
   ([findings](docs/findings/2026-10-04-milestone-1.md)). Design in
-  [ADR-0010](docs/adr/0010-bundle-format-and-loader.md) (format, loader, cache) and
-  [ADR-0011](docs/adr/0011-cli-and-build-pipeline.md) (CLI, pipeline), both **Proposed**: awaiting
-  the user's review.
+  [ADR-0010](docs/adr/0010-bundle-format-and-loader.md) (format, loader, cache; accepted) and
+  [ADR-0011](docs/adr/0011-cli-and-build-pipeline.md) (pipeline accepted; its CLI is superseded by
+  [ADR-0016](docs/adr/0016-cli-and-api-conventions.md): verbs, `bundleup build [PATH]`, not built
+  yet).
 - bundleup depends on the `uv` package (bundled binary) but prefers a uv ≥ 0.9 on `PATH`
   (ADR-0011, at the user's request).
 - Build speed on large projects is no better than pex (gauntlet 21: 5.2 vs 5.5 s); fixes are in
   Python (threaded compression, per-wheel `.pyc` cache). Rust stays reserved for the analyzer's
   scanner, which a parse-only proxy puts at ADR-0008's trigger
   ([findings](docs/findings/2026-10-04-large-project-and-rust.md)).
-- Next: see [docs/roadmap.md](docs/roadmap.md) "Next up" (engineering tooling first, per
-  [ADR-0015](docs/adr/0015-engineering-tooling.md)).
+- Engineering tooling done (Ruff, pyright, hooks; [ADR-0015](docs/adr/0015-engineering-tooling.md)).
+  The repo is being made public so CI can run the full matrix
+  ([ADR-0017](docs/adr/0017-platform-matrix-and-corpus-testing.md)).
+- Next: see [docs/roadmap.md](docs/roadmap.md) "Next up".
 
 ## Layout
 
@@ -115,7 +118,8 @@ uv run bundleup <project-or-script> [-p 3.9] [-o out.pyz]                   # tr
   every `noqa` / `pyright: ignore` carries a reason.
 - **Use uv** for all Python tooling. Standalone scripts use PEP 723 headers and run with `uv run`.
 - **Mind the target Pythons:** the runtime bootstrap must work on macOS's system Python 3.9.
-- **Git:** commit only when asked. Commit messages describe the change only. No AI attribution
+- **Git:** stage explicit paths, never `git add -A`: other sessions may be editing the repo at the
+  same time. Commit only when asked. Commit messages describe the change only. No AI attribution
   (no `Co-Authored-By`, no "Generated with" lines).
 
 ## Working with the user

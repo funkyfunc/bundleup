@@ -5,6 +5,9 @@
 - **Deciders:** proposed by an agent from the owner's questions; awaiting the owner (incl. whether
   to make the repo public)
 
+**Owner decision (2026-10-05):** the repository will be made public (the owner flips it), so CI
+runs the full matrix. The rest of this ADR stays Proposed.
+
 ## Context
 
 bundleup is a one-person project developed on one Mac, but it must work on Linux, Windows and

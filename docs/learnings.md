@@ -6,6 +6,9 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-05** · process · Other sessions edit this repo concurrently: a `git add -A` commit swept
+  in someone else's in-progress ADR and roadmap edits (undone before pushing). Stage explicit paths,
+  and re-read docs from disk before relying on them. Evidence: CLAUDE.md "Working rules".
 - **2026-10-04** · runtime · Importing `typing` costs 6.7 ms on macOS's Python 3.9 and 3.9 ms on
   3.12, more than the loader's whole margin over a venv. pyright honours a module-level
   `TYPE_CHECKING = False` (no import), so the loader is fully typed for free with quoted annotations

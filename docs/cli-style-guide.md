@@ -6,16 +6,17 @@ agrees on almost everything). Adopted via [ADR-0016](adr/0016-cli-and-api-conven
 (**Proposed**). Where this guide and [ADR-0011](adr/0011-cli-and-build-pipeline.md) differ, the user
 decides during the ADR-0011 review.
 
-## Open decision: command shape
+## Command shape (decided 2026-10-05)
+
+**Verbs (option A).** `bundleup build [PATH]` builds, where PATH is a project directory or a
+script; later `bundleup check`, `bundleup targets`, `bundleup cache …`. Bare `bundleup` prints
+help. Chosen by the owner ([ADR-0016](adr/0016-cli-and-api-conventions.md)) because new commands
+can never collide with a project path, and it matches uv and cargo.
 
 | Option | Example | For | Against |
 |---|---|---|---|
 | **A. Verbs** (Compass) | `bundleup build`, `bundleup check`, `bundleup targets`; bare `bundleup` prints help | Matches uv and cargo, which users run alongside bundleup. Adding commands later (`check`, `targets`, `cache clean`) never collides with a project path. clig.dev warns against default commands | Two extra words for the main action |
 | **B. Default action** (Gemini, current code) | `bundleup [path]` builds; `bundleup check`, `bundleup targets` are extras | The esbuild feel: `bundleup` alone does the job | `bundleup check` is ambiguous if a folder is named `check`; every new subcommand is a potential breaking change |
-
-**Agent's recommendation: A, with one optional positional on `build`** (`bundleup build [PATH]`,
-where PATH is a project directory or a script). It keeps "one obvious command" while staying
-safe to extend. Until the user decides, don't add new subcommands.
 
 ## Rules
 

@@ -1,9 +1,15 @@
 # ADR-0011: CLI shape and build pipeline
 
-- **Status:** Proposed
+- **Status:** Accepted for the pipeline and dependencies (2026-10-05); the command-line section
+  is superseded by [ADR-0016](0016-cli-and-api-conventions.md)
 - **Date:** 2026-10-04
 - **Deciders:** an agent (milestone 1); the user asked for uv as a dependency (2026-10-04). The rest
   awaits the user's review
+
+**User decision (2026-10-05):** the CLI follows the [style guide](../cli-style-guide.md) where it
+differs from this ADR: verbs (`bundleup build [PATH]`), no `-p`/`-e` short flags, human output on
+stderr in at most two lines, `error:`/`hint:` messages, `--locked` behaviour when `CI` is set, and
+exit code 3 for bugs. The pipeline and dependency decisions below stand.
 
 ## Context
 

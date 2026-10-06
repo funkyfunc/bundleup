@@ -12,7 +12,7 @@ before work starts, and everything has to respect the accepted ADRs (in particul
 In order. Items marked *Proposed* need the user's confirmation of the ADR before the work is
 merged; ask if unsure.
 
-1. **Engineering tooling** ([ADR-0015](adr/0015-engineering-tooling.md)): Ruff (format + lint,
+1. ~~**Engineering tooling**~~ **Done 2026-10-05** (`bf90979`). ([ADR-0015](adr/0015-engineering-tooling.md)): Ruff (format + lint,
    `target-version = "py39"`), pyright, a `pre-commit`-compatible hook config (format, lint, type
    check on commit; tests on push). Land it as one checkpoint commit that also reformats existing
    code. Follow [python-for-js-reviewers.md](python-for-js-reviewers.md) when fixing what the
@@ -39,7 +39,8 @@ merged; ask if unsure.
    - **Local machines are for debugging, not CI:** the Mac (macOS, system Python 3.9, Linux
      containers/VMs via Colima/Lima/UTM) and the owner's System76 laptop (real x86_64 Linux, can host
      a Windows VM). No hardware purchases until a concrete need appears.
-3. **User review of [ADR-0010](adr/0010-bundle-format-and-loader.md),
+3. ~~**User review**~~ **Done 2026-10-05:** ADR-0010 accepted, ADR-0016 accepted with verbs
+   (`bundleup build`), ADR-0011's CLI superseded by ADR-0016. Was: **User review of [ADR-0010](adr/0010-bundle-format-and-loader.md),
    [ADR-0011](adr/0011-cli-and-build-pipeline.md) and [ADR-0016](adr/0016-cli-and-api-conventions.md)**
    (all Proposed). Summarize each for the user in JavaScript terms and ask for decisions,
    including the **command shape** (verbs vs default action; see
@@ -61,7 +62,7 @@ merged; ask if unsure.
      each one's top-level modules; turn every failure into a gauntlet project or a learning.
    - **Real-world suites:** run a few real projects' own test suites against their bundles.
 5. **Align the CLI with the style guide** ([cli-style-guide.md](cli-style-guide.md),
-   [ADR-0016](adr/0016-cli-and-api-conventions.md)) once item 3 is decided: stderr/stdout split,
+   [ADR-0016](adr/0016-cli-and-api-conventions.md)): `bundleup build [PATH]` (verbs), stderr/stdout split,
    `error:`/`hint:` messages, exit codes, `--json`, library API (`build()`, `BuildOptions`,
    `BundleupError`), snapshot tests.
 6. **Nightly corpus testing with AI triage** ([testing-strategy.md](testing-strategy.md),

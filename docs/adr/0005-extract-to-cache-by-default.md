@@ -1,6 +1,6 @@
 # ADR-0005: Use the standard importer and extract to a cache by default
 
-- **Status:** Accepted (cache details: Proposed)
+- **Status:** Accepted (cache details settled by [ADR-0010](0010-bundle-format-and-loader.md), 2026-10-05)
 - **Date:** 2026-10-03
 - **Deciders:** the user (direction), agent (cache details from baseline evidence)
 

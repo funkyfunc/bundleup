@@ -1,8 +1,9 @@
 # ADR-0016: CLI and Python API follow the style guide
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-05)
 - **Date:** 2026-10-04
-- **Deciders:** proposed by an agent from round 5 research; awaiting the user
+- **Deciders:** proposed by an agent from round 5 research; accepted by the user, who chose
+  verbs for the command shape
 
 ## Context
 
@@ -19,10 +20,11 @@ the CLI milestone 1 actually built.
    versioned single-document `--json`, the five-code exit table, flags > env > `[tool.bundleup]` >
    defaults, a typed library API that never prints or exits, argparse with a small in-house
    terminal helper, and snapshot/contract tests for every output mode.
-2. **Open for the user:** command shape. Verbs (`bundleup build | check | targets`, recommended)
-   vs a default action (`bundleup [path]`, current). See the style guide's "Open decision".
-3. Where this conflicts with ADR-0011, resolve it during the ADR-0011 review and record the outcome
-   by accepting or amending this ADR.
+2. **Command shape (decided 2026-10-05): verbs.** `bundleup build [PATH]`, later `bundleup check`,
+   `bundleup targets`, `bundleup cache …`; bare `bundleup` prints help. See the style guide's
+   "Command shape".
+3. Where this conflicts with [ADR-0011](0011-cli-and-build-pipeline.md), this ADR wins (the user's
+   decision, 2026-10-05); ADR-0011's pipeline and dependency decisions stand.
 
 ## Consequences
 

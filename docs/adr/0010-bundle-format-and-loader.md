@@ -1,8 +1,9 @@
 # ADR-0010: Bundle format, loader and cache layout
 
-- **Status:** Proposed
+- **Status:** Accepted (2026-10-05)
 - **Date:** 2026-10-04
-- **Deciders:** an agent (milestone 1), awaiting the user
+- **Deciders:** an agent (milestone 1); accepted as written by the user, including
+  `PYTHONPATH` for child processes on by default
 
 ## Context
 
