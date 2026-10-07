@@ -90,10 +90,17 @@ def _rerun(command: "list[str]") -> "NoReturn":
 
 
 def _machine() -> str:
+    """The CPU this interpreter runs as (what its compiled modules must match). On Windows, from
+    the interpreter's own build string: the environment describes the OS, and a 32-bit Python on
+    64-bit Windows would read as AMD64 (third review)."""
     if sys.platform == "win32":
-        return os.environ.get("PROCESSOR_ARCHITEW6432") or os.environ.get(
-            "PROCESSOR_ARCHITECTURE", ""
-        )
+        if "(ARM64)" in sys.version:
+            return "ARM64"
+        if "(AMD64)" in sys.version:
+            return "AMD64"
+        if "32 bit" in sys.version:
+            return "x86"
+        return os.environ.get("PROCESSOR_ARCHITECTURE", "")
     return os.uname().machine
 
 
@@ -170,11 +177,14 @@ def _listdir(path: str) -> "list[str]":
 
 
 def _macos() -> "tuple[int, int] | None":
-    """The macOS version, from the Darwin kernel's (Darwin 20 is macOS 11; 19 is 10.15)."""
+    """The macOS version, from the Darwin kernel's: Darwin 19 is 10.15, 20-24 are 11-15, and from
+    25 Apple numbers macOS by year (Darwin 25 is macOS 26; the third review found 16)."""
     try:
         darwin = int(os.uname().release.split(".")[0])
     except (AttributeError, ValueError):
         return None
+    if darwin >= 25:
+        return (darwin + 1, 0)
     return (darwin - 9, 0) if darwin >= 20 else (10, darwin - 4)
 
 

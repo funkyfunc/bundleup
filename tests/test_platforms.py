@@ -84,3 +84,38 @@ def test_runtime_needs_take_the_strictest_wheel() -> None:
         [["cp312-cp312-macosx_11_0_arm64"], ["cp38-abi3-macosx_10_9_universal2"]]
     )
     assert macos == p.RuntimeNeeds(macos=(11, 0))
+
+
+@pytest.mark.parametrize(
+    ("release", "macos"), [("19.6.0", (10, 15)), ("24.1.0", (15, 0)), ("25.6.0", (26, 0))]
+)
+def test_the_macos_version_from_darwins(
+    monkeypatch: pytest.MonkeyPatch, release: str, macos: tuple[int, int]
+) -> None:
+    from bundleup import _loader
+
+    class Uname:
+        machine = "arm64"
+
+    Uname.release = release  # type: ignore[attr-defined]  # a stand-in for os.uname()
+    monkeypatch.setattr(_loader.os, "uname", lambda: Uname)
+    assert _loader._macos() == macos
+
+
+@pytest.mark.parametrize(
+    ("version", "machine"),
+    [
+        ("3.12.10 (tags/v3.12.10) [MSC v.1943 64 bit (AMD64)]", "AMD64"),
+        ("3.12.10 (tags/v3.12.10) [MSC v.1943 64 bit (ARM64)]", "ARM64"),
+        ("3.12.10 (tags/v3.12.10) [MSC v.1943 32 bit (Intel)]", "x86"),
+    ],
+)
+def test_the_windows_cpu_is_the_interpreters(
+    monkeypatch: pytest.MonkeyPatch, version: str, machine: str
+) -> None:
+    from bundleup import _loader
+
+    monkeypatch.setattr(_loader.sys, "platform", "win32")
+    monkeypatch.setattr(_loader.sys, "version", version)
+    monkeypatch.setenv("PROCESSOR_ARCHITEW6432", "AMD64")  # what a 32-bit process sees on x64
+    assert _loader._machine() == machine
