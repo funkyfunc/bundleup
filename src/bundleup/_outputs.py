@@ -208,6 +208,8 @@ def write_pyz(
         "PTH": pth_files(p.site),
         "LIBC": needs.libc if native else None,
         "MACOS": needs.macos if native else None,
+        "MEMBER": "payload.zip",
+        "PAYLOADS": [],
     }
     loader, loader_pyc = stage / "__main__.py", stage / "__main__.pyc"
     loader.write_text(render_loader(config), encoding="utf-8")

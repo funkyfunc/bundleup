@@ -18,7 +18,7 @@ import sys
 TYPE_CHECKING = False  # the type checker treats this as True; at run time nothing is imported
 if TYPE_CHECKING:
     import zipfile
-    from typing import Any, BinaryIO, NoReturn  # noqa: F401 (Any is used in a type comment)
+    from typing import Any, BinaryIO, NoReturn
 
 # --- config: replaced at build time ---
 NAME = "app"
@@ -35,6 +35,10 @@ PTH = []  # type: list[str]  # .pth files at the payload's top level, in the ord
 # What the native wheels need (ADR-0029): ("glibc", (2, 28)) or ("musl", (1, 2)); macOS (11, 0).
 LIBC = None  # type: tuple[str, tuple[int, int]] | None
 MACOS = None  # type: tuple[int, int] | None
+MEMBER = "payload.zip"  # the payload inside the bundle
+# A bundle for several platforms (ADR-0038): one dict per payload with the settings above in
+# lower case ("member", "dirname", "python", ...); the first that fits this machine is used.
+PAYLOADS = []  # type: list[dict[str, Any]]
 # --- end config ---
 
 _ARCHIVE = os.path.dirname(os.path.abspath(__file__))
@@ -54,7 +58,8 @@ def _rerun_with_another_python(here: "tuple[int, int]") -> None:
     with one the bundle allows, if one is on PATH, newest first (ADR-0036). Windows has no
     `python3.X` commands; its `py` launcher picks a version with `-3.X`."""
     top = PYTHON_MAX[1] if PYTHON_MAX else NEWEST_KNOWN
-    wanted = [(3, minor) for minor in range(top, PYTHON[1] - 1, -1) if (3, minor) != here]
+    allowed = VERSIONS or [(3, minor) for minor in range(PYTHON[1], top + 1)]
+    wanted = sorted({v for v in allowed if v != here}, reverse=True)
     folders = [d for d in os.environ.get("PATH", "").split(os.pathsep) if d]
     for version in wanted:
         if sys.platform == "win32":
@@ -186,6 +191,81 @@ def _macos() -> "tuple[int, int] | None":
     if darwin >= 25:
         return (darwin + 1, 0)
     return (darwin - 9, 0) if darwin >= 20 else (10, darwin - 4)
+
+
+def _libc_fits(libc: "tuple[str, tuple[int, int]] | None") -> bool:
+    if not libc or not sys.platform.startswith("linux"):
+        return True
+    kind, need = libc
+    have = _libc()
+    return not (have and (have[0] != kind or (have[1] and tuple(have[1]) < tuple(need))))
+
+
+def _macos_fits(macos: "tuple[int, int] | None") -> bool:
+    if not macos or sys.platform != "darwin":
+        return True
+    have = _macos()
+    return not (have and have < tuple(macos))
+
+
+def _fits(payload: "dict[str, Any]") -> bool:
+    """Whether a payload of a multi-platform bundle can run here, apart from the Python version:
+    OS, CPU, interpreter build, C library, macOS version (the same checks as _check)."""
+    if payload["platform"] and sys.platform != payload["platform"]:
+        return False
+    machine = payload["machine"]
+    if machine and _machine() and _machine() != machine:
+        return False
+    if machine and (
+        sys.implementation.name != "cpython"
+        or getattr(sys, "abiflags", None) != payload["abiflags"]
+    ):
+        return False
+    return _libc_fits(payload["libc"]) and _macos_fits(payload["macos"])
+
+
+def _in_range(payload: "dict[str, Any]", here: "tuple[int, int]") -> bool:
+    low, high = tuple(payload["python"]), payload["python_max"]
+    return low <= here and (high is None or here <= tuple(high))
+
+
+VERSIONS = []  # type: list[tuple[int, int]]  # every version the fitting payloads allow (for re-runs)
+
+
+def _select() -> None:
+    """Pick this machine's payload of a multi-platform bundle and use its settings. A payload for
+    this platform but another Python version still gets picked, so _check explains (or re-runs
+    with a matching Python); nothing for this platform at all is reported here."""
+    global DIRNAME, PYTHON, PYTHON_MAX, PLATFORM, MACHINE, ABIFLAGS, TARGET, PTH, LIBC, MACOS
+    global MEMBER
+    if not PAYLOADS:
+        return
+    here = sys.version_info[:2]
+    fitting = [p for p in PAYLOADS if _fits(p)]
+    if not fitting:
+        names = {"darwin": "macOS", "linux": "Linux", "win32": "Windows"}
+        _fail(
+            "this app was bundled for %s, but this machine is %s %s."
+            % (
+                "; ".join(p["target"] for p in PAYLOADS),
+                names.get(sys.platform, sys.platform),
+                _machine(),
+            )
+        )
+    chosen = next((p for p in fitting if _in_range(p, here)), fitting[0])
+    for p in fitting:
+        top = p["python_max"][1] if p["python_max"] else NEWEST_KNOWN
+        VERSIONS.extend((3, m) for m in range(p["python"][1], top + 1))
+    DIRNAME, MEMBER, TARGET, PTH = (
+        chosen["dirname"],
+        chosen["member"],
+        chosen["target"],
+        chosen["pth"],
+    )
+    PYTHON = tuple(chosen["python"])
+    PYTHON_MAX = tuple(chosen["python_max"]) if chosen["python_max"] else None
+    PLATFORM, MACHINE, ABIFLAGS = chosen["platform"], chosen["machine"], chosen["abiflags"]
+    LIBC, MACOS = chosen["libc"], chosen["macos"]
 
 
 def _check_system() -> None:
@@ -330,7 +410,7 @@ def _unpack(dest: str, final: str) -> None:
     import zipfile
 
     with open(_ARCHIVE, "rb") as f:
-        info = zipfile.ZipFile(f).getinfo("payload.zip")
+        info = zipfile.ZipFile(f).getinfo(MEMBER)
         f.seek(info.header_offset)
         header = f.read(30)
         if header[:4] != b"PK\x03\x04":
@@ -508,6 +588,7 @@ def _hold(site: str) -> None:
 
 
 if __name__ == "__main__":
+    _select()
     _check()
     _site = _find() or _extract()
     _hold(_site)
