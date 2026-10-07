@@ -30,7 +30,8 @@ compatibility: Runs scripts/tool.pyz with Python 3.11 on Linux x86_64; needs no 
 Run `python scripts/tool.pyz --help` to see the options, then ...
 ```
 
-Check it before shipping: `bundleup check tool.py --target claude-api --strict`. Not yet tested in
+Check it before shipping: `bundleup check tool.py --target claude-api --strict`. If a package has
+no wheel for the sandbox, the error names the platforms it does have wheels for. Not yet tested in
 the real sandbox (it needs an API account); the target's Python and platform are the documented
 ones, and CI runs the same kind of cross build (macOS → Linux) on every push.
 
@@ -54,6 +55,12 @@ image on x86_64 and arm64.
 Known limits: Lambda doesn't run `.pth` files from `/var/task` (bundleup warns,
 `pth-not-run`), and has no `/dev/shm`, so `multiprocessing.Pool` and `Queue` don't work there
 (an AWS limitation; the emulator CI uses has it, so this isn't tested).
+
+## Will it build for other platforms?
+
+`bundleup check --also-platform windows --also-platform linux --also-platform macos` reads the
+lock and lists every package without a wheel for each platform, in milliseconds, without building
+anything. On Linux it also says which manylinux level would work.
 
 ## A host application that loads packages from a directory
 

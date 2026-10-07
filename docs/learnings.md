@@ -6,6 +6,12 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-07** · platforms · uv's platform names map to wheel levels (`uv help pip install`):
+  `x86_64-unknown-linux-gnu` is `manylinux_2_28`, macOS targets 13.0 unless
+  `MACOSX_DEPLOYMENT_TARGET` says otherwise; uv offers manylinux 2_17, 2_28 and 2_31-2_40 only.
+  `packaging.tags.cpython_tags`/`compatible_tags`/`mac_platforms` give the exact tag set for a
+  target, so wheel coverage can be decided from a pylock's wheel filenames. Evidence:
+  [ADR-0031](adr/0031-wheel-coverage-from-the-lock.md).
 - **2026-10-07** · runtime · uv's universal lock forks per Python version (gauntlet 03 gets other
   package versions on 3.9; Django 4.2 vs 5 in gauntlet 21), so "does a pure bundle run on 3.X?"
   is answered by evaluating the pylock markers for 3.X and comparing the selection, plus every

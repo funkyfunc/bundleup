@@ -1,6 +1,6 @@
 __all__ = ['BuildOptions', 'BuildResult', 'BundleMismatchError', 'BundleupError', 'CachedBundle', 'CheckFailedError', 'CheckReport', 'CleanReport', 'Diagnostic', 'EntryPointError', 'ExitCode', 'LockfileOutdatedError', 'NoCompatibleWheelError', 'NoLockfileError', 'NotABundleError', 'PackageSize', 'Preset', 'ProgressEvent', 'ProjectError', 'PythonMismatchError', 'PythonNotFoundError', 'Target', 'UsageError', 'UvError', 'UvNotFoundError', 'VerifyReport', '__version__', 'build', 'check', 'clean_cache', 'list_cache', 'list_targets', 'verify']
 build(options: 'BuildOptions', *, progress: 'Callable[[ProgressEvent], None] | None' = None) -> 'BuildResult'
-check(options: 'BuildOptions', *, progress: 'Callable[[ProgressEvent], None] | None' = None) -> 'CheckReport'
+check(options: 'BuildOptions', *, progress: 'Callable[[ProgressEvent], None] | None' = None, also_platforms: 'Sequence[str]' = ()) -> 'CheckReport'
 verify(bundle: 'Path') -> 'VerifyReport'
 list_cache() -> 'list[CachedBundle]'
 clean_cache(*, older_than_days: 'float' = 30, build: 'bool' = False, dry_run: 'bool' = False) -> 'CleanReport'

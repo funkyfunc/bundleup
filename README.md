@@ -19,6 +19,7 @@ bundleup build --python 3.9     # build for another Python (a bundle runs on one
 bundleup build --python 3.11 --python-platform linux   # build on a Mac for Linux x86_64
 bundleup build --json           # the result as JSON on stdout, for scripts and agents
 bundleup check                  # what won't survive bundling, and each package's size
+bundleup check --also-platform windows   # which packages lack a wheel for another OS
 bundleup build --target lambda  # an AWS Lambda .zip (Python 3.13, x86_64; `bundleup targets` lists presets)
 bundleup build --format dir     # a plain directory, for apps that load packages from one
 bundleup verify dist/app.pyz    # check a bundle (and its unpacked copy) against its manifest

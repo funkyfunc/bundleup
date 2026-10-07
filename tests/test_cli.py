@@ -198,6 +198,15 @@ def test_target_checks_the_python_before_building(tmp_path: Path, script: Path) 
     assert "AWS Lambda has no Python 3.99 runtime" in r.stderr
 
 
+def test_check_also_platform(tmp_path: Path, script: Path) -> None:
+    r = cli("check", "app.py", "--also-platform", "windows", "--also-platform", "linux", "--json",
+            cwd=tmp_path)  # fmt: skip
+    assert r.returncode == 0, r.stderr
+    jsonschema.validate(json.loads(r.stdout), CHECK_SCHEMA)
+    r = cli("check", "app.py", "--also-platform", "solaris", cwd=tmp_path)
+    assert r.returncode == 2 and "can't build for 'solaris'" in r.stderr
+
+
 def test_error_not_a_project(tmp_path: Path) -> None:
     r = cli("build", "nowhere", cwd=tmp_path)
     assert r.returncode == 1 and r.stdout == ""

@@ -73,8 +73,8 @@ examples:
 
 ```
 usage: bundleup check [-h] [--format FORMAT] [--target NAME] [--python VERSION] [--entry NAME]
-                      [--python-platform OS] [--locked | --frozen] [--strict] [--json] [-q] [-v]
-                      [--color WHEN]
+                      [--python-platform OS] [--locked | --frozen] [--strict] [--also-platform OS]
+                      [--json] [-q] [-v] [--color WHEN]
                       [path]
 
 Install and compile like `build`, then report what won't work in a bundle and how big each package is. Every build runs the same checks.
@@ -92,6 +92,8 @@ options:
   --locked              fail if uv.lock is out of date (as in uv; the default when CI is set)
   --frozen              use uv.lock as is, without checking it (as in uv)
   --strict              warnings fail too (errors always do)
+  --also-platform OS    also check, from the lock alone, that every package has a wheel for this
+                        platform
   --json                print one JSON document on stdout
   -q, --quiet           -q: warnings and errors only; -qq: errors
   -v, --verbose         -v: every package's size; -vv: commands run
@@ -99,7 +101,7 @@ options:
 
 examples:
   bundleup check                    check the project here for this machine's Python
-  bundleup check --python 3.11 --python-platform linux --strict   fail on any warning
+  bundleup check --also-platform windows --also-platform linux   wheels for other platforms too
 
 docs: https://github.com/funkyfunc/bundleup
 ```

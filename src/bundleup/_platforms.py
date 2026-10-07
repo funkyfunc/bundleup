@@ -7,10 +7,13 @@ depends only on the version, and uv selects wheels for the target (`--python-pla
 
 from __future__ import annotations
 
+import os
 import re
 from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
+
+from packaging.tags import Tag, compatible_tags, cpython_tags, mac_platforms
 
 from ._errors import UsageError
 
@@ -47,6 +50,9 @@ class Platform:
     sys_platform: str  # linux | darwin | win32
     arch: str  # x86_64 | aarch64 | i686
     musl: bool
+    # glibc version (manylinux), musl version, or minimum macOS version this name means to uv;
+    # None on Windows.
+    level: tuple[int, int] | None = None
 
     @property
     def machine(self) -> str:
@@ -68,6 +74,32 @@ class Platform:
             "python_version": major_minor,
             "sys_platform": self.sys_platform,
         }
+
+    def supported_tags(self, python: tuple[int, int]) -> frozenset[Tag]:
+        """Every wheel tag a CPython of `python` on this platform can install, most specific
+        first, as pip and uv compute them (packaging.tags), for the lock-only coverage check."""
+        platforms = self._platform_tags()
+        cp = f"cp{python[0]}{python[1]}"
+        tags = list(cpython_tags(python, abis=[cp], platforms=platforms))
+        tags += compatible_tags(python, interpreter=cp, platforms=platforms)
+        return frozenset(tags)
+
+    def _platform_tags(self) -> list[str]:
+        if self.sys_platform == "win32":
+            return [{"x86_64": "win_amd64", "aarch64": "win_arm64", "i686": "win32"}[self.arch]]
+        if self.sys_platform == "darwin":
+            arch = "arm64" if self.arch == "aarch64" else self.arch
+            return list(mac_platforms(self.level or (13, 0), arch))
+        major, minor = self.level or ((1, 2) if self.musl else (2, 28))
+        if self.musl:
+            return [f"musllinux_{major}_{m}_{self.arch}" for m in range(minor, -1, -1)]
+        found = [f"manylinux_{major}_{m}_{self.arch}" for m in range(minor, 4, -1)]
+        found += [
+            f"{legacy}_{self.arch}"
+            for legacy, level in LEGACY_MANYLINUX.items()
+            if level <= (major, minor)
+        ]
+        return found
 
     def accepts(self, tag: str) -> bool:
         """Whether a wheel tag ("cp311-cp311-manylinux_2_17_x86_64") can run on this platform."""
@@ -106,7 +138,28 @@ def parse(name: str) -> Platform:
             f"bundleup can't build for {name!r}",
             hint=f"use one of uv's platform names for Linux, macOS or Windows, e.g. {EXAMPLES}",
         )
-    return Platform(name, sys_platform, arch, musl="musl" in full)
+    return Platform(name, sys_platform, arch, musl="musl" in full, level=_level(full))
+
+
+def _level(full: str) -> tuple[int, int] | None:
+    """What a uv platform name means for wheel compatibility (`uv help pip install`): `-gnu` is
+    manylinux_2_28, musl is musllinux_1_2, macOS is 13.0 unless MACOSX_DEPLOYMENT_TARGET says
+    otherwise."""
+    if "windows" in full:
+        return None
+    if "apple-darwin" in full:
+        wanted = os.environ.get("MACOSX_DEPLOYMENT_TARGET", "13.0").split(".")
+        try:
+            return (int(wanted[0]), int(wanted[1]) if len(wanted) > 1 else 0)
+        except ValueError:
+            return (13, 0)
+    if "musl" in full:
+        return (1, 2)
+    explicit = re.search(r"manylinux_(\d+)_(\d+)", full)
+    if explicit:
+        return (int(explicit[1]), int(explicit[2]))
+    legacy = next((v for k, v in LEGACY_MANYLINUX.items() if k in full), None)
+    return legacy or (2, 28)
 
 
 def wheel_tags(dist_info: Path) -> list[str]:

@@ -149,7 +149,7 @@ of it to be fixed. In order:
     issue; the weekly summary paused.
 14. ~~**Pure-Python bundles run on every minor version**~~ **Done 2026-10-07**
     ([ADR-0030](adr/0030-pure-python-bundles-run-on-a-range.md)); a versioned shebang.
-15. **Wheel coverage from the lock**: which packages have no wheel for a target, for several
+15. ~~**Wheel coverage from the lock**~~ **Done 2026-10-07** ([ADR-0031](adr/0031-wheel-coverage-from-the-lock.md)): which packages have no wheel for a target, for several
     targets at once, without installing (`check`), and precise errors in cross builds.
 16. ~~**Split `_build.py`**~~ **Done 2026-10-07**: remove duplicated helpers, type the entry point.
 17. **Docs match the code**: MISSION, vision, README, a shorter roadmap and "Current state".

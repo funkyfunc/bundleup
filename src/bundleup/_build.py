@@ -6,18 +6,20 @@ from __future__ import annotations
 import shutil
 import tempfile
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Literal
 
 from packaging.utils import canonicalize_name
 
-from . import _check, _targets
+from . import _check, _coverage, _platforms, _targets
 from ._check import CheckReport
 from ._errors import (
     BundleupError,
     CheckFailedError,
     Diagnostic,
+    NoCompatibleWheelError,
     UsageError,
 )
 from ._outputs import (
@@ -41,7 +43,7 @@ from ._python import PythonRange, Target, check_requires_python, find_interprete
 from ._source import Source, load_source, project_version, safe_name, script_metadata, script_path
 from ._steps import Progress, ProgressEvent, Steps, ignore, run
 from ._targets import FORMATS, Format
-from ._text import findings
+from ._text import findings, plural
 from ._uv import add_runtime, export, find_uv, install
 
 
@@ -187,6 +189,38 @@ def _count(diags: list[Diagnostic]) -> str:
     return findings(errors, len(diags) - errors)
 
 
+def _wheel_coverage(pylock: Path, target: Target) -> list[Diagnostic]:
+    """For another platform: refuse before installing if a locked package has no wheel for it
+    (ADR-0031); warn about source-only packages, which uv builds here. Nothing for this machine:
+    uv builds what it needs for it."""
+    platform = target.python_platform
+    if platform is None:
+        return []
+    lock = pylock.read_text(encoding="utf-8")
+    found = _coverage.diagnostics(_coverage.gaps(lock, platform, target.version), platform, lock)
+    errors = [d for d in found if d.level == "error"]
+    if errors:
+        raise NoCompatibleWheelError(
+            f"{plural(len(errors), 'package')} {'has' if len(errors) == 1 else 'have'} no wheel "
+            f"for {platform.name}",
+            detail="\n".join(d.message.split(": ", 1)[1] for d in errors),
+            hint=errors[0].hint,
+        )
+    return found
+
+
+def _also_platforms(pylock: Path, target: Target, names: Sequence[str]) -> list[Diagnostic]:
+    """`bundleup check --also-platform`: the lock-only coverage check for more targets."""
+    lock = pylock.read_text(encoding="utf-8")
+    found: list[Diagnostic] = []
+    for name in names:
+        platform = _platforms.parse(name)
+        found += _coverage.diagnostics(
+            _coverage.gaps(lock, platform, target.version), platform, lock
+        )
+    return found
+
+
 def _unlocked_script(source: Source) -> list[Diagnostic]:
     """A script with dependencies but no lock is resolved afresh on every build (ADR-0028)."""
     if not source.is_script or source.path.with_name(source.path.name + ".lock").exists():
@@ -259,6 +293,7 @@ def _prepare(
     script = script_path(source, fmt)
     steps.start("export")
     reqs, pylock = export(uv, source, lock_mode=options.lock_mode, stage=stage, progress=progress)
+    coverage = _wheel_coverage(pylock, target)  # before installing: a precise error, early
     steps.start("install")
     install(uv, source, target=target, reqs=reqs, site=site, script=script, progress=progress)
     check_wheel_platforms(site, target)
@@ -284,6 +319,7 @@ def _prepare(
         site, project=canonicalize_name(source.name), target=target, run=run_python, script=script
     )
     diagnostics += _format_diagnostics(fmt, site, sizes)
+    diagnostics += coverage
     diagnostics += _unlocked_script(source)
     pythons = python_range(site, pylock=pylock, target=target, source=source, native=native)
     oldest = f"{pythons.min[0]}.{pythons.min[1]}"
@@ -317,18 +353,24 @@ def _prepare(
 
 
 def check(
-    options: BuildOptions, *, progress: Callable[[ProgressEvent], None] | None = None
+    options: BuildOptions,
+    *,
+    progress: Callable[[ProgressEvent], None] | None = None,
+    also_platforms: Sequence[str] = (),
 ) -> CheckReport:
     """Install, compile and analyze like `build`, without writing anything: what won't survive
     bundling (for `options.format`), and how big each package is. Findings are in the report
     (`ok` is False when there are errors); raises a BundleupError subclass only when the build
-    itself fails. `options.output` and `options.strict` are ignored."""
+    itself fails. `options.output` and `options.strict` are ignored. `also_platforms`: more uv
+    platform names to check from the lock alone (ADR-0031), for the same Python version."""
     options, _flags = _targets.apply(options)
+    others = [_platforms.parse(name).name for name in also_platforms]  # bad names fail first
     fmt = _format(options)
     report = progress or ignore
     steps = Steps(report)
     with tempfile.TemporaryDirectory(prefix="bundleup-") as tmp:
         p = _prepare(options, fmt=fmt, stage=Path(tmp), steps=steps, progress=report)
+        extra = _also_platforms(p.pylock, p.target, others)
         steps.finish()
     return CheckReport(
         name=p.source.name,
@@ -336,7 +378,7 @@ def check(
         target=p.target,
         native=p.native,
         packages=p.sizes,
-        diagnostics=p.diagnostics,
+        diagnostics=sorted([*p.diagnostics, *extra], key=lambda d: d.level != "error"),
         duration_s=time.perf_counter() - steps.started,
         pythons=p.pythons,
     )

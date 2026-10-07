@@ -56,7 +56,7 @@ examples:
 CHECK_EXAMPLES = f"""\
 examples:
   bundleup check                    check the project here for this machine's Python
-  bundleup check --python 3.11 --python-platform linux --strict   fail on any warning
+  bundleup check --also-platform windows --also-platform linux   wheels for other platforms too
 
 docs: {DOCS_URL}"""
 
@@ -118,6 +118,13 @@ def parsers() -> dict[str, argparse.ArgumentParser]:
         allow_abbrev=False,
     )
     _add_build_options(check, output=False)
+    check.add_argument(
+        "--also-platform",
+        action="append",
+        default=[],
+        metavar="OS",
+        help="also check, from the lock alone, that every package has a wheel for this platform",
+    )
     _add_output_options(check, verbose="-v: every package's size; -vv: commands run")
     targets = commands.add_parser(
         "targets",
@@ -496,7 +503,8 @@ def _run_check(opts: argparse.Namespace) -> ExitCode:
     style = Style(err, opts.color)
     status, on_progress = _progress(opts, style)
     try:
-        report = check(_expanded(opts, style), progress=on_progress)
+        options = _expanded(opts, style)
+        report = check(options, progress=on_progress, also_platforms=opts.also_platform)
     except BundleupError as e:
         status.clear()
         return _failed(e, "check", opts, style)
