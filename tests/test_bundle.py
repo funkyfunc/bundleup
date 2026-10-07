@@ -15,8 +15,10 @@ from typing import Any
 
 import pytest
 
-from bundleup import _build as b
+import bundleup
 from bundleup._cli import main
+from bundleup._payload import pth_files
+from bundleup._source import script_metadata
 
 PROBE = """\
 # /// script
@@ -263,8 +265,8 @@ def test_cli_explains_missing_project(tmp_path: Path, capsys: pytest.CaptureFixt
 
 
 def test_script_metadata_parsing() -> None:
-    assert b.script_metadata(PROBE) == {"requires-python": ">=3.9", "dependencies": []}
-    assert b.script_metadata("print('no block')") == {}
+    assert script_metadata(PROBE) == {"requires-python": ">=3.9", "dependencies": []}
+    assert script_metadata("print('no block')") == {}
 
 
 def test_builds_without_uv_on_path(tmp_path: Path) -> None:
@@ -296,7 +298,7 @@ def test_builds_without_uv_on_path(tmp_path: Path) -> None:
 def test_loader_parses_on_any_python_3(name: str) -> None:
     """The loader must get far enough on an old Python to print "this app needs Python X"; the
     children's sitecustomize is imported by whatever Python the app starts."""
-    source = (Path(b.__file__).parent / name).read_text()
+    source = (Path(bundleup.__file__).parent / name).read_text()
     ast.parse(source, feature_version=(3, 5))  # raises SyntaxError on newer-only syntax
 
 
@@ -394,4 +396,4 @@ def test_pth_files_are_processed_like_site_py(
     assert "error in a.pth line 5" in capsys.readouterr().err
     del sys.modules["__g_sitedir__"]
     (tmp_path / ".hidden.pth").write_text("")
-    assert b.pth_files(tmp_path) == ["a.pth"]
+    assert pth_files(tmp_path) == ["a.pth"]

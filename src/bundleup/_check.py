@@ -27,9 +27,10 @@ from typing import TYPE_CHECKING
 
 from . import _bytecode, _platforms, _verify
 from ._errors import Diagnostic
+from ._text import listing, plural
 
 if TYPE_CHECKING:
-    from ._build import Target
+    from ._python import Target
 
 # Runs on the target interpreter: why each listed file doesn't compile (paths relative to argv[1]).
 COMPILE_ERRORS = """
@@ -50,7 +51,6 @@ print(json.dumps(found))
 # (Headers under include/ are only for compiling against a package, never loaded at run time.)
 DATA_ROOTS = ("share/", "etc/")
 DOCUMENTATION = ("share/man/", "share/doc/", "share/licenses/", "share/info/")
-SHOWN = 20  # files listed in a diagnostic's detail
 
 
 @dataclass(frozen=True)
@@ -153,15 +153,6 @@ def package_sizes(site: Path, owner: dict[str, _Owner]) -> list[PackageSize]:
     return sorted(found, key=lambda p: (-p.size_bytes, p.name))
 
 
-def _plural(n: int, word: str) -> str:
-    return f"{n} {word}{'' if n == 1 else 's'}"
-
-
-def _listing(items: list[str]) -> str:
-    more = [f"... and {len(items) - SHOWN} more"] if len(items) > SHOWN else []
-    return "\n".join(items[:SHOWN] + more)
-
-
 def syntax_errors(
     site: Path,
     owner: dict[str, _Owner],
@@ -180,10 +171,10 @@ def syntax_errors(
     ]
     if not candidates:
         return []
-    listing = site.parent / "check-list.txt"
-    listing.write_text("\n".join(candidates), encoding="utf-8")
+    to_check = site.parent / "check-list.txt"
+    to_check.write_text("\n".join(candidates), encoding="utf-8")
     found: list[list[str | int | None]] = json.loads(
-        run([target.executable, "-I", "-c", COMPILE_ERRORS, str(site), str(listing)])
+        run([target.executable, "-I", "-c", COMPILE_ERRORS, str(site), str(to_check)])
     )
     python = f"Python {target.version[0]}.{target.version[1]}"
     diags = []
@@ -217,11 +208,11 @@ def syntax_errors(
             Diagnostic(
                 "syntax-error",
                 "warning",
-                f"{_plural(len(files), 'file')} in {who.name} {who.version} {verb} compile on "
+                f"{plural(len(files), 'file')} in {who.name} {who.version} {verb} compile on "
                 f"{python}",
                 hint=f"harmless if {who.name} imports {them} only on newer Pythons; if not, use a "
                 f"{who.name} release that supports {python}",
-                detail=_listing(files),
+                detail=listing(files),
                 package=who.name,
                 file=first[who][0],
                 line=first[who][1],
@@ -244,11 +235,11 @@ def data_files(site: Path, owner: dict[str, _Owner]) -> list[Diagnostic]:
             Diagnostic(
                 "data-files",
                 "warning",
-                f"{who.name} {who.version} installs {_plural(len(files), 'data file')} outside "
+                f"{who.name} {who.version} installs {plural(len(files), 'data file')} outside "
                 f"its packages ({files[0].split('/')[0]}/)",
                 hint=f"a venv puts them under sys.prefix and a bundle next to the packages; if "
                 f"{who.name} looks for them under sys.prefix, it won't find them",
-                detail=_listing(files),
+                detail=listing(files),
                 package=who.name,
                 file=files[0],
             )

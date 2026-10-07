@@ -30,9 +30,11 @@ from ._errors import (
 )
 
 if TYPE_CHECKING:
-    from ._build import BuildOptions, BuildResult, ProgressEvent, Target, build, check
+    from ._build import BuildOptions, BuildResult, build, check
     from ._cache import CachedBundle, CleanReport, clean_cache, list_cache
     from ._check import CheckReport, PackageSize
+    from ._python import Target
+    from ._steps import ProgressEvent
     from ._targets import Preset, list_targets
     from ._verify import VerifyReport, verify
 
@@ -76,10 +78,9 @@ __all__ = [
 
 # Public names whose module is imported only when they're first used.
 _LAZY = {
-    **{
-        name: "._build"
-        for name in ("BuildOptions", "BuildResult", "ProgressEvent", "Target", "build", "check")
-    },
+    **{name: "._build" for name in ("BuildOptions", "BuildResult", "build", "check")},
+    "ProgressEvent": "._steps",
+    "Target": "._python",
     **{name: "._check" for name in ("CheckReport", "PackageSize")},
     **{name: "._targets" for name in ("Preset", "list_targets")},
     **{name: "._verify" for name in ("VerifyReport", "verify")},

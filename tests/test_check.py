@@ -9,7 +9,7 @@ from pathlib import Path
 
 from bundleup import _bytecode
 from bundleup import _check as c
-from bundleup._build import Target
+from bundleup._python import Target
 from bundleup._verify import record_hash
 
 TARGET = Target(

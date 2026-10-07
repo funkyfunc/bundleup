@@ -7,12 +7,15 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, replace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 from ._errors import UsageError
 
 if TYPE_CHECKING:
     from ._build import BuildOptions
+
+Format = Literal["pyz", "dir", "lambda"]  # what a build writes (ADR-0014, ADR-0025)
+FORMATS: tuple[Format, ...] = ("pyz", "dir", "lambda")
 
 # Lambda runs Python 3.10 and 3.11 on Amazon Linux 2 (glibc 2.26: manylinux_2_17 is the newest
 # level uv offers that fits) and 3.12+ on Amazon Linux 2023 (glibc 2.34). Checked 2026-10-05:
@@ -41,7 +44,7 @@ class Preset:
 
     name: str
     description: str
-    format: str
+    format: Format
     python: str  # the default; --python overrides it
     platform_for: Callable[[str], str]  # the Python version -> uv platform name
 

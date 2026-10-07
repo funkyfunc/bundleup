@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from bundleup import _build as b
 from bundleup import _verify as v
+from bundleup._uv import launchers
 
 MAC_312 = {
     "implementation_name": "cpython",
@@ -118,7 +118,7 @@ def test_only_launchers_are_removed(tmp_path: Path) -> None:
     site, _written = make_site(tmp_path, files)
     entry_points = "[console_scripts]\ntool = pkg.a:main\n"
     (site / "pkg-1.0.dist-info" / "entry_points.txt").write_text(entry_points)
-    assert b.launchers(site) == {"bin/tool", "bin/tool.exe"}
+    assert launchers(site) == {"bin/tool", "bin/tool.exe"}
 
 
 def test_record_problems_are_each_reported(tmp_path: Path) -> None:

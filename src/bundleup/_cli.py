@@ -18,10 +18,12 @@ from typing import TYPE_CHECKING, NoReturn, TextIO
 from . import __version__
 from ._errors import ISSUES_URL, BundleupError, CheckFailedError, Diagnostic, ExitCode
 from ._term import Style
+from ._text import findings, listing, plural
 
 if TYPE_CHECKING:
-    from ._build import BuildOptions, BuildResult, Progress, ProgressEvent
+    from ._build import BuildOptions, BuildResult
     from ._check import CheckReport
+    from ._steps import Progress, ProgressEvent
     from ._term import StatusLine
     from ._verify import VerifyReport
 
@@ -334,7 +336,7 @@ def _success_lines(result: BuildResult, style: Style) -> list[str]:
         f"{style.bold('Bundled')} {name} {style.arrow} {path} "
         f"{style.dim(f'({size}) in {result.duration_s:.2f}s')}"
     )
-    packages = f"{result.packages} package{'s' if result.packages != 1 else ''}"
+    packages = plural(result.packages, "package")
     details = [result.target.describe(result.native), packages]
     if result.format == "lambda" and result.handler:
         details.append(f"handler {result.handler}")
@@ -469,15 +471,10 @@ def _check_lines(report: CheckReport, opts: argparse.Namespace, style: Style) ->
     """The summary: what was checked and the verdict, then sizes (every package with -v)."""
     name = f"{report.name} {report.version}" if report.version else report.name
     errors, warnings = len(report.errors), len(report.warnings)
-    counts = [
-        f"{n} {word}{'s' if n != 1 else ''}"
-        for n, word in ((errors, "error"), (warnings, "warning"))
-        if n
-    ]
-    verdict = ", ".join(counts) if counts else "no problems found"
+    verdict = findings(errors, warnings) or "no problems found"
     target = report.target.describe(report.native)
     lines = [f"{style.bold('Checked')} {name} for {target}: {verdict}"]
-    packages = f"{len(report.packages)} package{'s' if len(report.packages) != 1 else ''}"
+    packages = plural(len(report.packages), "package")
     largest = ", ".join(f"{p.name} {_size(p.size_bytes)}" for p in report.packages[:3])
     lines.append(
         style.dim(
@@ -518,10 +515,6 @@ def _run_check(opts: argparse.Namespace) -> ExitCode:
 
 
 def _verify_diagnostics(report: VerifyReport) -> list[Diagnostic]:
-    def listing(problems: list[str]) -> str:
-        more = f"\n... and {len(problems) - 20} more" if len(problems) > 20 else ""
-        return "\n".join(problems[:20]) + more
-
     diags = []
     if report.problems:
         diags.append(
@@ -577,9 +570,9 @@ def _run_verify(opts: argparse.Namespace) -> ExitCode:
 def _ago(seconds: float) -> str:
     days = seconds / 86400
     if days >= 1:
-        return f"{days:.0f} day{'s' if round(days) != 1 else ''} ago"
+        return f"{plural(round(days), 'day')} ago"
     hours = seconds / 3600
-    return f"{hours:.0f} hour{'s' if round(hours) != 1 else ''} ago" if hours >= 1 else "just now"
+    return f"{plural(round(hours), 'hour')} ago" if hours >= 1 else "just now"
 
 
 def _run_cache(opts: argparse.Namespace) -> ExitCode:
@@ -602,7 +595,7 @@ def _run_cache(opts: argparse.Namespace) -> ExitCode:
             when = out.dim(f"last used {_ago(now - b.last_used)}")
             print(f"{out.bold(b.name)}  {_size(b.size_bytes)}  {when}  {b.path}")
         total = sum(b.size_bytes for b in bundles)
-        count = f"{len(bundles)} unpacked bundle{'s' if len(bundles) != 1 else ''}"
+        count = plural(len(bundles), "unpacked bundle")
         print(style.dim(f"{count}, {_size(total)}"), file=err)
         return ExitCode.OK
     report = clean_cache(older_than_days=opts.older_than, build=opts.build, dry_run=opts.dry_run)
@@ -610,7 +603,7 @@ def _run_cache(opts: argparse.Namespace) -> ExitCode:
         _emit_json(command, ExitCode.OK, report.to_json_dict(), [])
     elif opts.quiet == 0:
         verb = "Would remove" if report.dry_run else "Removed"
-        items = f"{len(report.removed)} item{'s' if len(report.removed) != 1 else ''}"
+        items = plural(len(report.removed), "item")
         print(f"{style.bold(verb)} {items} ({_size(report.freed_bytes)})", file=err)
         if opts.verbose >= 1:
             for path in report.removed:

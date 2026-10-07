@@ -107,12 +107,16 @@ Do these **as you go**, not only at the end:
 
 ```
 MISSION.md              goal and scope
-pyproject.toml, src/bundleup/  the package (ADR-0018): __init__.py (public API), _cli.py, _build.py,
-                        _verify.py (lock and RECORD checks), _errors.py, _term.py, _loader.py
-                        (the bundle's __main__), _platforms.py (cross targets), _zipwriter.py
-                        (parallel zip), _bytecode.py (bytecode cache), _cache.py (cache list/clean),
-                        _check.py (the analysis behind `check` and every build), _targets.py
-                        (presets)
+pyproject.toml, src/bundleup/  the package (ADR-0018): __init__.py (public API), _cli.py; the build
+                        in steps: _build.py (orchestration, build()/check()), _source.py (project
+                        or script, lockfile), _python.py (target interpreter), _uv.py (export,
+                        install), _payload.py (installed tree, entry, bytecode, lock checks),
+                        _outputs.py (pyz/dir/lambda writers), _steps.py (progress, run);
+                        _check.py (the analysis), _verify.py (lock/RECORD checks, `verify`),
+                        _loader.py (the bundle's __main__), _runtime.py + _sitecustomize.py
+                        (copied into each payload, ADR-0027), _platforms.py, _targets.py
+                        (presets, Format), _zipwriter.py, _bytecode.py, _cache.py, _errors.py,
+                        _term.py, _text.py
 tests/snapshots/        CLI output and API snapshots; docs/cli-reference.md is generated too
 docs/schema/            JSON Schemas of each command's `--json` (build, check, targets, verify, cache)
 tests/                  pytest: loader/CLI edge cases the gauntlet doesn't reach
