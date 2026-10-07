@@ -12,14 +12,14 @@ before work starts, and everything has to respect the accepted ADRs (in particul
 In order. Take the first open item. Decisions need an ADR; one the owner hasn't confirmed is
 marked *Proposed*.
 
-21. **One `.pyz` for several platforms** (a payload per OS × CPU × Python, the loader picks):
-    the founding case has compiled dependencies (third review). Needs an ADR and the owner's go.
 19. **Release 0.1.0**: everything is prepared ([docs/releasing.md](releasing.md), [CHANGELOG](../CHANGELOG.md),
     [release.yml](../.github/workflows/release.yml)); publishing needs the owner (trusted publishing on pypi.org, then a tag).
+21. **One `.pyz` for several platforms** (a payload per OS × CPU × Python, the loader picks):
+    the founding case has compiled dependencies (third review). Needs an ADR and the owner's go; after 0.1 (scope is frozen until it has users).
 
 Frozen until 0.1 has users: new formats, presets and nightly automation. Deferred: faster warm
 rebuilds (cache compressed zip members per wheel); packages a target already provides (would break "the lock decides"); agent triage of `corpus-failure` issues (ADR-0017, by the owner); standalone executables
-(needs its own ADR); Lambda layers; one bundle for several platforms; escape hatches (extra files,
+(needs its own ADR); Lambda layers; escape hatches (extra files,
 external dependencies).
 
 ### Done
