@@ -29,8 +29,8 @@ import json, os, subprocess, sys
 child = None
 if os.environ.get("PROBE_CHILD"):  # "self" (the bundle's interpreter) or another Python's path
     python = sys.executable if os.environ["PROBE_CHILD"] == "self" else os.environ["PROBE_CHILD"]
-    code = "import builtins as b, json, sys; "
-    code += "print(json.dumps([sys.path, getattr(b, 'CHAINED', 0)]))"
+    code = "import json, sys; m = sys.modules.get('sitecustomize'); "
+    code += "print(json.dumps([sys.path, getattr(m, '__file__', None)]))"
     done = subprocess.run([python, "-c", code], capture_output=True, text=True)
     child = json.loads(done.stdout) if done.returncode == 0 else done.stderr
 print(json.dumps({"path": sys.path, "file": __file__, "pythonpath": os.environ.get("PYTHONPATH"),
@@ -131,14 +131,15 @@ def test_nested_bundle_drops_parent_packages(bundle: Path, tmp_path: Path) -> No
 
 def test_children_of_the_same_interpreter_see_the_bundle(bundle: Path, tmp_path: Path) -> None:
     out = probe(bundle, env_for(tmp_path, PROBE_CHILD="self"))
-    child_path, _chained = out["child"]
+    child_path, _sitecustomize = out["child"]
     assert out["site"] in child_path
     assert os.path.join(out["site"], "__bundleup__") not in child_path  # the shim removes itself
 
 
 def test_other_pythons_are_left_alone(bundle: Path, tmp_path: Path) -> None:
     """A Python from another environment (here a venv) must not import the bundle's packages,
-    and still runs its own sitecustomize (the review found the old PYTHONPATH leaked)."""
+    and still imports the sitecustomize it would without the bundle (the review found the old
+    PYTHONPATH leaked)."""
     venv = tmp_path / "other-venv"
     subprocess.run([base_python(), "-m", "venv", "--without-pip", str(venv)], check=True)
     python = venv / ("Scripts/python.exe" if WINDOWS else "bin/python")
@@ -148,11 +149,17 @@ def test_other_pythons_are_left_alone(bundle: Path, tmp_path: Path) -> None:
         text=True,
         check=True,
     ).stdout.strip()
-    (Path(purelib) / "sitecustomize.py").write_text("import builtins\nbuiltins.CHAINED = 1\n")
+    (Path(purelib) / "sitecustomize.py").write_text("CHAINED = 1\n")
+    # Which sitecustomize this Python imports on its own: the venv's, or one earlier on its path
+    # (Ubuntu's Python has one in the standard library directory).
+    own = "import sys; m = sys.modules.get('sitecustomize'); print(getattr(m, '__file__', None))"
+    expected = subprocess.run(
+        [str(python), "-c", own], capture_output=True, text=True, check=True, env=env_for(tmp_path)
+    ).stdout.strip()
     out = probe(bundle, env_for(tmp_path, PROBE_CHILD=str(python)))
-    child_path, chained = out["child"]
+    child_path, imported = out["child"]
     assert not any(p.startswith(out["site"]) for p in child_path)
-    assert chained == 1
+    assert str(imported) == expected
 
 
 def test_bundleup_cache_override(bundle: Path, tmp_path: Path) -> None:
