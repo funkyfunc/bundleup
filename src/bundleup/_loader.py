@@ -45,6 +45,50 @@ def _fail(message: str) -> "NoReturn":
     sys.exit(1)
 
 
+RERUN = "BUNDLEUP_RUNTIME_RERUN"  # set while re-running with another Python, so it happens once
+NEWEST_KNOWN = 20  # minor versions tried for an open-ended range, newest first
+
+
+def _rerun_with_another_python(here: "tuple[int, int]") -> None:
+    """The wrong Python started the bundle (`./app.pyz` runs whatever `python3` is): run it again
+    with one the bundle allows, if one is on PATH, newest first (ADR-0036). Windows has no
+    `python3.X` commands; its `py` launcher picks a version with `-3.X`."""
+    top = PYTHON_MAX[1] if PYTHON_MAX else NEWEST_KNOWN
+    wanted = [(3, minor) for minor in range(top, PYTHON[1] - 1, -1) if (3, minor) != here]
+    folders = [d for d in os.environ.get("PATH", "").split(os.pathsep) if d]
+    for version in wanted:
+        if sys.platform == "win32":
+            names = ["python%d.%d.exe" % version]
+        else:
+            names = ["python%d.%d" % version]
+        for folder in folders:
+            for name in names:
+                exe = os.path.join(folder, name)
+                if os.path.isfile(exe) and os.access(exe, os.X_OK):
+                    _rerun([exe, sys.argv[0], *sys.argv[1:]])
+    if sys.platform == "win32":
+        launcher = [os.path.join(d, "py.exe") for d in folders]
+        found = [p for p in launcher if os.path.isfile(p)]
+        if found:
+            for version in wanted:
+                probe = [found[0], "-%d.%d" % version, "-c", ""]
+                import subprocess  # only on this rare path
+
+                if subprocess.call(probe, stderr=subprocess.DEVNULL) == 0:
+                    _rerun([found[0], "-%d.%d" % version, sys.argv[0], *sys.argv[1:]])
+
+
+def _rerun(command: "list[str]") -> "NoReturn":
+    os.environ[RERUN] = "1"
+    sys.stdout.flush()
+    sys.stderr.flush()
+    if sys.platform == "win32":  # os.execv doesn't quote arguments on Windows
+        import subprocess
+
+        sys.exit(subprocess.call(command))
+    os.execv(command[0], command)
+
+
 def _machine() -> str:
     if sys.platform == "win32":
         return os.environ.get("PROCESSOR_ARCHITEW6432") or os.environ.get(
@@ -54,6 +98,7 @@ def _machine() -> str:
 
 
 def _check() -> None:
+    rerun = os.environ.pop(RERUN, None)  # never left for the app's own children
     here = sys.version_info[:2]
     if here < PYTHON or (PYTHON_MAX is not None and here > PYTHON_MAX):
         want = "%d.%d" % PYTHON
@@ -63,6 +108,8 @@ def _check() -> None:
             wanted = "Python %s" % want
         else:
             wanted = "Python %s to %d.%d" % (want, PYTHON_MAX[0], PYTHON_MAX[1])
+        if not rerun:  # once only: then report the mismatch instead of looping
+            _rerun_with_another_python(here)
         nearest = PYTHON if here < PYTHON or PYTHON_MAX is None else PYTHON_MAX
         suggest = "%d.%d" % nearest
         _fail(

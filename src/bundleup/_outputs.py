@@ -103,17 +103,15 @@ def write_bundle(
     loader: Path,
     loader_pyc: Path,
     manifest_json: bytes,
-    pythons: PythonRange,
 ) -> None:
-    """Write shebang + outer zip to a temporary file, then rename it over `output`. The shebang
-    names the version when the bundle runs on only one (`./app.pyz` then finds the right Python,
-    and Windows' py launcher reads it too); otherwise plain python3 (ADR-0030)."""
+    """Write shebang + outer zip to a temporary file, then rename it over `output`."""
     output.parent.mkdir(parents=True, exist_ok=True)
     tmp = output.with_name(f".{output.name}.tmp-{os.getpid()}")
     try:
         with open(tmp, "wb") as f:
-            python = f"python{pythons.min[0]}.{pythons.min[1]}" if pythons.exact else "python3"
-            f.write(f"#!/usr/bin/env {python}\n".encode())
+            # Plain python3 (works everywhere, also with Windows' py launcher); a wrong version
+            # re-runs itself with a matching one (ADR-0036).
+            f.write(b"#!/usr/bin/env python3\n")
             with zipfile.ZipFile(f, "w", zipfile.ZIP_STORED) as zf:
                 info = zipfile.ZipInfo("payload.zip", FIXED_TIME)
                 info.external_attr = 0o100644 << 16
@@ -245,7 +243,6 @@ def write_pyz(
         loader=loader,
         loader_pyc=loader_pyc,
         manifest_json=manifest_json,
-        pythons=p.pythons,
     )
     return diags
 

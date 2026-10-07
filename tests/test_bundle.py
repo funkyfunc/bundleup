@@ -270,6 +270,38 @@ def test_wrong_python_version_is_explained(bundle: Path, tmp_path: Path) -> None
     assert "Run it with Python 3.3 instead" in run(newer, env_for(tmp_path)).stderr
 
 
+@pytest.mark.skipif(WINDOWS, reason="python3.X commands are a POSIX convention")
+def test_the_wrong_python_reruns_with_a_matching_one(bundle: Path, tmp_path: Path) -> None:
+    """`./app.pyz` runs whatever python3 is; with a matching python3.X on PATH the bundle runs
+    itself again with it, once (third review: a versioned shebang failed on a stock Mac)."""
+    here = f"{sys.version_info[0]}.{sys.version_info[1]}"
+    other = next(
+        (
+            found
+            for version in ("3.9", "3.10", "3.11", "3.13")
+            if version != here
+            and (found := subprocess.run(
+                ["uv", "python", "find", version], capture_output=True, text=True, cwd=tmp_path
+            ).stdout.strip())
+        ),
+        None,
+    )  # fmt: skip
+    if other is None:
+        pytest.skip("needs a second Python")
+    exact = relabel(bundle, tmp_path / "exact.pyz", PYTHON=sys.version_info[:2],
+                    PYTHON_MAX=sys.version_info[:2])  # fmt: skip
+    links = tmp_path / "bin"
+    links.mkdir()
+    (links / f"python{here}").symlink_to(base_python())
+    env = env_for(tmp_path)
+    env["PATH"] = f"{links}{os.pathsep}{env['PATH']}"
+    r = run(exact, env, python=other)
+    assert r.returncode == 0, r.stderr
+    assert "RERUN" not in " ".join(json.loads(r.stdout)["env"])  # not passed on to children
+    alone = env_for(tmp_path)  # no matching Python anywhere: the one-sentence error
+    assert "bundled for Python" in run(exact, alone, python=other).stderr
+
+
 def test_a_pure_python_bundle_runs_on_other_versions(bundle: Path, tmp_path: Path) -> None:
     """No compiled code: the bundle runs on every version the lock allows (ADR-0030), with
     bytecode compiled on first import for versions other than the build's."""
