@@ -133,6 +133,14 @@ def test_record_problems_are_each_reported(tmp_path: Path) -> None:
     ]
 
 
+def test_record_paths_with_backslashes_are_accepted(tmp_path: Path) -> None:
+    # ormsgpack 1.12.2's Windows wheels write RECORD paths with backslashes; pip and uv accept it.
+    site, written = make_site(tmp_path, {"pkg/a.py": b"a"})
+    record = site / "pkg-1.0.dist-info" / "RECORD"
+    record.write_text(record.read_text().replace("pkg/a.py", "pkg\\a.py"))
+    assert v.check_records(site, written) == []
+
+
 def test_record_hash_format() -> None:
     # The format wheels use: urlsafe base64 of the sha256 digest, without "=" padding.
     assert v.record_hash(b"") == "sha256=47DEQpj8HBSa-_TImW-5JCeuQeRkm5NMpJWZG3hSuFU"

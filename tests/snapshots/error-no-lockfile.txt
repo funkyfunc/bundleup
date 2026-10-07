@@ -1,0 +1,2 @@
+error: app has no lockfile, so bundleup can't tell exactly what to bundle
+hint: run `uv lock` in the project (or write a pylock.toml), then build again

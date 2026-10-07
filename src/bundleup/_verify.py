@@ -49,6 +49,7 @@ SCRIPT_DIRS = ("bin", "Scripts")
 # Paths bundleup adds on purpose: compiled bytecode, and a PEP 723 script.
 ADDED_DIRS = ("__pycache__",)
 SCRIPT_DIR = "__bundleup_script__"
+RUNTIME_DIR = "__bundleup__"  # the payload's runtime files (ADR-0027)
 
 
 @dataclass(frozen=True)
@@ -136,15 +137,17 @@ def check_lock(locked: list[LockedPackage], installed: list[InstalledDistributio
 
 
 def _record_entries(text: str) -> Iterable[tuple[str, str]]:
-    """(path, hash) for each file a RECORD lists; hash is "" for RECORD itself."""
+    """(path, hash) for each file a RECORD lists; hash is "" for RECORD itself. Paths should use
+    "/", but some wheels built on Windows use "\\" (ormsgpack 1.12.2, found by the nightly smoke
+    test); pip and uv install them anyway, so they're read the same way."""
     for row in csv.reader(io.StringIO(text)):
         if row:
-            yield row[0], (row[1] if len(row) > 1 else "")
+            yield row[0].replace("\\", "/"), (row[1] if len(row) > 1 else "")
 
 
 def _added_on_purpose(path: str) -> bool:
     parts = path.split("/")
-    return parts[0] == SCRIPT_DIR or any(part in ADDED_DIRS for part in parts[:-1])
+    return parts[0] in (SCRIPT_DIR, RUNTIME_DIR) or any(part in ADDED_DIRS for part in parts[:-1])
 
 
 def record_paths(text: str) -> list[str]:

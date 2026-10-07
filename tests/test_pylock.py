@@ -1,4 +1,5 @@
-"""Projects locked with a standard pylock.toml (PEP 751) instead of uv.lock (ADR-0026)."""
+"""Lockfiles: a standard pylock.toml (PEP 751) instead of uv.lock (ADR-0026), and no lockfile
+at all (ADR-0028)."""
 
 from __future__ import annotations
 
@@ -8,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from bundleup import BuildOptions, ProjectError, build
+from bundleup import BuildOptions, NoLockfileError, ProjectError, build
 
 PYPROJECT = """\
 [project]
@@ -55,3 +56,24 @@ def test_editable_project_in_pylock_is_refused(tmp_path: Path) -> None:
     path = project(tmp_path / "p", PYLOCK + PROJECT_ENTRY.format(editable="true"))
     with pytest.raises(ProjectError, match="as editable"):
         build(BuildOptions(path=path, output=tmp_path / "app.pyz"))
+
+
+def test_a_project_without_a_lockfile_is_refused_and_left_untouched(tmp_path: Path) -> None:
+    """bundleup never writes uv.lock into a project (ADR-0028; the review found it did)."""
+    path = project(tmp_path / "p", PYLOCK)
+    (path / "pylock.toml").unlink()
+    with pytest.raises(NoLockfileError) as e:
+        build(BuildOptions(path=path, output=tmp_path / "app.pyz"))
+    assert e.value.hint and "uv lock" in e.value.hint
+    assert sorted(p.name for p in path.iterdir()) == ["pyproject.toml", "src"]
+
+
+def test_an_unlocked_script_with_dependencies_gets_a_warning(tmp_path: Path) -> None:
+    script = tmp_path / "tool.py"
+    script.write_text(
+        '# /// script\n# requires-python = ">=3.9"\n# dependencies = ["packaging"]\n# ///\n'
+        "import packaging\n"
+    )
+    result = build(BuildOptions(path=script, output=tmp_path / "tool.pyz"))
+    assert [d.code for d in result.diagnostics] == ["unlocked"]
+    assert not (tmp_path / "tool.py.lock").exists()

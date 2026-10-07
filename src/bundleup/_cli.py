@@ -393,11 +393,11 @@ def _run_targets(opts: argparse.Namespace) -> ExitCode:
         result: dict[str, object] = {"targets": [t.to_json_dict() for t in presets]}
         _emit_json("targets", ExitCode.OK, result, [])
         return ExitCode.OK
-    style = Style(sys.stderr, opts.color)
+    style = Style(sys.stdout, opts.color)  # a listing: stdout, so it can be piped (rule 10)
     width = max(len(t.name) for t in presets)
     for t in presets:
-        print(f"{style.bold(t.name.ljust(width))}  {t.description}", file=sys.stderr)
-        print(style.dim(f"{' ' * width}  {' '.join(t.expansion())}"), file=sys.stderr)
+        print(f"{style.bold(t.name.ljust(width))}  {t.description}")
+        print(style.dim(f"{' ' * width}  {' '.join(t.expansion())}"))
     return ExitCode.OK
 
 
@@ -597,9 +597,10 @@ def _run_cache(opts: argparse.Namespace) -> ExitCode:
             _emit_json(command, ExitCode.OK, result, [])
             return ExitCode.OK
         now = time.time()
+        out = Style(sys.stdout, opts.color)  # the listing: stdout, so it can be piped (rule 10)
         for b in bundles:
-            when = style.dim(f"last used {_ago(now - b.last_used)}")
-            print(f"{style.bold(b.name)}  {_size(b.size_bytes)}  {when}  {b.path}", file=err)
+            when = out.dim(f"last used {_ago(now - b.last_used)}")
+            print(f"{out.bold(b.name)}  {_size(b.size_bytes)}  {when}  {b.path}")
         total = sum(b.size_bytes for b in bundles)
         count = f"{len(bundles)} unpacked bundle{'s' if len(bundles) != 1 else ''}"
         print(style.dim(f"{count}, {_size(total)}"), file=err)

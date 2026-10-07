@@ -24,7 +24,13 @@ decided while building it.
     Lambda's 250 MB unzipped limit (`lambda-too-big`, before writing); warns over 50 MB zipped
     (`lambda-upload-size`: upload through S3).
   - In both, a PEP 723 script goes at the top as a module (`fn.py`, handler `fn.handler`), and
-    `--entry` is optional: the host decides what runs. Both warn (`pth-not-run`) when the payload
+    `--entry` is optional: the host decides what runs. A console script is never taken as the
+    entry (it's a CLI, not a handler), so the printed Lambda handler is only the one passed with
+    `--entry module:function` (changed 2026-10-07 after the review).
+  - Bytecode in both is **checked-hash**: someone may edit the files in place (Lambda's console
+    editor, a plugin folder), and Python then ignores a stale `.pyc` (a `.pyz` keeps
+    unchecked-hash: its files never change). `--strict` checks the Lambda upload size before
+    writing, so an earlier zip stays untouched. Both warn (`pth-not-run`) when the payload
     has `.pth` files, which only bundleup's loader runs.
 - **Presets (`--target NAME`, `bundleup targets`, `bundleup.list_targets()`):**
   - `lambda` / `lambda-arm64`: `--format lambda --python 3.13`, platform from the Python
@@ -33,9 +39,12 @@ decided while building it.
     (e.g. 3.9) is a usage error. 3.13 rather than 3.14: same support window (June 2029), wider
     wheel coverage. ([AWS's runtime table](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html),
     checked 2026-10-06.)
-  - `claude-api`: `--format pyz --python 3.11 --python-platform x86_64-manylinux_2_17`, from
+  - `claude-api`: `--format pyz --python 3.11 --python-platform x86_64-manylinux_2_28`, from
     Anthropic's code execution docs (Python 3.11, Linux x86_64, no network). The sandbox's glibc
-    isn't documented, so the most compatible level. This is the first feature of
+    isn't documented. (First set to the more cautious `manylinux_2_17`, which broke gauntlet 14:
+    Pillow 12 publishes only 2_27/2_28 wheels. Changed 2026-10-07 after the
+    [independent review](../findings/2026-10-07-independent-review.md); CI now builds gauntlet
+    14 with every preset.) This is the first feature of
     [ADR-0013](0013-agent-sandboxes-as-headline-use-case.md), whose features are still Proposed.
   - Explicit flags win over a preset's values; the expansion is printed to stderr
     (`Using target lambda: --format lambda --python 3.13 --python-platform …`) and `BUNDLEUP_TARGET`

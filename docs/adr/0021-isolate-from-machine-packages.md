@@ -1,6 +1,7 @@
 # ADR-0021: Bundles don't see the machine's own packages, unless asked to
 
-- **Status:** Accepted (2026-10-05)
+- **Status:** Accepted (2026-10-05); the consequence for child processes is amended by
+  [ADR-0027](0027-children-see-the-bundle-only-from-its-own-python.md)
 - **Date:** 2026-10-05
 - **Deciders:** the user chose isolation with an opt-out; proposed by an agent (roadmap item 8)
 

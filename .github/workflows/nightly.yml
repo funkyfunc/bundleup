@@ -40,3 +40,26 @@ jobs:
           name: smoke-${{ matrix.os }}
           path: gauntlet/results/smoke.json
           if-no-files-found: ignore
+
+  issues:
+    name: File failures as issues
+    needs: smoke
+    if: ${{ !cancelled() }} # a cancelled run files nothing
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      issues: write
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+      - uses: actions/download-artifact@v8
+        with:
+          pattern: smoke-*
+          path: results
+      - name: One issue per failure signature
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: >
+          uv run gauntlet/corpus_issues.py results/*/smoke.json --kind smoke
+          --repo ${{ github.repository }}
+          --run-url ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

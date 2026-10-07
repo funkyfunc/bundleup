@@ -18,7 +18,7 @@ and change only the old one's status line.
 | [0007](0007-gauntlet-is-the-contract.md) | The gauntlet is the acceptance test, and claims must be measured | Accepted |
 | [0008](0008-prototype-in-python.md) | Build in Python first, with a measured path to Rust | Accepted |
 | [0009](0009-name-bundleup.md) | Name the project `bundleup` | Accepted |
-| [0010](0010-bundle-format-and-loader.md) | Bundle format, loader and cache layout | Accepted (compression level superseded by 0020) |
+| [0010](0010-bundle-format-and-loader.md) | Bundle format, loader and cache layout | Accepted (compression level superseded by 0020; child processes by 0027) |
 | [0011](0011-cli-and-build-pipeline.md) | CLI shape and build pipeline | Accepted (pipeline); CLI superseded by 0016 |
 | [0012](0012-lead-with-what-it-does.md) | Describe bundleup by what it does, with use cases as examples | Accepted |
 | [0013](0013-agent-sandboxes-as-headline-use-case.md) | Agent sandboxes as the headline use case, served by target profiles and skill output | Accepted (positioning); features Proposed |
@@ -29,9 +29,12 @@ and change only the old one's status line.
 | [0018](0018-package-layout-and-lazy-api.md) | Private modules, and a public API that loads lazily | Accepted |
 | [0019](0019-manifest-and-verify-command.md) | Every bundle carries a manifest; `bundleup verify` checks it | Accepted |
 | [0020](0020-parallel-zip-and-bytecode-cache.md) | Compress the payload in parallel at level 6; cache compiled bytecode per wheel | Accepted |
-| [0021](0021-isolate-from-machine-packages.md) | Bundles don't see the machine's own packages, unless asked to | Accepted |
+| [0021](0021-isolate-from-machine-packages.md) | Bundles don't see the machine's own packages, unless asked to | Accepted (children amended by 0027) |
 | [0022](0022-cache-command.md) | Unpacked bundles are cleaned up by a command, never by bundles themselves | Accepted |
 | [0023](0023-payload-behaves-like-site-packages.md) | The payload behaves like a venv's site-packages: wheel executables stay, `.pth` files run | Proposed |
 | [0024](0024-check-command-and-build-analysis.md) | `bundleup check` reports what won't survive bundling, and every build runs it | Proposed |
 | [0025](0025-dir-and-lambda-formats-and-presets.md) | How `--format dir`, `--format lambda` and target presets work | Proposed |
 | [0026](0026-pylock-toml-input.md) | A project's `pylock.toml` is used when it has no `uv.lock` | Proposed |
+| [0027](0027-children-see-the-bundle-only-from-its-own-python.md) | Child processes see the bundle only when they run the bundle's own Python | Accepted |
+| [0028](0028-a-project-needs-a-lockfile.md) | A project needs a lockfile; bundleup never writes one into it | Accepted |
+| [0029](0029-start-up-checks-c-library-and-macos-version.md) | Bundles check the C library and macOS version at start-up | Accepted |

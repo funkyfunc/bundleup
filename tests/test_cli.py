@@ -185,8 +185,8 @@ def test_check_json_matches_the_schema(tmp_path: Path, script: Path) -> None:
 
 def test_targets_lists_presets_with_their_expansion(tmp_path: Path) -> None:
     r = cli("targets", cwd=tmp_path)
-    assert r.returncode == 0 and r.stdout == ""
-    check_snapshot("targets", r.stderr)
+    assert r.returncode == 0 and r.stderr == ""  # a listing goes to stdout (rule 10)
+    check_snapshot("targets", r.stdout)
     r = cli("targets", "--json", cwd=tmp_path)
     schema = json.loads((ROOT / "docs" / "schema" / "targets-v1.json").read_text())
     jsonschema.validate(json.loads(r.stdout), schema)
@@ -208,9 +208,18 @@ def test_error_python_mismatch(tmp_path: Path) -> None:
     (tmp_path / "pyproject.toml").write_text(
         '[project]\nname = "future"\nrequires-python = ">=99"\n'
     )
+    (tmp_path / "uv.lock").write_text("")  # checked before the lock is read
     r = cli("build", "--python", sys.executable, cwd=tmp_path)
     assert r.returncode == 1
     check_snapshot("error-python-mismatch", redact(r.stderr, tmp_path))
+
+
+def test_error_no_lockfile(tmp_path: Path) -> None:
+    (tmp_path / "app").mkdir()
+    (tmp_path / "app" / "pyproject.toml").write_text('[project]\nname = "app"\n')
+    r = cli("build", "app", cwd=tmp_path)
+    assert r.returncode == 1 and not (tmp_path / "app" / "uv.lock").exists()
+    check_snapshot("error-no-lockfile", redact(r.stderr, tmp_path))
 
 
 def test_usage_error_entry_with_script(tmp_path: Path, script: Path) -> None:

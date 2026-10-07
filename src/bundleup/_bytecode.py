@@ -5,8 +5,9 @@ changes, so each distribution is compiled once per Python version and its `.pyc`
 bundleup's build cache, keyed by the distribution's RECORD (every file with its hash). Rebuilds only
 compile the project's own code and whatever changed (roadmap item 9).
 
-The `.pyc` files are unchecked-hash: they never consult the source's mtime, which suits a bundle's
-immutable, content-addressed cache and survives extraction (mtimes aren't kept).
+The `.pyc` files are hash-based, never mtime-based (mtimes aren't kept in zips): unchecked in a
+.pyz, whose content-addressed cache never changes; checked in `dir` and `lambda` outputs, which
+people may edit in place.
 """
 
 from __future__ import annotations
@@ -20,13 +21,15 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
+from . import _verify
+
 # Runs on the target interpreter. compileall.compile_file is a module-level function, so worker
 # processes can receive it; `ddir` gives each file a relative co_filename (reproducible builds).
 COMPILE_FILES = """
 import compileall, concurrent.futures, os, py_compile, sys
-site, listing, workers = sys.argv[1], sys.argv[2], int(sys.argv[3])
+site, listing, workers, mode = sys.argv[1], sys.argv[2], int(sys.argv[3]), sys.argv[4]
 files = open(listing, encoding="utf-8").read().splitlines()
-mode = py_compile.PycInvalidationMode.UNCHECKED_HASH
+mode = py_compile.PycInvalidationMode[mode]
 args = [
     [os.path.join(site, f) for f in files],
     [os.path.dirname(f) for f in files],
@@ -97,11 +100,8 @@ def distributions(site: Path, *, python_identity: str) -> list[Distribution]:
     for record in sorted(site.glob("*.dist-info/RECORD")):
         content = record.read_bytes()
         key = hashlib.sha256(content + python_identity.encode()).hexdigest()[:32]
-        sources = [
-            line.split(",", 1)[0]
-            for line in content.decode("utf-8").splitlines()
-            if line.split(",", 1)[0].endswith(".py")
-        ]
+        paths = _verify.record_paths(content.decode("utf-8"))  # "/" even if the wheel used "\\"
+        sources = [path for path in paths if path.endswith(".py")]
         sources = [s for s in sources if not s.startswith("..") and (site / s).is_file()]
         found.append(Distribution(record.parent.name, key, sources))
     return found
@@ -148,11 +148,17 @@ def precompile(
     python_identity: str,
     cache_tag: str,
     run: Callable[[list[str]], object],
+    checked: bool = False,
 ) -> tuple[int, int]:
     """Compile everything in `site` with `python`, reusing cached bytecode.
 
-    Returns (files compiled now, distributions restored from the cache).
+    `checked`: hash-checked .pyc files, which Python ignores once the source is edited (for
+    `dir` and `lambda` outputs, which people can edit in place); otherwise unchecked, the fastest
+    for a .pyz, whose files never change. Returns (files compiled now, distributions restored
+    from the cache).
     """
+    mode = "CHECKED_HASH" if checked else "UNCHECKED_HASH"
+    python_identity = f"{python_identity}-{mode}"
     cache = cache_dir()
     dists = distributions(site, python_identity=python_identity)
     covered = {source for dist in dists for source in dist.sources}
@@ -165,7 +171,7 @@ def precompile(
         listing = site.parent / "compile-list.txt"
         listing.write_text("\n".join(todo), encoding="utf-8")
         workers = 0 if len(todo) >= PARALLEL_FROM else 1
-        run([python, "-I", "-c", COMPILE_FILES, str(site), str(listing), str(workers)])
+        run([python, "-I", "-c", COMPILE_FILES, str(site), str(listing), str(workers), mode])
     for dist in fresh:
         _store(dist, cache, site, cache_tag)
     return len(todo), len(restored)

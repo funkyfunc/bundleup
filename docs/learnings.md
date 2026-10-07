@@ -6,6 +6,22 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-07** · runtime · A `sitecustomize.py` reached through `PYTHONPATH` runs in every
+  Python a program starts, so it can decide per interpreter: compare `sys.prefix`, version and ABI
+  flags with the parent's and only then activate the bundle, then import the `sitecustomize` it
+  shadows (`importlib.machinery.PathFinder.find_spec` on the rest of `sys.path`). The old
+  `PYTHONPATH`-to-the-payload approach made unrelated Pythons import the bundle's packages.
+  Evidence: [ADR-0027](adr/0027-children-see-the-bundle-only-from-its-own-python.md).
+- **2026-10-07** · ecosystem · Some wheels built on Windows write `RECORD` paths with backslashes
+  (ormsgpack 1.12.2); pip and uv install them, so a strict checker must normalise `\\` to `/`.
+  Found by the first scheduled smoke run (langchain on Windows). `uv export` on a project without
+  `uv.lock` writes one; `uv export --script` never writes a script lock. Pillow 12 publishes no
+  wheels below `manylinux_2_27`, so a `manylinux_2_17` target can't use it. Evidence:
+  [review findings](findings/2026-10-07-independent-review.md).
+- **2026-10-07** · process · An independent, adversarial review found real bugs the gauntlet and
+  CI missed (a leak into other Pythons, a broken preset, a silently written lockfile) and docs
+  that oversold the code. Worth repeating before releases; the prompt is in the findings.
+  Evidence: [review findings](findings/2026-10-07-independent-review.md).
 - **2026-10-06** · testing · A real test suite can run *from* a bundle: make a throwaway project
   depending on the package, pytest and the test deps, bundle it with `--entry pytest:console_main`,
   and run it from a clone with a `src/` layout (so the clone can't shadow the package) and

@@ -1,5 +1,5 @@
 claude-api    Claude API code execution and Skills sandbox: Python 3.11, Linux x86_64, no network
-              --format pyz --python 3.11 --python-platform x86_64-manylinux_2_17
+              --format pyz --python 3.11 --python-platform x86_64-manylinux_2_28
 lambda        AWS Lambda function zip, x86_64 (handler: module.function)
               --format lambda --python 3.13 --python-platform x86_64-manylinux_2_34
 lambda-arm64  AWS Lambda function zip, arm64 (Graviton)

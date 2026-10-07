@@ -87,13 +87,15 @@ PRESETS = {
         ),
         Preset(
             # Claude API code execution and Skills: Python 3.11, Linux x86_64, no network
-            # (platform.claude.com docs, checked 2026-10-05). Its glibc isn't documented, so the
-            # most compatible manylinux level (ADR-0013).
+            # (platform.claude.com docs, checked 2026-10-05). Its glibc isn't documented.
+            # manylinux_2_28 (glibc 2.28, 2018): many packages, Pillow 12 among them, no longer
+            # publish older wheels, so the more cautious 2_17 broke the founding example
+            # (gauntlet 14; independent review, 2026-10-07).
             "claude-api",
             "Claude API code execution and Skills sandbox: Python 3.11, Linux x86_64, no network",
             "pyz",
             "3.11",
-            lambda _python: "x86_64-manylinux_2_17",
+            lambda _python: "x86_64-manylinux_2_28",
         ),
     )
 }

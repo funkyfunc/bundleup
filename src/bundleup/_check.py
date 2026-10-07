@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from . import _bytecode, _verify
+from . import _bytecode, _platforms, _verify
 from ._errors import Diagnostic
 
 if TYPE_CHECKING:
@@ -126,9 +126,9 @@ def owners(site: Path, *, project: str, script: str | None = None) -> dict[str, 
     found: dict[str, _Owner] = {}
     for dist in _verify.installed_distributions(site):
         dist_info = site / dist.dist_info
-        tags = (dist_info / "WHEEL").read_text(encoding="utf-8").splitlines()
-        native = any(t.startswith("Tag:") and not t.rstrip().endswith("-any") for t in tags)
-        owner = _Owner(dist.name, dist.version, native)
+        owner = _Owner(
+            dist.name, dist.version, _platforms.is_native(_platforms.wheel_tags(dist_info))
+        )
         for path in _verify.record_paths((dist_info / "RECORD").read_text(encoding="utf-8")):
             found[path] = owner
     if script:

@@ -79,3 +79,18 @@ def test_lambda_zip_has_code_at_the_top_with_bytecode(tmp_path: Path) -> None:
     manifest = json.loads(zipfile.ZipFile(out).read("bundleup-manifest.json"))
     assert (manifest["format"], manifest["payload"]) == ("lambda", None)
     assert result.to_json_dict()["format"] == "lambda"
+
+
+def test_dir_output_notices_edited_sources(tmp_path: Path) -> None:
+    """dir and lambda outputs can be edited in place (Lambda's console editor, a plugin folder),
+    so their bytecode is hash-checked, unlike a .pyz's (the review found edits were ignored)."""
+    (tmp_path / "fn.py").write_text(SCRIPT)
+    out = tmp_path / "out"
+    build(BuildOptions(path=tmp_path / "fn.py", format="dir", output=out))
+    pyc = out / "__pycache__" / f"fn.{sys.implementation.cache_tag}.pyc"
+    assert int.from_bytes(pyc.read_bytes()[4:8], "little") == 0b11  # hash-based, checked
+    (out / "fn.py").write_text(SCRIPT.replace('event["n"] + 1', 'event["n"] + 100'))
+    code = "import fn; print(fn.handler({'n': 1}, None))"
+    env = {**os.environ, "PYTHONPATH": str(out), "PYTHONDONTWRITEBYTECODE": "1"}
+    done = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
+    assert done.stdout.strip() == "{'ok': 101}", done.stderr

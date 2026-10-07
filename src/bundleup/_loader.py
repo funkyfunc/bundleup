@@ -31,6 +31,9 @@ TARGET = "Python 3.12 on macOS"
 # ("call", module, attr) | ("module", module, "") | ("script", path inside the payload, "")
 ENTRY = ("call", "app", "main")
 PTH = []  # type: list[str]  # .pth files at the payload's top level, in the order site.py reads them
+# What the native wheels need (ADR-0029): ("glibc", (2, 28)) or ("musl", (1, 2)); macOS (11, 0).
+LIBC = None  # type: tuple[str, tuple[int, int]] | None
+MACOS = None  # type: tuple[int, int] | None
 # --- end config ---
 
 _ARCHIVE = os.path.dirname(os.path.abspath(__file__))
@@ -67,6 +70,7 @@ def _check() -> None:
             "this app was bundled for %s, but this machine is %s %s."
             % (TARGET, names.get(sys.platform, sys.platform), _machine())
         )
+    _check_system()
     if MACHINE and (
         sys.implementation.name != "cpython" or getattr(sys, "abiflags", None) != ABIFLAGS
     ):
@@ -74,6 +78,61 @@ def _check() -> None:
             "this app was bundled for %s (CPython), but it's running on %s %s."
             % (TARGET, sys.implementation.name, sys.version.split()[0])
         )
+
+
+def _libc() -> "tuple[str, tuple[int, int] | None] | None":
+    """This Linux machine's C library and version, without importing anything (`platform` costs
+    milliseconds): glibc reports itself through confstr, musl has its dynamic loader in /lib."""
+    try:
+        found = os.confstr("CS_GNU_LIBC_VERSION")  # "glibc 2.35"
+    except (AttributeError, ValueError, OSError):
+        found = None
+    if found and found.startswith("glibc "):
+        parts = found.split()[1].split(".")
+        try:
+            return ("glibc", (int(parts[0]), int(parts[1])))
+        except (IndexError, ValueError):
+            return ("glibc", None)
+    if any(name.startswith("ld-musl-") for name in _listdir("/lib")):
+        return ("musl", None)  # musl has no cheap way to report its version
+    return None
+
+
+def _listdir(path: str) -> "list[str]":
+    try:
+        return os.listdir(path)
+    except OSError:
+        return []
+
+
+def _macos() -> "tuple[int, int] | None":
+    """The macOS version, from the Darwin kernel's (Darwin 20 is macOS 11; 19 is 10.15)."""
+    try:
+        darwin = int(os.uname().release.split(".")[0])
+    except (AttributeError, ValueError):
+        return None
+    return (darwin - 9, 0) if darwin >= 20 else (10, darwin - 4)
+
+
+def _check_system() -> None:
+    """The C library and macOS version the native wheels were built for (ADR-0029)."""
+    if LIBC and sys.platform.startswith("linux"):
+        kind, need = LIBC
+        have = _libc()
+        if have and (have[0] != kind or (have[1] and have[1] < need)):
+            version = "%s %d.%d" % (have[0], have[1][0], have[1][1]) if have[1] else have[0]
+            _fail(
+                "this app was bundled for Linux with %s %d.%d or newer, but this machine has %s.\n"
+                "Rebuild it for this machine's platform (bundleup build --python-platform ...)."
+                % (kind, need[0], need[1], version)
+            )
+    if MACOS and sys.platform == "darwin":
+        have = _macos()
+        if have and have < MACOS:
+            _fail(
+                "this app needs macOS %d.%d or newer; this Mac runs macOS %d.%d."
+                % (MACOS[0], MACOS[1], have[0], have[1])
+            )
 
 
 def _roots(archive: str) -> "list[tuple[str, bool]]":
@@ -320,71 +379,18 @@ def _extract() -> str:
     )
 
 
-def _site_packages_index() -> int:
-    """Where a venv's site-packages would sit: after the standard library, before other packages."""
-    for i, p in enumerate(sys.path):
-        if p.endswith(("site-packages", "dist-packages")):
-            return i
-    return len(sys.path)
-
-
 def _activate(site: str) -> None:
-    """Put the payload on sys.path where a venv's site-packages would be, in place of the
-    machine's own packages (unless BUNDLEUP_INHERIT_PATH=1), and on PYTHONPATH so child
-    interpreters (sys.executable -c/-m, multiprocessing) see the same packages."""
+    """Put the payload on sys.path (where a venv's site-packages would be) and set up child
+    processes: the payload's own runtime module does both (ADR-0027), so the loader and the
+    children's sitecustomize.py share one implementation."""
     if sys.path and sys.path[0] and os.path.abspath(sys.path[0]) == _ARCHIVE:
         del sys.path[0]
-    # A bundle started from another bundle inherits the parent's PYTHONPATH: drop its packages.
-    parent = os.environ.get("BUNDLEUP_SITE")
-    pythonpath = [
-        p for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) if p and p != parent
-    ]
-    if parent and parent != site:
-        sys.path[:] = [p for p in sys.path if p != parent]
-    index = _site_packages_index()
-    if os.environ.get("BUNDLEUP_INHERIT_PATH", "").lower() not in ("1", "true", "yes"):
-        # Isolation (ADR-0021): drop the machine's own packages (user and system site-packages,
-        # and whatever their .pth files added), so nothing outside the bundle is imported by
-        # accident. Children still see them: PYTHONPATH can only add to a path.
-        del sys.path[index:]
-    sys.path.insert(index, site)
-    added = []  # type: list[str]
-    if PTH:
-        known = set(os.path.normcase(os.path.abspath(p)) for p in sys.path if p)
-        before = len(sys.path)
-        for name in PTH:
-            _add_pth(site, name, known)
-        added = sys.path[before:]
-    # Children get the directories .pth files added, but their `import` lines don't run there.
-    ours = [site, *added]
-    os.environ["PYTHONPATH"] = os.pathsep.join(ours + [p for p in pythonpath if p not in ours])
-    os.environ["BUNDLEUP_SITE"] = site
-
-
-def _add_pth(sitedir: str, name: str, known: "set[str]") -> None:
-    """Process one of the payload's .pth files as site.py would in a venv's site-packages: a line
-    starting with "import" runs, any other line is a directory to append to sys.path if it exists.
-    Examples: setuptools' distutils shim, pywin32's directories (gauntlet 23). The parameter keeps
-    site.py's name `sitedir`, since some .pth lines read it from their caller's frame."""
+    sys.path.insert(0, os.path.join(site, "__bundleup__"))
     try:
-        with open(os.path.join(sitedir, name), encoding="utf-8-sig") as f:
-            lines = f.read().splitlines()
-    except (OSError, UnicodeDecodeError):
-        return
-    for number, line in enumerate(lines, 1):
-        if not line.strip() or line.startswith("#"):
-            continue
-        if line.startswith(("import ", "import\t")):
-            try:
-                exec(line)  # what site.py does with these lines
-            except Exception as e:  # as site.py: report it and skip the rest of the file
-                sys.stderr.write("%s: error in %s line %d: %r\n" % (NAME, name, number, e))
-                return
-            continue
-        path = os.path.normcase(os.path.abspath(os.path.join(sitedir, line.rstrip())))
-        if path not in known and os.path.exists(path):
-            sys.path.append(path)
-            known.add(path)
+        runtime = __import__("_bundleup_runtime")  # type: Any
+    finally:
+        del sys.path[0]
+    runtime.activate(site, PTH)
 
 
 def _run(site: str) -> None:

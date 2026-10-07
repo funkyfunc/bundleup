@@ -60,8 +60,10 @@ allowed-confusables = ["–"]  # the en dash reports use for "not applicable"
 
 [tool.ruff.lint.per-file-ignores]
 # The loader prints its "wrong Python" message on any Python 3, so it avoids f-strings and other
-# newer syntax on purpose.
+# newer syntax on purpose; the payload's runtime files follow the same rules (ADR-0027).
 "src/bundleup/_loader.py" = ["UP004", "UP031", "UP032"]
+"src/bundleup/_runtime.py" = ["UP004", "UP031", "UP032", "UP035"]
+"src/bundleup/_sitecustomize.py" = ["UP004", "UP031", "UP032"]
 
 [tool.pyright]
 include = ["src", "tests", "gauntlet/*.py"]

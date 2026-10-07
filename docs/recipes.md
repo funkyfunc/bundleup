@@ -14,9 +14,10 @@ anything outside the standard library and the preinstalled libraries can't run t
 bundleup build tool.py --target claude-api -o my-skill/scripts/tool.pyz
 ```
 
-`--target claude-api` builds for CPython 3.11 on `x86_64-manylinux_2_17` (the most compatible
-Linux level; the sandbox's exact glibc isn't documented), so compiled packages such as pydantic
-or numpy get Linux wheels even when you build on a Mac. Then in `my-skill/SKILL.md`
+`--target claude-api` builds for CPython 3.11 on `x86_64-manylinux_2_28` (glibc 2.28 or newer;
+the sandbox's exact glibc isn't documented), so compiled packages such as pydantic, numpy or
+Pillow get Linux wheels even when you build on a Mac. CI builds gauntlet 14 (python-pptx, lxml,
+Pillow) with every preset. Then in `my-skill/SKILL.md`
 ([format](https://agentskills.io/specification)):
 
 ```markdown
@@ -43,8 +44,9 @@ bundleup build handler.py --target lambda                  # a single PEP 723 sc
 
 The zip has your code and its dependencies at the top, as Lambda expects, with bytecode
 precompiled for the runtime (Lambda's `/var/task` is read-only). Set the function's runtime to
-the Python shown (`python3.13` by default) and its handler to the one printed
-(`handler app.handler`; for a script `handler.py`, `handler.<function>`). bundleup refuses a
+the Python shown (`python3.13` by default) and its handler to `module.function`: bundleup prints
+it when you pass `--entry app:handler` (`handler app.handler`); for a script `handler.py`, it's
+`handler.<function>`. Bytecode is hash-checked, so edits made in Lambda's console editor apply. bundleup refuses a
 function over Lambda's 250 MB unzipped limit and warns over the 50 MB direct-upload limit.
 Tested in CI: every gauntlet project except the `.pth` one (below) runs inside AWS's own Lambda
 image on x86_64 and arm64.

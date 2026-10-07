@@ -7,7 +7,10 @@ depends only on the version, and uv selects wheels for the target (`--python-pla
 
 from __future__ import annotations
 
+import re
+from collections.abc import Iterable
 from dataclasses import dataclass
+from pathlib import Path
 
 from ._errors import UsageError
 
@@ -104,3 +107,69 @@ def parse(name: str) -> Platform:
             hint=f"use one of uv's platform names for Linux, macOS or Windows, e.g. {EXAMPLES}",
         )
     return Platform(name, sys_platform, arch, musl="musl" in full)
+
+
+def wheel_tags(dist_info: Path) -> list[str]:
+    """The tags an installed distribution's WHEEL file lists ("cp312-cp312-manylinux_2_17_x86_64").
+    Empty if it has none (not installed from a wheel)."""
+    wheel = dist_info / "WHEEL"
+    if not wheel.is_file():
+        return []
+    lines = wheel.read_text(encoding="utf-8").splitlines()
+    return [line.split(":", 1)[1].strip() for line in lines if line.startswith("Tag:")]
+
+
+def is_native(tags: list[str]) -> bool:
+    """Built for one platform: any tag other than "...-any"."""
+    return any(not tag.endswith("-any") for tag in tags)
+
+
+LEGACY_MANYLINUX = {"manylinux1": (2, 5), "manylinux2010": (2, 12), "manylinux2014": (2, 17)}
+LEVEL = re.compile(r"(?P<kind>manylinux|musllinux|macosx)_(?P<major>\d+)_(?P<minor>\d+)_")
+
+
+@dataclass(frozen=True)
+class RuntimeNeeds:
+    """What the machine running a bundle must have, from its native wheels' tags: the C library
+    (and minimum version) on Linux, the minimum macOS version. The loader checks both at
+    start-up, so a mismatch is one sentence instead of an ImportError (ADR-0029)."""
+
+    libc: tuple[str, tuple[int, int]] | None = None  # ("glibc", (2, 28)) or ("musl", (1, 2))
+    macos: tuple[int, int] | None = None
+
+
+def _levels(tag: str) -> dict[str, tuple[int, int]]:
+    """Each kind of platform level one wheel tag can run with: the lowest of its alternatives
+    ("manylinux_2_17_x86_64.manylinux2014_x86_64" needs glibc 2.17)."""
+    found: dict[str, tuple[int, int]] = {}
+    for platform in tag.rsplit("-", 1)[-1].split("."):
+        legacy = next((v for k, v in LEGACY_MANYLINUX.items() if platform.startswith(k)), None)
+        if legacy:
+            kind, level = "manylinux", legacy
+        else:
+            match = LEVEL.match(platform)
+            if match is None:
+                continue
+            kind, level = match["kind"], (int(match["major"]), int(match["minor"]))
+        if kind not in found or level < found[kind]:
+            found[kind] = level
+    return found
+
+
+def runtime_needs(wheels: Iterable[list[str]]) -> RuntimeNeeds:
+    """The strictest requirement across all wheels (each given as its list of tags)."""
+    need: dict[str, tuple[int, int]] = {}
+    for tags in wheels:
+        per_wheel: dict[str, tuple[int, int]] = {}
+        for tag in tags:
+            for kind, level in _levels(tag).items():
+                if kind not in per_wheel or level < per_wheel[kind]:
+                    per_wheel[kind] = level
+        for kind, level in per_wheel.items():
+            need[kind] = max(need.get(kind, level), level)
+    libc = None
+    if "manylinux" in need:
+        libc = ("glibc", need["manylinux"])
+    elif "musllinux" in need:
+        libc = ("musl", need["musllinux"])
+    return RuntimeNeeds(libc, need.get("macosx"))

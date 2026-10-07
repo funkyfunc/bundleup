@@ -40,6 +40,7 @@ from ._errors import (
     EntryPointError,
     LockfileOutdatedError,
     NoCompatibleWheelError,
+    NoLockfileError,
     ProjectError,
     PythonMismatchError,
     PythonNotFoundError,
@@ -54,6 +55,12 @@ else:
     import tomli as tomllib
 
 LOADER = Path(__file__).with_name("_loader.py")
+# Copied into every .pyz payload's __bundleup__/ (ADR-0027): the code that activates the payload,
+# shared by the loader and child processes, and the children's sitecustomize.py.
+RUNTIME = {
+    "_bundleup_runtime.py": Path(__file__).with_name("_runtime.py"),
+    "sitecustomize.py": Path(__file__).with_name("_sitecustomize.py"),
+}
 MANIFEST = "manifest.json"  # in the outer zip, next to __main__.py
 FIXED_TIME = (1980, 1, 1, 0, 0, 0)  # reproducible zips: same inputs, same bytes, same cache key
 # uv's lock file. Console-script launchers are removed too (see `launchers`).
@@ -259,8 +266,16 @@ def load_source(path: Path) -> Source:
                 f"{pyproject} has no [project] name", hint='add `name = "..."` under [project]'
             )
         # uv.lock first (it's what uv users have); a standard pylock.toml otherwise (ADR-0026).
+        # Without either, refuse: `uv export` would resolve and write a uv.lock into the
+        # project, and the bundle would match nothing anyone reviewed (ADR-0028).
+        uv_lock = find_uv_lock(path)
         lock = path / "pylock.toml"
-        pylock = lock if lock.is_file() and not (path / "uv.lock").exists() else None
+        pylock = lock if lock.is_file() and uv_lock is None else None
+        if uv_lock is None and pylock is None:
+            raise NoLockfileError(
+                f"{path.name} has no lockfile, so bundleup can't tell exactly what to bundle",
+                hint="run `uv lock` in the project (or write a pylock.toml), then build again",
+            )
         return Source(
             path, project["name"], project.get("requires-python"), is_script=False, pylock=pylock
         )
@@ -268,6 +283,16 @@ def load_source(path: Path) -> Source:
         f"{path} is not a project directory or a .py script",
         hint="pass a directory with pyproject.toml, or a PEP 723 script",
     )
+
+
+def find_uv_lock(project: Path) -> Path | None:
+    """The project's uv.lock, or its workspace's (uv keeps one lock at the workspace root)."""
+    for directory in (project, *project.parents):
+        if (directory / "uv.lock").is_file():
+            return directory / "uv.lock"
+        if (directory / ".git").exists():
+            break  # don't wander out of the repository
+    return None
 
 
 def script_metadata(text: str) -> dict[str, Any]:  # Any: TOML values have no fixed type
@@ -479,6 +504,16 @@ def export(
     return [["-r", str(reqs)]], pylock
 
 
+def add_runtime(site: Path) -> None:
+    """The payload's own runtime files, under __bundleup__/ (see RUNTIME)."""
+    dest = site / _verify.RUNTIME_DIR
+    if dest.exists():
+        raise ProjectError(f"a dependency installs a top-level {_verify.RUNTIME_DIR}/ directory")
+    dest.mkdir()
+    for name, source in RUNTIME.items():
+        shutil.copyfile(source, dest / name)
+
+
 def script_path(source: Source, fmt: str) -> str | None:
     """Where a PEP 723 script goes in the payload: out of the way in a .pyz (the loader runs it),
     at the top for `dir` and `lambda`, where it's imported as a module (a Lambda handler)."""
@@ -514,10 +549,11 @@ def install(
     except UvError as e:
         if target.python_platform and "is not compatible with the target" in (e.detail or ""):
             raise NoCompatibleWheelError(
-                f"a package has no build for {target.python_platform.name}",
+                f"a package has no wheel for {target.python_platform.name}",
                 detail=e.detail,
-                hint="it only publishes source with compiled code, which uv can only build for "
-                "this machine; build on the target platform, or pin a version with wheels for it",
+                hint="uv could only build it from source, which works for this machine only; "
+                "`bundleup check --python-platform ...` lists which platforms the locked wheels "
+                "support",
             ) from None
         raise
     for name in SKIP_TOP:
@@ -629,14 +665,10 @@ def check_wheel_platforms(site: Path, target: Target) -> None:
     if platform is None:
         return
     wrong = []
-    for wheel in sorted(site.glob("*.dist-info/WHEEL")):
-        tags = [
-            line.split(":", 1)[1].strip()
-            for line in wheel.read_text(encoding="utf-8").splitlines()
-            if line.startswith("Tag:")
-        ]
+    for dist_info in sorted(site.glob("*.dist-info")):
+        tags = _platforms.wheel_tags(dist_info)
         if tags and not any(platform.accepts(tag) for tag in tags):
-            wrong.append(f"{wheel.parent.name.removesuffix('.dist-info')}: {', '.join(tags)}")
+            wrong.append(f"{dist_info.name.removesuffix('.dist-info')}: {', '.join(tags)}")
     if wrong:
         raise NoCompatibleWheelError(
             f"{len(wrong)} package(s) have no build for {platform.name}",
@@ -648,13 +680,15 @@ def check_wheel_platforms(site: Path, target: Target) -> None:
 
 def inspect_site(site: Path) -> tuple[int, bool]:
     """(number of distributions, whether any of them is platform-specific)."""
-    count, native = 0, False
-    for wheel in site.glob("*.dist-info/WHEEL"):
-        count += 1
-        for line in wheel.read_text(encoding="utf-8").splitlines():
-            if line.startswith("Tag:") and not line.rstrip().endswith("-any"):
-                native = True
-    return count, native
+    tags = [_platforms.wheel_tags(dist_info) for dist_info in site.glob("*.dist-info")]
+    return len(tags), any(_platforms.is_native(t) for t in tags)
+
+
+def runtime_needs(site: Path) -> _platforms.RuntimeNeeds:
+    """What a machine needs to run the native wheels in `site` (checked by the loader)."""
+    return _platforms.runtime_needs(
+        _platforms.wheel_tags(dist_info) for dist_info in site.glob("*.dist-info")
+    )
 
 
 # Set literals are stored in .pyc files in hash order, and string hashes are randomised per process,
@@ -667,7 +701,7 @@ py_compile.compile(sys.argv[1], cfile=sys.argv[2], dfile="__main__.py", doraise=
 """
 
 
-def precompile(target: Target, site: Path, *, progress: Progress) -> None:
+def precompile(target: Target, site: Path, *, progress: Progress, checked: bool = False) -> None:
     """Compile everything with the target's interpreter, reusing cached bytecode (_bytecode)."""
 
     def compile_with(cmd: list[str]) -> None:
@@ -682,6 +716,7 @@ def precompile(target: Target, site: Path, *, progress: Progress) -> None:
         python_identity=identity,
         cache_tag=target.cache_tag,
         run=compile_with,
+        checked=checked,
     )
 
 
@@ -897,16 +932,17 @@ def build(
         elif fmt == "dir":
             _write_dir(p, output, steps=steps)
         else:
-            _write_lambda(p, output, stage=stage, steps=steps)
-            if output.stat().st_size > LAMBDA_UPLOAD:
+            staged = _stage_lambda(p, stage=stage, steps=steps)
+            if staged.stat().st_size > LAMBDA_UPLOAD:
                 diagnostics.append(_lambda_upload_warning(output))
-                if options.strict:
-                    output.unlink()
+                if options.strict:  # checked before writing: an earlier zip stays untouched
                     raise CheckFailedError(
                         "found 1 warning, so nothing was written",
                         diagnostics=diagnostics,
                         hint=_STRICT_HINT,
                     )
+            output.parent.mkdir(parents=True, exist_ok=True)
+            shutil.move(str(staged), output)
         steps.finish()
     size = output.stat().st_size if output.is_file() else sum(x.size_bytes for x in p.sizes)
     return BuildResult(
@@ -968,6 +1004,7 @@ def _write_pyz(
     steps.start("write")
     cache_dir = f"{safe_name(p.source.name)}-{digest[:16]}"
     target, native = p.target, p.native
+    needs = runtime_needs(p.site)
     config = {
         "NAME": p.source.name,
         "DIRNAME": cache_dir,
@@ -978,6 +1015,8 @@ def _write_pyz(
         "TARGET": target.describe(native),
         "ENTRY": p.entry,
         "PTH": pth_files(p.site),
+        "LIBC": needs.libc if native else None,
+        "MACOS": needs.macos if native else None,
     }
     loader, loader_pyc = stage / "__main__.py", stage / "__main__.pyc"
     loader.write_text(render_loader(config), encoding="utf-8")
@@ -1062,10 +1101,10 @@ def _write_dir(p: _Prepared, output: Path, *, steps: _Steps) -> None:
         shutil.rmtree(old, ignore_errors=True)
 
 
-def _write_lambda(p: _Prepared, output: Path, *, stage: Path, steps: _Steps) -> None:
-    """An AWS Lambda function .zip: the packages and the project at the top (Lambda puts
-    /var/task on sys.path), bytecode precompiled for the runtime's Python, since /var/task is
-    read-only; the manifest alongside."""
+def _stage_lambda(p: _Prepared, *, stage: Path, steps: _Steps) -> Path:
+    """An AWS Lambda function .zip, in the staging directory: the packages and the project at the
+    top (Lambda puts /var/task on sys.path), bytecode precompiled for the runtime's Python, since
+    /var/task is read-only; the manifest alongside."""
     steps.start("zip")
     staged = stage / "lambda.zip"
     _digest, written = write_payload(p.site, staged)
@@ -1077,8 +1116,7 @@ def _write_lambda(p: _Prepared, output: Path, *, stage: Path, steps: _Steps) -> 
         info.external_attr = 0o100644 << 16
         info.compress_type = zipfile.ZIP_DEFLATED
         zf.writestr(info, manifest_json)
-    output.parent.mkdir(parents=True, exist_ok=True)
-    shutil.move(str(staged), output)
+    return staged
 
 
 def _count(diags: list[Diagnostic]) -> str:
@@ -1107,6 +1145,26 @@ class _Prepared:
     version: str | None
     diagnostics: list[Diagnostic]
     sizes: list[_check.PackageSize]
+
+
+def _unlocked_script(source: Source) -> list[Diagnostic]:
+    """A script with dependencies but no lock is resolved afresh on every build (ADR-0028)."""
+    if not source.is_script or source.path.with_name(source.path.name + ".lock").exists():
+        return []
+    meta = script_metadata(source.path.read_text(encoding="utf-8"))
+    if not meta.get("dependencies"):
+        return []
+    name = source.path.name
+    return [
+        Diagnostic(
+            "unlocked",
+            "warning",
+            f"{name} has no lockfile, so its dependencies were resolved just now; building again "
+            "later can bundle different versions",
+            hint=f"run `uv lock --script {name}` and keep {name}.lock next to it",
+            file=name,
+        )
+    ]
 
 
 def _format_diagnostics(fmt: str, site: Path, sizes: list[_check.PackageSize]) -> list[Diagnostic]:
@@ -1162,16 +1220,19 @@ def _prepare(
     steps.start("install")
     install(uv, source, target=target, reqs=reqs, site=site, script=script, progress=progress)
     check_wheel_platforms(site, target)
-    try:
+    if fmt == "pyz" or options.entry or script:
         entry = resolve_entry(source, site, entry=options.entry, script=script)
-    except EntryPointError:
-        if fmt == "pyz":
-            raise
-        entry = None  # a directory or a Lambda zip is imported; its host decides what runs
+    else:
+        # A directory or a Lambda zip is imported, and its host decides what runs. A console
+        # script is a CLI, not a Lambda handler, so it's never guessed (the review found the
+        # printed handler named one).
+        entry = None
     packages, native = inspect_site(site)
     version = project_version(site, source)
+    if fmt == "pyz":
+        add_runtime(site)
     steps.start("compile")
-    precompile(target, site, progress=progress)
+    precompile(target, site, progress=progress, checked=fmt != "pyz")
     steps.start("check")
 
     def run_python(cmd: list[str]) -> str:
@@ -1181,6 +1242,7 @@ def _prepare(
         site, project=canonicalize_name(source.name), target=target, run=run_python, script=script
     )
     diagnostics += _format_diagnostics(fmt, site, sizes)
+    diagnostics += _unlocked_script(source)
     diagnostics.sort(key=lambda d: d.level != "error")
     return _Prepared(
         source, target, site, pylock, script, entry, packages, native, version, diagnostics, sizes

@@ -15,6 +15,7 @@ import contextlib
 import os
 import re
 import shutil
+import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -67,6 +68,21 @@ def cache_roots() -> list[Path]:
     return roots
 
 
+# Where Pythons with sys.pycache_prefix keep bytecode: the loader writes a bundle's .pyc files
+# under it, mirroring the unpacked copy's path (macOS's /usr/bin/python3 uses the Apple one).
+PYCACHE_PREFIXES = [Path.home() / "Library" / "Caches" / "com.apple.python"]
+
+
+def _bytecode_copies(path: Path) -> list[Path]:
+    """The same bundle's bytecode under each known pycache_prefix, if any exists."""
+    prefixes = list(PYCACHE_PREFIXES)
+    own = getattr(sys, "pycache_prefix", None)  # this Python's, if it has one
+    if own:
+        prefixes.append(Path(own))
+    relative = os.path.splitdrive(str(path))[1].lstrip("\\/")
+    return [prefix / relative for prefix in prefixes if (prefix / relative).is_dir()]
+
+
 def _size(path: Path) -> int:
     total = 0
     for _rel, file in _bytecode.walk_files(path):
@@ -99,7 +115,10 @@ def clean_cache(
     """Remove unpacked bundles unused for `older_than_days`, abandoned temp directories and stale
     lock files; with `build`, also the build cache. With `dry_run`, only report."""
     now = time.time()
-    doomed: list[Path] = [b.path for b in list_cache() if now - b.last_used > older_than_days * DAY]
+    doomed: list[Path] = []
+    for unpacked in list_cache():
+        if now - unpacked.last_used > older_than_days * DAY:
+            doomed += [unpacked.path, *_bytecode_copies(unpacked.path)]
     for root in cache_roots():
         for entry in os.scandir(root):
             age = now - entry.stat(follow_symlinks=False).st_mtime

@@ -157,3 +157,27 @@ jobs:
           name: formats-${{ matrix.format }}-${{ matrix.os }}
           path: gauntlet/results/formats.json
           if-no-files-found: ignore
+
+  presets:
+    # Every target preset must build the founding example (python-pptx, lxml, Pillow: compiled
+    # wheels) from a Mac and from Linux. The independent review of 2026-10-07 found claude-api
+    # couldn't.
+    name: Presets (${{ matrix.os }})
+    needs: checks
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+      - run: uv sync --locked --python 3.12
+      - run: uv python install 3.11 3.13
+      - name: Build gauntlet 14 with every preset
+        shell: bash
+        run: |
+          for target in $(uv run bundleup targets --json | jq -r '.result.targets[].name'); do
+            uv run bundleup build gauntlet/projects/14-real-world-pptx --target "$target" \
+              --entry g14_pptx:main -o "presets/g14-$target" || exit 1
+          done

@@ -9,8 +9,9 @@
 name: Weekly nightly summary
 
 on:
-  schedule:
-    - cron: "23 8 * * 1" # Mondays, after that night's smoke and corpus runs
+  # Paused 2026-10-07 (independent review: scaffolding before users); run it by hand when wanted.
+  # schedule:
+  #   - cron: "23 8 * * 1" # Mondays, after that night's smoke and corpus runs
   workflow_dispatch:
 
 permissions:

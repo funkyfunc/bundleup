@@ -92,6 +92,13 @@ class NoCompatibleWheelError(BundleupError):
     code = "incompatible-wheel"
 
 
+class NoLockfileError(BundleupError):
+    """A project has no uv.lock (here or in its workspace) and no pylock.toml: bundleup bundles
+    exactly a lock, and never writes one into the project (ADR-0028)."""
+
+    code = "no-lockfile"
+
+
 class NotABundleError(BundleupError):
     """The file isn't a bundleup bundle, or was made before bundles carried a manifest."""
 

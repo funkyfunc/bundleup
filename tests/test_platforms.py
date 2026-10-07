@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from bundleup import UsageError
+from bundleup import _platforms as p
 from bundleup._platforms import parse
 
 
@@ -66,3 +67,20 @@ def test_markers() -> None:
     assert markers["python_version"] == "3.11"
     assert markers["os_name"] == "posix"
     assert parse("windows").markers(python_full_version="3.12.1")["os_name"] == "nt"
+
+
+def test_runtime_needs_take_the_strictest_wheel() -> None:
+    needs = p.runtime_needs(
+        [
+            ["cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64"],  # needs glibc 2.17
+            ["cp312-cp312-manylinux_2_28_x86_64"],
+            ["py3-none-any"],
+        ]
+    )
+    assert needs == p.RuntimeNeeds(libc=("glibc", (2, 28)))
+    assert p.runtime_needs([["cp39-abi3-manylinux1_x86_64"]]).libc == ("glibc", (2, 5))
+    assert p.runtime_needs([["cp312-cp312-musllinux_1_2_x86_64"]]).libc == ("musl", (1, 2))
+    macos = p.runtime_needs(
+        [["cp312-cp312-macosx_11_0_arm64"], ["cp38-abi3-macosx_10_9_universal2"]]
+    )
+    assert macos == p.RuntimeNeeds(macos=(11, 0))

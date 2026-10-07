@@ -73,6 +73,24 @@ def test_clean_removes_old_copies_and_leftovers_only(cache: Path) -> None:
     assert report.freed_bytes >= 100
 
 
+def test_clean_also_removes_bytecode_under_a_pycache_prefix(
+    cache: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """macOS's /usr/bin/python3 keeps bytecode under ~/Library/Caches/com.apple.python; the
+    loader puts a bundle's .pyc files there, so cleaning must too (the review found it didn't)."""
+    from bundleup import _cache
+
+    prefix = tmp_path / "apple-pycache"
+    monkeypatch.setattr(_cache, "PYCACHE_PREFIXES", [prefix])
+    old = unpacked(cache, "old", age_days=40)
+    mirror = prefix / os.path.splitdrive(str(old))[1].lstrip("\\/")
+    mirror.mkdir(parents=True)
+    (mirror / "module.cpython-39.pyc").write_bytes(b"pyc")
+    report = bundleup.clean_cache(older_than_days=30)
+    assert set(report.removed) == {old, mirror}
+    assert not mirror.exists()
+
+
 def test_clean_build_cache_only_when_asked(
     cache: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

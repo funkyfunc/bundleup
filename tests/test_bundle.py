@@ -23,9 +23,16 @@ PROBE = """\
 # requires-python = ">=3.9"
 # dependencies = []
 # ///
-import json, os, sys
+import json, os, subprocess, sys
+child = None
+if os.environ.get("PROBE_CHILD"):  # "self" (the bundle's interpreter) or another Python's path
+    python = sys.executable if os.environ["PROBE_CHILD"] == "self" else os.environ["PROBE_CHILD"]
+    code = "import builtins as b, json, sys; "
+    code += "print(json.dumps([sys.path, getattr(b, 'CHAINED', 0)]))"
+    done = subprocess.run([python, "-c", code], capture_output=True, text=True)
+    child = json.loads(done.stdout) if done.returncode == 0 else done.stderr
 print(json.dumps({"path": sys.path, "file": __file__, "pythonpath": os.environ.get("PYTHONPATH"),
-                  "site": os.environ.get("BUNDLEUP_SITE"), "argv": sys.argv[1:]}))
+                  "site": os.environ.get("BUNDLEUP_SITE"), "argv": sys.argv[1:], "child": child}))
 """
 SYSTEM_PYTHON = "/usr/bin/python3"
 WINDOWS = sys.platform == "win32"
@@ -102,15 +109,48 @@ def test_payload_sits_before_site_packages_and_on_pythonpath(bundle: Path, tmp_p
     assert site in out["path"] and str(bundle) not in out["path"]
     stdlib = os.path.dirname(os.__file__)
     assert out["path"].index(stdlib) < out["path"].index(site)  # can't shadow the standard library
-    assert out["pythonpath"].split(os.pathsep)[0] == site
+    # Children get the shim, never the payload itself (ADR-0027).
+    assert out["pythonpath"].split(os.pathsep) == [os.path.join(site, "__bundleup__")]
 
 
 def test_nested_bundle_drops_parent_packages(bundle: Path, tmp_path: Path) -> None:
     parent = "/somewhere/else/parent-bundle"
-    env = env_for(tmp_path, BUNDLEUP_SITE=parent, PYTHONPATH=os.pathsep.join([parent, "/keep/me"]))
+    shim = os.path.join(parent, "__bundleup__")
+    env = env_for(
+        tmp_path,
+        BUNDLEUP_SITE=parent,
+        BUNDLEUP_PATHS=parent,
+        PYTHONPATH=os.pathsep.join([shim, "/keep/me"]),
+    )
     out = probe(bundle, env)
     assert parent not in out["path"]
     assert out["pythonpath"].split(os.pathsep)[1:] == ["/keep/me"]
+
+
+def test_children_of_the_same_interpreter_see_the_bundle(bundle: Path, tmp_path: Path) -> None:
+    out = probe(bundle, env_for(tmp_path, PROBE_CHILD="self"))
+    child_path, _chained = out["child"]
+    assert out["site"] in child_path
+    assert os.path.join(out["site"], "__bundleup__") not in child_path  # the shim removes itself
+
+
+def test_other_pythons_are_left_alone(bundle: Path, tmp_path: Path) -> None:
+    """A Python from another environment (here a venv) must not import the bundle's packages,
+    and still runs its own sitecustomize (the review found the old PYTHONPATH leaked)."""
+    venv = tmp_path / "other-venv"
+    subprocess.run([base_python(), "-m", "venv", "--without-pip", str(venv)], check=True)
+    python = venv / ("Scripts/python.exe" if WINDOWS else "bin/python")
+    purelib = subprocess.run(
+        [str(python), "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    (Path(purelib) / "sitecustomize.py").write_text("import builtins\nbuiltins.CHAINED = 1\n")
+    out = probe(bundle, env_for(tmp_path, PROBE_CHILD=str(python)))
+    child_path, chained = out["child"]
+    assert not any(p.startswith(out["site"]) for p in child_path)
+    assert chained == 1
 
 
 def test_bundleup_cache_override(bundle: Path, tmp_path: Path) -> None:
@@ -176,6 +216,19 @@ def test_wrong_cpu_is_explained(bundle: Path, tmp_path: Path) -> None:
     assert r.returncode == 1 and "bundled for Python on riscv64" in r.stderr
 
 
+@pytest.mark.skipif(sys.platform not in ("darwin", "linux"), reason="glibc and macOS checks")
+def test_too_old_system_is_explained(bundle: Path, tmp_path: Path) -> None:
+    """A native wheel built for a newer glibc or macOS fails with one sentence (ADR-0029)."""
+    if sys.platform == "darwin":
+        fake = relabel(bundle, tmp_path / "old.pyz", MACOS=(99, 0))
+        expected = "this app needs macOS 99.0 or newer"
+    else:
+        fake = relabel(bundle, tmp_path / "old.pyz", LIBC=("glibc", (99, 0)))
+        expected = "bundled for Linux with glibc 99.0 or newer"
+    r = run(fake, env_for(tmp_path))
+    assert r.returncode == 1 and expected in r.stderr, r.stderr
+
+
 def test_reproducible_payload(tmp_path: Path) -> None:
     src = tmp_path / "probe.py"
     src.write_text(PROBE)
@@ -239,9 +292,11 @@ def test_builds_without_uv_on_path(tmp_path: Path) -> None:
     assert probe(tmp_path / "p.pyz", env_for(tmp_path))["argv"] == []
 
 
-def test_loader_parses_on_any_python_3() -> None:
-    """The loader must get far enough on an old Python to print "this app needs Python X"."""
-    source = (Path(b.__file__).parent / "_loader.py").read_text()
+@pytest.mark.parametrize("name", ["_loader.py", "_runtime.py", "_sitecustomize.py"])
+def test_loader_parses_on_any_python_3(name: str) -> None:
+    """The loader must get far enough on an old Python to print "this app needs Python X"; the
+    children's sitecustomize is imported by whatever Python the app starts."""
+    source = (Path(b.__file__).parent / name).read_text()
     ast.parse(source, feature_version=(3, 5))  # raises SyntaxError on newer-only syntax
 
 
@@ -316,7 +371,7 @@ def test_machine_packages_are_hidden_unless_inherited(
 def test_pth_files_are_processed_like_site_py(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    from bundleup import _loader
+    from bundleup import _runtime
 
     (tmp_path / "extra").mkdir()
     lines = [
@@ -332,7 +387,7 @@ def test_pth_files_are_processed_like_site_py(
     (tmp_path / "after-the-error").mkdir()
     monkeypatch.setattr(sys, "path", list(sys.path))
     monkeypatch.delitem(sys.modules, "__g_sitedir__", raising=False)
-    _loader._add_pth(str(tmp_path), "a.pth", set())
+    _runtime.add_pth(str(tmp_path), "a.pth", set())
     added = [p for p in sys.path if p.startswith(os.path.normcase(str(tmp_path)))]
     assert added == [os.path.normcase(str(tmp_path / "extra"))]
     assert sys.modules["__g_sitedir__"] == str(tmp_path)
