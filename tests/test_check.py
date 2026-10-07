@@ -7,6 +7,8 @@ import subprocess
 import sys
 from pathlib import Path
 
+import pytest
+
 from bundleup import _bytecode
 from bundleup import _check as c
 from bundleup._python import Target
@@ -149,3 +151,34 @@ def test_the_range_starts_at_the_oldest_python_the_code_compiles_on(tmp_path: Pa
     )
     assert narrowed == PythonRange((3, 14), None)
     assert [d.message.split(" doesn't compile on ")[1][:10] for d in diags] == ["Python 3.9"]
+
+
+def test_an_older_interpreter_catches_what_ast_cannot(tmp_path: Path) -> None:
+    """Third review: ast.parse(feature_version=) accepts PEP 701 f-strings (3.12+), so the range
+    check uses a real interpreter of the oldest version when there is one (ADR-0035)."""
+    from dataclasses import replace
+
+    from bundleup._python import PythonRange
+
+    found = subprocess.run(
+        ["uv", "python", "find", "3.11"], capture_output=True, text=True, cwd=tmp_path
+    ).stdout.strip()
+    if not found or sys.version_info < (3, 12):
+        pytest.skip("needs a Python 3.11 and a test Python of 3.12 or newer")
+    site = tmp_path / "site"
+    install(site, "app", {"app/__init__.py": 'd = {"a": 1}\nprint(f"{d["a"]}")\n'})
+    pyc = site / _bytecode.pyc_path("app/__init__.py", TARGET.cache_tag)
+    pyc.parent.mkdir(exist_ok=True)
+    pyc.write_bytes(b"")
+    target = replace(TARGET, version=(3, 12))
+    narrowed, diags = c.oldest_python(
+        site,
+        project="app",
+        script=None,
+        pythons=PythonRange((3, 11), None),
+        target=target,
+        interpreters={(3, 11): found},
+        run=run,
+    )
+    assert narrowed == PythonRange((3, 12), None)
+    assert [d.code for d in diags] == ["python-range"]

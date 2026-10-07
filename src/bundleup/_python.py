@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -228,6 +229,38 @@ def find_interpreter(uv: str, version: str, *, cwd: Path, progress: Progress) ->
     except UvError:
         return None
     return found.strip() or None
+
+
+def private_pythons() -> Path:
+    """Where bundleup installs interpreters it needs only to check code (ADR-0035): its own
+    directory, so the user's uv-managed Pythons are never changed under a running program."""
+    from ._bytecode import cache_dir  # the build cache's location rules
+
+    return cache_dir().parent / "pythons"
+
+
+def fetch_interpreter(uv: str, version: str, *, cwd: Path, progress: Progress) -> str | None:
+    """An interpreter of `version`: an installed one, or one installed into bundleup's private
+    directory. None if that's impossible (offline, or UV_PYTHON_DOWNLOADS=never)."""
+    found = find_interpreter(uv, version, cwd=cwd, progress=progress)
+    if found:
+        return found
+    env = {**os.environ, "UV_PYTHON_INSTALL_DIR": str(private_pythons())}
+    install = [uv, "python", "install", version, "--no-bin", "--no-registry"]
+    try:
+        run(install, cwd=cwd, what="uv python install", progress=progress, env=env)
+        found = run(
+            [uv, "python", "find", version, "--managed-python"],
+            cwd=cwd,
+            what="uv python find",
+            progress=progress,
+            env=env,
+        ).strip()
+    except UvError:
+        return None
+    # The real path: uv's per-minor-version link can be repointed by a later install while this
+    # interpreter is in use (on Windows that broke a running Python in the gauntlet).
+    return os.path.realpath(found) if found else None
 
 
 def check_requires_python(source: Source, target: Target) -> None:

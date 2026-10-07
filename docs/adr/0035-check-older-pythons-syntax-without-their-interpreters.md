@@ -1,8 +1,9 @@
-# ADR-0035: Versions in a range without an installed interpreter are checked with `ast`
+# ADR-0035: A range's oldest Python is checked with a real interpreter, installed privately if needed
 
 - **Status:** Proposed (written 2026-10-07 while the owner was away)
 - **Date:** 2026-10-07
-- **Deciders:** an agent, after the [second independent review](../findings/2026-10-07-second-review.md)
+- **Deciders:** an agent, after the second and third independent reviews
+  ([second](../findings/2026-10-07-second-review.md), [third](../findings/2026-10-07-third-review.md))
 - **Amends:** [ADR-0030](0030-pure-python-bundles-run-on-a-range.md)
 
 ## Context
@@ -21,14 +22,22 @@ were tried and dropped:
 
 ## Decision
 
-- Each version below the target is checked with its own interpreter if one is installed;
-  otherwise the target's interpreter checks the syntax for it with
-  `ast.parse(source, feature_version=(3, X))`, which rejects newer syntax (`match`, walrus,
-  positional-only parameters, `except*`, type parameters). Python documents it as best effort.
-- The range starts at the oldest version that passes; there is no "unchecked" case and no
-  download.
+- The range's **oldest** version is checked with a real interpreter: an installed one, or one
+  bundleup installs into **its own directory** (`<build cache>/pythons`, `uv python install
+  --no-bin --no-registry` with `UV_PYTHON_INSTALL_DIR`), used through its real path. The user's
+  uv-managed Pythons, PATH and Windows registry are never touched, and uv's per-version links
+  (which an install can repoint) aren't used.
+- Other versions below the target use an installed interpreter if there is one, otherwise the
+  target's interpreter with `ast.parse(source, feature_version=(3, X))` (best effort: it misses
+  tokenizer changes such as PEP 701 f-strings, as the third review showed).
+- The range starts at the oldest version that passes. If the oldest couldn't be checked with an
+  interpreter (offline, `UV_PYTHON_DOWNLOADS=never`), the `python-range-approximate` warning says
+  so.
 
 ## Consequences
 
+- The first build of a pure project on a machine without its oldest Python downloads that
+  Python once (~20 MB) into bundleup's cache; `bundleup cache clean --build` removes it.
 - Newer standard-library APIs aren't checked either way (only syntax), as before.
-- Tests: `tests/test_check.py::test_the_range_starts_at_the_oldest_python_the_code_compiles_on`.
+- Tests: `tests/test_check.py::test_the_range_starts_at_the_oldest_python_the_code_compiles_on`,
+  `test_an_older_interpreter_catches_what_ast_cannot` (a PEP 701 f-string on 3.11).

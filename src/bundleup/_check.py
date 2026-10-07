@@ -228,6 +228,18 @@ def oldest_python(
         if failure is None:
             failure, failed_on = found[0], version
     if failure is None or failed_on is None:
+        if interpreters.get(pythons.min) is None:  # checked with ast only: say so
+            return pythons, [
+                Diagnostic(
+                    "python-range-approximate",
+                    "warning",
+                    f"Python {_v(pythons.min)} couldn't be installed to check the code, so only "
+                    "its syntax was checked, roughly; the bundle claims Python "
+                    f"{pythons} from requires-python",
+                    hint=f"install it to check exactly: uv python install {_v(pythons.min)}",
+                    package=project,
+                )
+            ]
         return pythons, []
     # Claim only from the oldest version that compiled, or the target's.
     narrowed = PythonRange(verified or target.version, pythons.max)

@@ -43,4 +43,4 @@ and change only the old one's status line.
 | [0032](0032-tool-bundleup-configuration.md) | Project settings live in `[tool.bundleup]` | Accepted |
 | [0033](0033-a-stale-lock-is-an-error.md) | A stale lock is an error by default; bundleup never rewrites it | Proposed |
 | [0034](0034-pure-python-bundles-run-on-any-os.md) | A pure-Python bundle runs on any OS when the lock selects the same packages everywhere | Proposed |
-| [0035](0035-check-older-pythons-syntax-without-their-interpreters.md) | Versions in a range without an installed interpreter are checked with `ast` | Proposed |
+| [0035](0035-check-older-pythons-syntax-without-their-interpreters.md) | A range's oldest Python is checked with a real interpreter, installed privately if needed | Proposed |

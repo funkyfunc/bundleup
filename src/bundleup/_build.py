@@ -46,6 +46,7 @@ from ._python import (
     PythonRange,
     Target,
     check_requires_python,
+    fetch_interpreter,
     find_interpreter,
     find_python,
 )
@@ -353,6 +354,9 @@ def _prepare(
         (3, minor): find_interpreter(uv, f"3.{minor}", cwd=stage, progress=progress)
         for minor in range(pythons.min[1], target.version[1])
     }
+    if pythons.min in interpreters and interpreters[pythons.min] is None:
+        oldest = f"{pythons.min[0]}.{pythons.min[1]}"
+        interpreters[pythons.min] = fetch_interpreter(uv, oldest, cwd=stage, progress=progress)
     pythons, narrowed = _check.oldest_python(
         site,
         project=canonicalize_name(source.name),
