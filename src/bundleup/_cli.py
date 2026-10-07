@@ -337,7 +337,7 @@ def _success_lines(result: BuildResult, style: Style) -> list[str]:
         f"{style.dim(f'({size}) in {result.duration_s:.2f}s')}"
     )
     packages = plural(result.packages, "package")
-    details = [result.target.describe(result.native), packages]
+    details = [result.target.describe(result.native, result.pythons), packages]
     if result.format == "lambda" and result.handler:
         details.append(f"handler {result.handler}")
     second = style.dim(f"  {f' {style.dot} '.join(details)}")
@@ -472,7 +472,7 @@ def _check_lines(report: CheckReport, opts: argparse.Namespace, style: Style) ->
     name = f"{report.name} {report.version}" if report.version else report.name
     errors, warnings = len(report.errors), len(report.warnings)
     verdict = findings(errors, warnings) or "no problems found"
-    target = report.target.describe(report.native)
+    target = report.target.describe(report.native, report.pythons)
     lines = [f"{style.bold('Checked')} {name} for {target}: {verdict}"]
     packages = plural(len(report.packages), "package")
     largest = ", ".join(f"{p.name} {_size(p.size_bytes)}" for p in report.packages[:3])

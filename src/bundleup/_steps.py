@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import subprocess
-import sys
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,11 +12,6 @@ from ._errors import (
     BundleupError,
     UvError,
 )
-
-if sys.version_info >= (3, 11):
-    pass
-else:
-    pass
 
 
 @dataclass(frozen=True)

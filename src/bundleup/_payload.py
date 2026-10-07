@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import os
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, NamedTuple
 
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.utils import canonicalize_name
 
 from . import _bytecode, _check, _platforms, _verify, _zipwriter
@@ -20,12 +20,7 @@ from ._errors import (
     NoCompatibleWheelError,
     UsageError,
 )
-
-if sys.version_info >= (3, 11):
-    pass
-else:
-    pass
-from ._python import Target
+from ._python import PythonRange, Target
 from ._source import Source
 from ._steps import Progress, run
 from ._text import listing
@@ -178,6 +173,53 @@ def pth_files(site: Path) -> list[str]:
     return sorted(p.name for p in site.glob("*.pth") if not p.name.startswith("."))
 
 
+# The range a pure-Python bundle can claim (ADR-0030): from the oldest Python bundles are tested on;
+# lock markers are evaluated up to NEWEST_KNOWN, and a range still open there stays open.
+OLDEST = (3, 9)
+NEWEST_KNOWN = (3, 20)
+
+
+def python_range(
+    site: Path, *, pylock: Path, target: Target, source: Source, native: bool
+) -> PythonRange:
+    """The minor versions this payload runs on: the target's only, if anything is compiled;
+    otherwise every neighbouring version for which the lock selects the same packages and the
+    project and every package allow that Python."""
+    here = target.version
+    if native:
+        return PythonRange(here, here)
+    lock = pylock.read_text(encoding="utf-8")
+    selected = set(_verify.locked_packages(lock, target.markers))
+    texts = [source.requires_python or ""]
+    texts += [d.requires_python for d in _verify.installed_distributions(site)]
+    specs = []
+    for text in texts:
+        try:
+            specs.append(SpecifierSet(text))
+        except InvalidSpecifier:
+            continue  # unreadable metadata: the installer accepted it, so does this
+
+    def same(minor: int) -> bool:
+        full = f"3.{minor}.0"
+        if not all(spec.contains(full, prereleases=True) for spec in specs):
+            return False
+        environment = {
+            **target.markers,
+            "python_version": f"3.{minor}",
+            "python_full_version": full,
+            "implementation_version": full,
+        }
+        return set(_verify.locked_packages(lock, environment)) == selected
+
+    low = here[1]
+    while low - 1 >= OLDEST[1] and same(low - 1):
+        low -= 1
+    high = here[1]
+    while high + 1 <= NEWEST_KNOWN[1] and same(high + 1):
+        high += 1
+    return PythonRange((3, low), None if high == NEWEST_KNOWN[1] else (3, high))
+
+
 @dataclass(frozen=True)
 class Prepared:
     """A project installed and compiled in a staging directory, and what the analysis found."""
@@ -193,3 +235,4 @@ class Prepared:
     version: str | None
     diagnostics: list[Diagnostic]
     sizes: list[_check.PackageSize]
+    pythons: PythonRange  # the minor versions the bundle runs on (ADR-0030)

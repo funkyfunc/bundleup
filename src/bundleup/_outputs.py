@@ -14,7 +14,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import sys
 import zipfile
 from pathlib import Path
 
@@ -24,12 +23,6 @@ from ._errors import (
     Diagnostic,
     UsageError,
 )
-from ._targets import Format
-
-if sys.version_info >= (3, 11):
-    pass
-else:
-    pass
 from ._payload import (
     COMPILE_ENV,
     Entry,
@@ -39,9 +32,10 @@ from ._payload import (
     verify_payload,
     write_payload,
 )
-from ._python import Target
+from ._python import PythonRange, Target
 from ._source import Source, safe_name
 from ._steps import Progress, Steps, run
+from ._targets import Format
 
 LOADER = Path(__file__).with_name("_loader.py")
 MANIFEST = "manifest.json"  # in the outer zip, next to __main__.py
@@ -76,6 +70,7 @@ def manifest(
     locked: list[_verify.LockedPackage],
     files: dict[str, str],
     loader: dict[str, str] | None,
+    pythons: PythonRange,
 ) -> bytes:
     """What's inside the bundle, with hashes: read by `bundleup verify` and by reviewers
     (`unzip -p app.pyz manifest.json`). Sorted, so the same inputs give the same bytes."""
@@ -84,7 +79,7 @@ def manifest(
         "bundleup_version": __version__,
         "name": source.name,
         "version": version,
-        "target": target.to_json_dict(native=native),
+        "target": target.to_json_dict(native=native, pythons=pythons),
         "entry": list(entry) if entry else None,
         "cache_dir": cache_dir,
         "format": fmt,
@@ -100,14 +95,23 @@ def manifest(
 
 
 def write_bundle(
-    output: Path, *, payload: Path, loader: Path, loader_pyc: Path, manifest_json: bytes
+    output: Path,
+    *,
+    payload: Path,
+    loader: Path,
+    loader_pyc: Path,
+    manifest_json: bytes,
+    pythons: PythonRange,
 ) -> None:
-    """Write shebang + outer zip to a temporary file, then rename it over `output`."""
+    """Write shebang + outer zip to a temporary file, then rename it over `output`. The shebang
+    names the version when the bundle runs on only one (`./app.pyz` then finds the right Python,
+    and Windows' py launcher reads it too); otherwise plain python3 (ADR-0030)."""
     output.parent.mkdir(parents=True, exist_ok=True)
     tmp = output.with_name(f".{output.name}.tmp-{os.getpid()}")
     try:
         with open(tmp, "wb") as f:
-            f.write(b"#!/usr/bin/env python3\n")
+            python = f"python{pythons.min[0]}.{pythons.min[1]}" if pythons.exact else "python3"
+            f.write(f"#!/usr/bin/env {python}\n".encode())
             with zipfile.ZipFile(f, "w", zipfile.ZIP_STORED) as zf:
                 info = zipfile.ZipInfo("payload.zip", FIXED_TIME)
                 info.external_attr = 0o100644 << 16
@@ -165,11 +169,12 @@ def write_pyz(p: Prepared, output: Path, *, stage: Path, steps: Steps, progress:
     config = {
         "NAME": p.source.name,
         "DIRNAME": cache_dir,
-        "PYTHON": target.version,
+        "PYTHON": p.pythons.min,
+        "PYTHON_MAX": p.pythons.max,
         "PLATFORM": target.platform,
         "MACHINE": target.machine if native else None,
         "ABIFLAGS": target.abiflags if native else None,
-        "TARGET": target.describe(native),
+        "TARGET": target.describe(native, p.pythons),
         "ENTRY": tuple(p.entry),  # a plain tuple: the loader reads its repr
         "PTH": pth_files(p.site),
         "LIBC": needs.libc if native else None,
@@ -200,9 +205,15 @@ def write_pyz(p: Prepared, output: Path, *, stage: Path, steps: Steps, progress:
             "__main__.py": _verify.record_hash(loader.read_bytes()),
             "__main__.pyc": _verify.record_hash(loader_pyc.read_bytes()),
         },
+        pythons=p.pythons,
     )
     write_bundle(
-        output, payload=payload, loader=loader, loader_pyc=loader_pyc, manifest_json=manifest_json
+        output,
+        payload=payload,
+        loader=loader,
+        loader_pyc=loader_pyc,
+        manifest_json=manifest_json,
+        pythons=p.pythons,
     )
 
 
@@ -223,6 +234,7 @@ def _plain_manifest(p: Prepared, fmt: Format, written: dict[str, str]) -> bytes:
         locked=locked,
         files=written,
         loader=None,
+        pythons=p.pythons,
     )
 
 

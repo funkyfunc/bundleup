@@ -487,6 +487,33 @@ def plant_shadows(py: str, bundle: Path, home: Path) -> None:
         )
 
 
+OTHER_PYTHONS = ["3.9", "3.10", "3.11", "3.12", "3.13"]
+
+
+def in_range_pythons(bundle: Path, built_for: str) -> list[str]:
+    """Other installed Pythons a bundleup bundle's manifest says it runs on."""
+    with zipfile.ZipFile(bundle) as zf:
+        span = json.loads(zf.read("manifest.json"))["target"].get("python_range") or {}
+    if not span:
+        return []
+
+    def key(v: str) -> tuple[int, ...]:
+        return tuple(int(x) for x in v.split("."))
+
+    found = []
+    for other in OTHER_PYTHONS:
+        if other == built_for or key(other) < key(span["min"]):
+            continue
+        if span["max"] and key(other) > key(span["max"]):
+            continue
+        try:
+            python_path(other)
+        except RuntimeError:
+            continue  # not installed here
+        found.append(other)
+    return found
+
+
 def hostile(
     tool: str, meta: Meta, *, py: str, version: str, bundle: Path, stage: Path
 ) -> list[Result]:
@@ -530,6 +557,13 @@ def hostile(
         home, cwd = fresh_dirs(stage, "usersite")
         plant_shadows(py, bundle, home)
         record("user-site-conflict", run_bundle(py, bundle, args=args, home=home, cwd=cwd))
+
+        # A pure-Python bundle runs on every version in its range (ADR-0030): run it on each other
+        # installed Python the manifest allows.
+        for other in in_range_pythons(bundle, version):
+            home, cwd = fresh_dirs(stage, f"py{other}")
+            record(f"other-python-{other}", run_bundle(python_path(other), bundle, args=args,
+                                                        home=home, cwd=cwd))  # fmt: skip
 
     if WINDOWS:  # Windows ignores the read-only attribute on directories: nothing to test
         return out

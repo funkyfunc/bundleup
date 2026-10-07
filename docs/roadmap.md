@@ -140,17 +140,18 @@ merged; ask if unsure.
 ([findings](findings/2026-10-07-independent-review.md)) found real gaps; the owner asked for all
 of it to be fixed. In order:
 
-13. **Bugs the review found:** children of other Pythons pick up the bundle (PYTHONPATH leak);
+13. ~~**Bugs the review found**~~ **Done 2026-10-07** (ADR-0027, 0028, 0029): children of other Pythons pick up the bundle (PYTHONPATH leak);
     the claude-api preset's platform level and the misleading "only publishes source" hint;
     `uv.lock` silently written into the project, unlocked scripts; backslash `RECORD` paths;
     unchecked-hash `.pyc` in `dir`/`lambda`; `--strict` deleting a good Lambda zip; the Lambda
     handler taken from a console script; no libc/macOS-version check at start-up;
     `cache clean` missing `pycache_prefix` files; listings on stderr; smoke failures filing no
     issue; the weekly summary paused.
-14. **Pure-Python bundles run on every minor version** the lock allows; a versioned shebang.
+14. ~~**Pure-Python bundles run on every minor version**~~ **Done 2026-10-07**
+    ([ADR-0030](adr/0030-pure-python-bundles-run-on-a-range.md)); a versioned shebang.
 15. **Wheel coverage from the lock**: which packages have no wheel for a target, for several
     targets at once, without installing (`check`), and precise errors in cross builds.
-16. **Split `_build.py`**, remove duplicated helpers, type the entry point.
+16. ~~**Split `_build.py`**~~ **Done 2026-10-07**: remove duplicated helpers, type the entry point.
 17. **Docs match the code**: MISSION, vision, README, a shorter roadmap and "Current state".
 18. **Re-benchmark against pex's best configuration** and restate the speed claims.
 19. **`[tool.bundleup]` configuration and a 0.1 release** (the release itself needs the owner).

@@ -63,7 +63,7 @@ def redact(text: str, tmp: Path) -> str:
     text = text.replace(str(tmp), "<TMP>").replace(sys.executable, "<PYTHON>")
     text = re.sub(r"\d+(\.\d+)? (B|KiB|MiB|GiB)\b", "<SIZE>", text)
     text = re.sub(r"in \d+\.\d+s", "in <DURATION>", text)
-    text = re.sub(r"Python \d+\.\d+(\.\d+)?", "Python <VERSION>", text)
+    text = re.sub(r"Python \d+\.\d+(\.\d+)?(\+|-\d+\.\d+)?", "Python <VERSION>", text)
     text = re.sub(r" on (macOS|Linux|Windows)( \w+)?", " on <PLATFORM>", text)
     return text.replace("\\", "/")
 

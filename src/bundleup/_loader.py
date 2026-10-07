@@ -23,7 +23,8 @@ if TYPE_CHECKING:
 # --- config: replaced at build time ---
 NAME = "app"
 DIRNAME = "app-0000000000000000"
-PYTHON = (3, 12)
+PYTHON = (3, 12)  # the oldest Python minor version it runs on
+PYTHON_MAX = (3, 12)  # type: tuple[int, int] | None  # the newest; None: no limit (ADR-0030)
 PLATFORM = "darwin"
 MACHINE = None  # type: str | None  # set when the bundle contains native code
 ABIFLAGS = None  # type: str | None  # set when the bundle contains native code (POSIX only)
@@ -54,12 +55,28 @@ def _machine() -> str:
 
 def _check() -> None:
     here = sys.version_info[:2]
-    if here != PYTHON:
+    if here < PYTHON or (PYTHON_MAX is not None and here > PYTHON_MAX):
         want = "%d.%d" % PYTHON
+        if PYTHON_MAX is None:
+            wanted = "Python %s or newer" % want
+        elif PYTHON_MAX == PYTHON:
+            wanted = "Python %s" % want
+        else:
+            wanted = "Python %s to %d.%d" % (want, PYTHON_MAX[0], PYTHON_MAX[1])
+        nearest = PYTHON if here < PYTHON or PYTHON_MAX is None else PYTHON_MAX
+        suggest = "%d.%d" % nearest
         _fail(
-            "this app was bundled for Python %s, but it's running on Python %d.%d (%s).\n"
+            "this app was bundled for %s, but it's running on Python %d.%d (%s).\n"
             "Run it with Python %s instead, for example: python%s %s"
-            % (want, here[0], here[1], sys.executable, want, want, os.path.basename(_ARCHIVE))
+            % (
+                wanted,
+                here[0],
+                here[1],
+                sys.executable,
+                suggest,
+                suggest,
+                os.path.basename(_ARCHIVE),
+            )
         )
     # Only refuse a CPU that is known to differ: Windows reports it through an environment
     # variable, which a stripped-down environment may lack.

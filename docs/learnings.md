@@ -6,6 +6,12 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-07** · runtime · uv's universal lock forks per Python version (gauntlet 03 gets other
+  package versions on 3.9; Django 4.2 vs 5 in gauntlet 21), so "does a pure bundle run on 3.X?"
+  is answered by evaluating the pylock markers for 3.X and comparing the selection, plus every
+  package's `Requires-Python`. A bundle's unchecked-hash `.pyc` files for one version sit next to
+  ones other versions compile on first import; nothing conflicts. Evidence:
+  [ADR-0030](adr/0030-pure-python-bundles-run-on-a-range.md).
 - **2026-10-07** · runtime · A `sitecustomize.py` reached through `PYTHONPATH` runs in every
   Python a program starts, so it can decide per interpreter: compare `sys.prefix`, version and ABI
   flags with the parent's and only then activate the bundle, then import the `sitecustomize` it

@@ -95,6 +95,28 @@
                     "null"
                   ],
                   "description": "uv's platform name when built for another platform; null when built for this machine (added within version 1)"
+                },
+                "python_range": {
+                  "type": "object",
+                  "description": "Every Python minor version the bundle runs on (added within version 1, ADR-0030): exactly `python` when it has compiled code",
+                  "required": [
+                    "min",
+                    "max"
+                  ],
+                  "properties": {
+                    "min": {
+                      "type": "string",
+                      "pattern": "^[0-9]+\\.[0-9]+$"
+                    },
+                    "max": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^[0-9]+\\.[0-9]+$",
+                      "description": "null: no upper limit"
+                    }
+                  }
                 }
               }
             },

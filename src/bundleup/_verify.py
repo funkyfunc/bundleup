@@ -65,6 +65,7 @@ class InstalledDistribution:
     name: str  # canonical
     version: str
     dist_info: str  # directory name, e.g. "click-8.1.8.dist-info"
+    requires_python: str = ""  # its Requires-Python, "" if it states none
 
 
 def record_hash(data: bytes) -> str:
@@ -90,7 +91,14 @@ def installed_distributions(site: Path) -> list[InstalledDistribution]:
     for metadata in sorted(site.glob("*.dist-info/METADATA")):
         fields = _metadata_fields(metadata.read_text(encoding="utf-8", errors="replace"))
         name, version = fields.get("Name", ""), fields.get("Version", "")
-        found.append(InstalledDistribution(canonicalize_name(name), version, metadata.parent.name))
+        found.append(
+            InstalledDistribution(
+                canonicalize_name(name),
+                version,
+                metadata.parent.name,
+                fields.get("Requires-Python", ""),
+            )
+        )
     return found
 
 

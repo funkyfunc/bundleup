@@ -4,7 +4,6 @@ the output. Each step lives in its own module: _source, _python, _uv, _payload, 
 from __future__ import annotations
 
 import shutil
-import sys
 import tempfile
 import time
 from dataclasses import dataclass, field
@@ -21,12 +20,6 @@ from ._errors import (
     Diagnostic,
     UsageError,
 )
-from ._targets import FORMATS, Format
-
-if sys.version_info >= (3, 11):
-    pass
-else:
-    pass
 from ._outputs import (
     LAMBDA_UNZIPPED,
     LAMBDA_UPLOAD,
@@ -41,11 +34,13 @@ from ._payload import (
     inspect_site,
     precompile,
     pth_files,
+    python_range,
     resolve_entry,
 )
-from ._python import Target, check_requires_python, find_python
+from ._python import PythonRange, Target, check_requires_python, find_interpreter, find_python
 from ._source import Source, load_source, project_version, safe_name, script_metadata, script_path
 from ._steps import Progress, ProgressEvent, Steps, ignore, run
+from ._targets import FORMATS, Format
 from ._text import findings
 from ._uv import add_runtime, export, find_uv, install
 
@@ -85,6 +80,7 @@ class BuildResult:
     diagnostics: list[Diagnostic] = field(default_factory=list)
     format: str = "pyz"
     entry: str | None = None  # what runs: "module:function", "module", or the script's path
+    pythons: PythonRange | None = None  # the versions it runs on; None means target.version
 
     @property
     def handler(self) -> str | None:
@@ -106,7 +102,7 @@ class BuildResult:
             "version": self.version,
             "packages": self.packages,
             "native": self.native,
-            "target": self.target.to_json_dict(native=self.native),
+            "target": self.target.to_json_dict(native=self.native, pythons=self.pythons),
             "duration_s": round(self.duration_s, 3),
             "timings": {step: round(seconds, 3) for step, seconds in self.timings.items()},
             "format": self.format,
@@ -172,6 +168,7 @@ def build(
         diagnostics=diagnostics,
         format=fmt,
         entry=str(p.entry) if p.entry else None,
+        pythons=p.pythons,
     )
 
 
@@ -288,9 +285,34 @@ def _prepare(
     )
     diagnostics += _format_diagnostics(fmt, site, sizes)
     diagnostics += _unlocked_script(source)
+    pythons = python_range(site, pylock=pylock, target=target, source=source, native=native)
+    oldest = f"{pythons.min[0]}.{pythons.min[1]}"
+    pythons, narrowed = _check.oldest_python(
+        site,
+        project=canonicalize_name(source.name),
+        script=script,
+        pythons=pythons,
+        target=target,
+        python=find_interpreter(uv, oldest, cwd=stage, progress=progress)
+        if pythons.min != target.version
+        else None,
+        run=run_python,
+    )
+    diagnostics += narrowed
     diagnostics.sort(key=lambda d: d.level != "error")
     return Prepared(
-        source, target, site, pylock, script, entry, packages, native, version, diagnostics, sizes
+        source,
+        target,
+        site,
+        pylock,
+        script,
+        entry,
+        packages,
+        native,
+        version,
+        diagnostics,
+        sizes,
+        pythons,
     )
 
 
@@ -316,4 +338,5 @@ def check(
         packages=p.sizes,
         diagnostics=p.diagnostics,
         duration_s=time.perf_counter() - steps.started,
+        pythons=p.pythons,
     )

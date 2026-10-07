@@ -190,17 +190,31 @@ def test_pycache_prefix_gets_the_precompiled_bytecode(bundle: Path, tmp_path: Pa
 
 
 def test_wrong_python_version_is_explained(bundle: Path, tmp_path: Path) -> None:
+    fake = relabel(bundle, tmp_path / "v.pyz", PYTHON=(3, 99), PYTHON_MAX=(3, 99))
+    r = run(fake, env_for(tmp_path))
+    assert r.returncode == 1
+    assert "bundled for Python 3.99, but it's running on Python" in r.stderr
+    assert "Traceback" not in r.stderr
+    newer = relabel(bundle, tmp_path / "n.pyz", PYTHON=(3, 2), PYTHON_MAX=(3, 3))
+    assert "Run it with Python 3.3 instead" in run(newer, env_for(tmp_path)).stderr
+
+
+def test_a_pure_python_bundle_runs_on_other_versions(bundle: Path, tmp_path: Path) -> None:
+    """No compiled code: the bundle runs on every version the lock allows (ADR-0030), with
+    bytecode compiled on first import for versions other than the build's."""
+    with zipfile.ZipFile(bundle) as zf:
+        manifest = json.loads(zf.read("manifest.json"))
+    assert manifest["target"]["python_range"]["max"] is None  # no upper limit
+    assert bundle.read_bytes().startswith(b"#!/usr/bin/env python3\n")
     if not os.path.exists(SYSTEM_PYTHON):
         pytest.skip("needs a second Python")
-    probe_version = [SYSTEM_PYTHON, "-c", "import sys; print(sys.version_info[:2])"]
-    if subprocess.run(probe_version, capture_output=True, text=True).stdout.strip() == str(
+    version = [SYSTEM_PYTHON, "-c", "import sys; print(sys.version_info[:2])"]
+    if subprocess.run(version, capture_output=True, text=True).stdout.strip() == str(
         sys.version_info[:2]
     ):
         pytest.skip(f"{SYSTEM_PYTHON} is the same version as the test Python")
     r = run(bundle, env_for(tmp_path), python=SYSTEM_PYTHON)
-    assert r.returncode == 1
-    assert f"bundled for Python {sys.version_info[0]}.{sys.version_info[1]}" in r.stderr
-    assert "Traceback" not in r.stderr
+    assert r.returncode == 0, r.stderr
 
 
 def test_wrong_platform_is_explained(bundle: Path, tmp_path: Path) -> None:

@@ -27,6 +27,7 @@ from typing import TYPE_CHECKING
 
 from . import _bytecode, _platforms, _verify
 from ._errors import Diagnostic
+from ._python import PythonRange
 from ._text import listing, plural
 
 if TYPE_CHECKING:
@@ -83,6 +84,7 @@ class CheckReport:
     packages: list[PackageSize]  # largest first
     diagnostics: list[Diagnostic]
     duration_s: float
+    pythons: PythonRange | None = None  # the versions a bundle would run on (ADR-0030)
 
     @property
     def errors(self) -> list[Diagnostic]:
@@ -105,7 +107,7 @@ class CheckReport:
         return {
             "name": self.name,
             "version": self.version,
-            "target": self.target.to_json_dict(native=self.native),
+            "target": self.target.to_json_dict(native=self.native, pythons=self.pythons),
             "native": self.native,
             "size_bytes": self.size_bytes,
             "packages": [p.to_json_dict() for p in self.packages],
@@ -153,6 +155,59 @@ def package_sizes(site: Path, owner: dict[str, _Owner]) -> list[PackageSize]:
     return sorted(found, key=lambda p: (-p.size_bytes, p.name))
 
 
+def compile_errors(
+    site: Path, files: list[str], *, python: str, run: Callable[[list[str]], str]
+) -> list[list[str | int | None]]:
+    """[path, line, message] for each of `files` that `python` can't compile."""
+    to_check = site.parent / "check-list.txt"
+    to_check.write_text("\n".join(files), encoding="utf-8")
+    return json.loads(run([python, "-I", "-c", COMPILE_ERRORS, str(site), str(to_check)]))
+
+
+def oldest_python(
+    site: Path,
+    *,
+    project: str,
+    script: str | None,
+    pythons: PythonRange,
+    target: Target,
+    python: str | None,
+    run: Callable[[list[str]], str],
+) -> tuple[PythonRange, list[Diagnostic]]:
+    """A pure-Python bundle claims every version its requires-python allows (ADR-0030); check that
+    the project's own code compiles on the oldest, with `python` (that version's interpreter, if
+    one is installed here). If it doesn't, the bundle runs on the target's version only."""
+    if python is None or pythons.min == target.version:
+        return pythons, []
+    mine = owners(site, project=project, script=script)
+    files = sorted(
+        path
+        for path, who in mine.items()
+        if who.name == project
+        and path.endswith(".py")
+        # Only what compiled for the target: anything else is already a syntax-error.
+        and (site / _bytecode.pyc_path(path, target.cache_tag)).exists()
+    )
+    found = compile_errors(site, files, python=python, run=run) if files else []
+    if not found:
+        return pythons, []
+    path, line, message = found[0]
+    oldest = f"{pythons.min[0]}.{pythons.min[1]}"
+    here = f"{target.version[0]}.{target.version[1]}"
+    where = f"{str(path).removeprefix(_verify.SCRIPT_DIR + '/')}{f':{line}' if line else ''}"
+    diag = Diagnostic(
+        "python-range",
+        "warning",
+        f"{where} doesn't compile on Python {oldest} ({message}), which requires-python allows, so "
+        f"the bundle runs on Python {here} only",
+        hint="raise requires-python to the oldest Python the code works on",
+        package=project,
+        file=str(path),
+        line=line if isinstance(line, int) else None,
+    )
+    return PythonRange(target.version, target.version), [diag]
+
+
 def syntax_errors(
     site: Path,
     owner: dict[str, _Owner],
@@ -171,11 +226,7 @@ def syntax_errors(
     ]
     if not candidates:
         return []
-    to_check = site.parent / "check-list.txt"
-    to_check.write_text("\n".join(candidates), encoding="utf-8")
-    found: list[list[str | int | None]] = json.loads(
-        run([target.executable, "-I", "-c", COMPILE_ERRORS, str(site), str(to_check)])
-    )
+    found = compile_errors(site, candidates, python=target.executable, run=run)
     python = f"Python {target.version[0]}.{target.version[1]}"
     diags = []
     theirs: dict[_Owner, list[str]] = defaultdict(list)

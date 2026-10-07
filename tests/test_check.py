@@ -97,3 +97,32 @@ def test_sizes_count_bytecode_towards_its_package_largest_first(tmp_path: Path) 
     dist_info = site / "small-1.0.dist-info"
     expected = sum(f.stat().st_size for f in [site / "small.py", pyc, *dist_info.iterdir()])
     assert sizes[1].size_bytes == expected
+
+
+def test_a_range_narrows_when_the_project_needs_a_newer_python(tmp_path: Path) -> None:
+    """requires-python may promise more than the code delivers (ADR-0030): the project's own code
+    is compiled with the oldest Python in the range, and a failure narrows the range."""
+    from bundleup._python import PythonRange
+
+    site = tmp_path / "site"
+    install(site, "app", {"app/__init__.py": "x = (\n", "app/ok.py": "y = 1\n"})
+    for name in ("__init__", "ok"):  # pretend both compiled for the target
+        pyc = site / _bytecode.pyc_path(f"app/{name}.py", TARGET.cache_tag)
+        pyc.parent.mkdir(exist_ok=True)
+        pyc.write_bytes(b"")
+    wide = PythonRange((3, 9), None)
+    narrowed, diags = c.oldest_python(
+        site,
+        project="app",
+        script=None,
+        pythons=wide,
+        target=TARGET,
+        python=sys.executable,
+        run=run,
+    )
+    assert narrowed == PythonRange(TARGET.version, TARGET.version)
+    assert [(d.code, d.file, d.line) for d in diags] == [("python-range", "app/__init__.py", 1)]
+    unchanged, none = c.oldest_python(
+        site, project="app", script=None, pythons=wide, target=TARGET, python=None, run=run
+    )
+    assert (unchanged, none) == (wide, [])  # no interpreter for the oldest: trust requires-python

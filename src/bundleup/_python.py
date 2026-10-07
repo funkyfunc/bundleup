@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -17,15 +16,39 @@ from ._errors import (
     UsageError,
     UvError,
 )
-
-if sys.version_info >= (3, 11):
-    pass
-else:
-    pass
 from ._source import Source
 from ._steps import Progress, run
 
 PLATFORM_NAMES = {"darwin": "macOS", "linux": "Linux", "win32": "Windows"}
+
+
+@dataclass(frozen=True)
+class PythonRange:
+    """The Python minor versions a bundle runs on (ADR-0030): exactly one when it has compiled
+    code, otherwise every version the lock and the packages allow. `max` None: no upper limit."""
+
+    min: tuple[int, int]
+    max: tuple[int, int] | None
+
+    @property
+    def exact(self) -> bool:
+        return self.max == self.min
+
+    def __str__(self) -> str:
+        """'3.12', '3.10+' or '3.10-3.12'."""
+        low = f"{self.min[0]}.{self.min[1]}"
+        if self.exact:
+            return low
+        return f"{low}+" if self.max is None else f"{low}-{self.max[0]}.{self.max[1]}"
+
+    def contains(self, version: tuple[int, int]) -> bool:
+        return self.min <= version and (self.max is None or version <= self.max)
+
+    def to_json_dict(self) -> dict[str, object]:
+        def text(v: tuple[int, int] | None) -> str | None:
+            return f"{v[0]}.{v[1]}" if v else None
+
+        return {"min": text(self.min), "max": text(self.max)}
 
 
 @dataclass(frozen=True)
@@ -43,15 +66,19 @@ class Target:
     markers: dict[str, str]  # the PEP 508 environment uv.lock's markers are evaluated against
     python_platform: _platforms.Platform | None = None  # set when building for another platform
 
-    def describe(self, native: bool) -> str:
+    def describe(self, native: bool, pythons: PythonRange | None = None) -> str:
         where = PLATFORM_NAMES.get(self.platform, self.platform)
-        return f"Python {self.version[0]}.{self.version[1]} on {where}" + (
-            f" {self.machine}" if native else ""
-        )
+        python = str(pythons) if pythons else f"{self.version[0]}.{self.version[1]}"
+        return f"Python {python} on {where}" + (f" {self.machine}" if native else "")
 
-    def to_json_dict(self, *, native: bool) -> dict[str, object]:
+    def to_json_dict(
+        self, *, native: bool, pythons: PythonRange | None = None
+    ) -> dict[str, object]:
+        exact = PythonRange(self.version, self.version)
         return {
             "python": f"{self.version[0]}.{self.version[1]}",
+            # Every version the bundle runs on (added within schema version 1, ADR-0030).
+            "python_range": (pythons or exact).to_json_dict(),
             "python_full_version": self.full_version,
             "implementation": self.implementation,
             "platform": self.platform,
@@ -165,6 +192,18 @@ def _find_cmd(uv: str, source: Source, *, request: str | None) -> list[str]:
     elif source.is_script:
         cmd += ["--script", str(source.path)]  # honours the script's requires-python
     return cmd
+
+
+def find_interpreter(uv: str, version: str, *, cwd: Path, progress: Progress) -> str | None:
+    """An installed interpreter of `version`, or None; never downloads one. Run from `cwd` outside
+    any project, or uv answers with the project's venv."""
+    try:
+        found = run(
+            [uv, "python", "find", version], cwd=cwd, what="uv python find", progress=progress
+        )
+    except UvError:
+        return None
+    return found.strip() or None
 
 
 def check_requires_python(source: Source, target: Target) -> None:
