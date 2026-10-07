@@ -40,7 +40,10 @@ def run(
 ) -> str:
     """Run a command and return its stdout, or raise `error` with its output as the detail."""
     progress(ProgressEvent("command", " ".join(cmd)))
-    proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=env)
+    try:
+        proc = subprocess.run(cmd, cwd=cwd, capture_output=True, text=True, env=env)
+    except OSError as e:  # the program doesn't exist, or can't be run
+        raise error(f"{what or cmd[0]} failed: couldn't run {cmd[0]}", detail=str(e)) from None
     if proc.returncode:
         detail = (proc.stderr or proc.stdout).strip()
         raise error(f"{what or cmd[0]} failed", detail=detail)

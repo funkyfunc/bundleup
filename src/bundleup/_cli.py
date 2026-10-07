@@ -603,8 +603,9 @@ def _run_cache(opts: argparse.Namespace) -> ExitCode:
         items = plural(len(report.removed), "item")
         print(f"{style.bold(verb)} {items} ({_size(report.freed_bytes)})", file=err)
         if report.in_use:
-            kept = plural(len(report.in_use), "unused-looking copy")
-            print(style.dim(f"  kept {kept} a running program still uses"), file=err)
+            kept = len(report.in_use)
+            which = "a copy" if kept == 1 else f"{kept} copies"
+            print(style.dim(f"  kept {which} a running program still uses"), file=err)
         if opts.verbose >= 1:
             for path in report.removed:
                 print(style.dim(f"  {path}"), file=err)

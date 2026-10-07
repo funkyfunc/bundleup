@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import base64
 import csv
+import functools
 import hashlib
 import io
 import json
@@ -69,14 +70,23 @@ def record_hash(data: bytes) -> str:
     return "sha256=" + digest.decode("ascii")
 
 
+@functools.lru_cache(maxsize=8)
+def _lock_packages(pylock: str) -> tuple[tuple[str, str | None, str | None], ...]:
+    """(name, version, marker) of every package in a pylock.toml, parsed once per text: the range
+    and portability checks evaluate one lock for dozens of environments."""
+    return tuple(
+        (package["name"], package.get("version"), package.get("marker"))
+        for package in tomllib.loads(pylock).get("packages", [])
+    )
+
+
 def locked_packages(pylock: str, environment: dict[str, str]) -> list[LockedPackage]:
     """The packages in a `uv export --format pylock.toml` that apply to this environment."""
     packages = []
-    for package in tomllib.loads(pylock).get("packages", []):
-        marker = package.get("marker")
+    for name, version, marker in _lock_packages(pylock):
         if marker and not Marker(marker).evaluate(environment):
             continue
-        packages.append(LockedPackage(canonicalize_name(package["name"]), package.get("version")))
+        packages.append(LockedPackage(canonicalize_name(name), version))
     return packages
 
 

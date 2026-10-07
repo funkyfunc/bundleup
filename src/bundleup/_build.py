@@ -133,10 +133,7 @@ def build(
     Raises a BundleupError subclass for every expected failure. Never prints; reports steps
     and commands through `progress` if given.
     """
-    options, _config_used = _config.apply(options)  # [tool.bundleup] (ADR-0032)
-    preset = _targets.find(options.target) if options.target else None
-    options, _flags = _targets.apply(options)
-    fmt = _format(options)
+    options, fmt, preset = _settle(options)
     report = progress or ignore
     steps = Steps(report)
     with tempfile.TemporaryDirectory(prefix="bundleup-") as tmp:
@@ -203,6 +200,15 @@ def build(
 
 
 _STRICT_HINT = "--strict makes warnings fail too; build without it to allow them"
+
+
+def _settle(options: BuildOptions) -> tuple[BuildOptions, Format, _targets.Preset | None]:
+    """What `build` and `check` start from: [tool.bundleup] filled in (ADR-0032), the preset
+    expanded (ADR-0025), the format checked."""
+    options, _configured = _config.apply(options)
+    preset = _targets.find(options.target) if options.target else None
+    options, _flags = _targets.apply(options)
+    return options, _format(options), preset
 
 
 def _format(options: BuildOptions) -> Format:
@@ -370,19 +376,19 @@ def _prepare(
     reach = portability(pylock, target=target, pythons=pythons, native=native)
     diagnostics.sort(key=lambda d: d.level != "error")
     return Prepared(
-        source,
-        target,
-        site,
-        pylock,
-        script,
-        entry,
-        packages,
-        native,
-        version,
-        diagnostics,
-        sizes,
-        pythons,
-        reach,
+        source=source,
+        target=target,
+        site=site,
+        pylock=pylock,
+        script=script,
+        entry=entry,
+        packages=packages,
+        native=native,
+        version=version,
+        diagnostics=diagnostics,
+        sizes=sizes,
+        pythons=pythons,
+        reach=reach,
     )
 
 
@@ -397,10 +403,8 @@ def check(
     (`ok` is False when there are errors); raises a BundleupError subclass only when the build
     itself fails. `options.output` and `options.strict` are ignored. `also_platforms`: more uv
     platform names to check from the lock alone (ADR-0031), for the same Python version."""
-    options, _config_used = _config.apply(options)  # [tool.bundleup] (ADR-0032)
-    options, _flags = _targets.apply(options)
+    options, fmt, _preset = _settle(options)
     others = [_platforms.parse(name).name for name in also_platforms]  # bad names fail first
-    fmt = _format(options)
     report = progress or ignore
     steps = Steps(report)
     with tempfile.TemporaryDirectory(prefix="bundleup-") as tmp:
