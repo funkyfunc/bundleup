@@ -17,7 +17,7 @@ options:
 examples:
   bundleup build                    bundle the project here into dist/<name>.pyz
   bundleup build path/to/script.py  bundle a PEP 723 script and its dependencies
-  bundleup build --python 3.9       build for Python 3.9 (a bundle runs on one version)
+  bundleup build --python 3.9       build with Python 3.9 (pure Python runs on 3.9 and newer)
   bundleup check                    report what won't survive bundling, and package sizes
   bundleup verify dist/app.pyz      check a bundle (and its unpacked copy) against its manifest
 

@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from bundleup import BuildOptions, NoLockfileError, ProjectError, build
+from bundleup import BuildOptions, LockfileOutdatedError, NoLockfileError, ProjectError, build
 
 PYPROJECT = """\
 [project]
@@ -77,3 +77,19 @@ def test_an_unlocked_script_with_dependencies_gets_a_warning(tmp_path: Path) -> 
     result = build(BuildOptions(path=script, output=tmp_path / "tool.pyz"))
     assert [d.code for d in result.diagnostics] == ["unlocked"]
     assert not (tmp_path / "tool.py.lock").exists()
+
+
+def test_a_stale_uv_lock_is_an_error_and_is_never_rewritten(tmp_path: Path) -> None:
+    """Without --frozen, the lock is checked against pyproject.toml (ADR-0033): the second review
+    found a stale uv.lock was silently re-locked, and the new versions bundled."""
+    path = project(tmp_path / "p", PYLOCK)
+    (path / "pylock.toml").unlink()
+    subprocess.run(["uv", "lock", "-q"], cwd=path, check=True)
+    lock = (path / "uv.lock").read_bytes()
+    pyproject = path / "pyproject.toml"
+    pyproject.write_text(pyproject.read_text().replace('">=3.9"', '">=3.10"'))
+    with pytest.raises(LockfileOutdatedError):
+        build(BuildOptions(path=path, output=tmp_path / "app.pyz"))
+    assert (path / "uv.lock").read_bytes() == lock
+    build(BuildOptions(path=path, output=tmp_path / "app.pyz", lock_mode="frozen"))
+    assert (path / "uv.lock").read_bytes() == lock

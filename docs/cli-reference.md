@@ -25,7 +25,7 @@ options:
 examples:
   bundleup build                    bundle the project here into dist/<name>.pyz
   bundleup build path/to/script.py  bundle a PEP 723 script and its dependencies
-  bundleup build --python 3.9       build for Python 3.9 (a bundle runs on one version)
+  bundleup build --python 3.9       build with Python 3.9 (pure Python runs on 3.9 and newer)
   bundleup check                    report what won't survive bundling, and package sizes
   bundleup verify dist/app.pyz      check a bundle (and its unpacked copy) against its manifest
 
@@ -55,8 +55,8 @@ options:
   --python VERSION      a version (3.12) or a path; default: uv's choice [env: BUNDLEUP_PYTHON]
   --entry NAME          a script name, module:function or module [env: BUNDLEUP_ENTRY]
   --python-platform OS  another OS/CPU, uv's names (e.g. linux) [env: BUNDLEUP_PYTHON_PLATFORM]
-  --locked              fail if uv.lock is out of date (as in uv; the default when CI is set)
-  --frozen              use uv.lock as is, without checking it (as in uv)
+  --locked              fail if the lock is out of date (as in uv; the default when there is one)
+  --frozen              bundle the lock as it is, without checking it (as in uv)
   --strict              warnings fail too (errors always do)
   --json                print one JSON document on stdout
   -q, --quiet           -q: warnings and errors only; -qq: errors
@@ -89,8 +89,8 @@ options:
   --python VERSION      a version (3.12) or a path; default: uv's choice [env: BUNDLEUP_PYTHON]
   --entry NAME          a script name, module:function or module [env: BUNDLEUP_ENTRY]
   --python-platform OS  another OS/CPU, uv's names (e.g. linux) [env: BUNDLEUP_PYTHON_PLATFORM]
-  --locked              fail if uv.lock is out of date (as in uv; the default when CI is set)
-  --frozen              use uv.lock as is, without checking it (as in uv)
+  --locked              fail if the lock is out of date (as in uv; the default when there is one)
+  --frozen              bundle the lock as it is, without checking it (as in uv)
   --strict              warnings fail too (errors always do)
   --also-platform OS    also check, from the lock alone, that every package has a wheel for this
                         platform

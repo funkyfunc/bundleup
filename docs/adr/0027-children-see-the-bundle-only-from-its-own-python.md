@@ -24,7 +24,8 @@ user's Python; a `sitecustomize` inside the payload, reached through `PYTHONPATH
   holds `sitecustomize.py`, which every Python the program starts imports at start-up, and
   `_bundleup_runtime.py`, the code that activates the payload.
 - **The shim activates the bundle only in the bundle's own interpreter**: same `sys.prefix`,
-  Python version and ABI flags (`BUNDLEUP_PYTHON`, set by the parent). That covers
+  Python version and ABI flags (`BUNDLEUP_RUNTIME_PYTHON`, set by the parent; renamed from `BUNDLEUP_PYTHON`, which is also
+  `--python`'s variable, after the second review). That covers
   `sys.executable` children and multiprocessing; another venv, version or build of Python is left
   alone.
 - **Either way, it then runs the `sitecustomize` it shadows**, so the other Python behaves as it
@@ -32,7 +33,7 @@ user's Python; a `sitecustomize` inside the payload, reached through `PYTHONPATH
 - **The loader and the shim share one implementation** (`_bundleup_runtime.activate`): children
   of the bundle's interpreter get the same isolation (ADR-0021) and `.pth` processing, `import`
   lines included (ADR-0023), as the bundle itself.
-- A bundle started from another bundle drops everything the parent added (`BUNDLEUP_PATHS`) and
+- A bundle started from another bundle drops everything the parent added (`BUNDLEUP_RUNTIME_PATHS`) and
   the parent's shim.
 
 ## Consequences

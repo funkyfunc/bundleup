@@ -6,6 +6,8 @@ from __future__ import annotations
 import ast
 import json
 import os
+import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -16,7 +18,7 @@ from typing import Any
 import pytest
 
 import bundleup
-from bundleup._cli import main
+from bundleup._cli import main, parsers
 from bundleup._payload import pth_files
 from bundleup._source import script_metadata
 
@@ -33,8 +35,10 @@ if os.environ.get("PROBE_CHILD"):  # "self" (the bundle's interpreter) or anothe
     code += "print(json.dumps([sys.path, getattr(m, '__file__', None)]))"
     done = subprocess.run([python, "-c", code], capture_output=True, text=True)
     child = json.loads(done.stdout) if done.returncode == 0 else done.stderr
+env = sorted(k for k in os.environ if k.startswith("BUNDLEUP_"))
 print(json.dumps({"path": sys.path, "file": __file__, "pythonpath": os.environ.get("PYTHONPATH"),
-                  "site": os.environ.get("BUNDLEUP_SITE"), "argv": sys.argv[1:], "child": child}))
+                  "site": os.environ.get("BUNDLEUP_RUNTIME_SITE"), "argv": sys.argv[1:],
+                  "child": child, "env": env}))
 """
 SYSTEM_PYTHON = "/usr/bin/python3"
 WINDOWS = sys.platform == "win32"
@@ -120,8 +124,8 @@ def test_nested_bundle_drops_parent_packages(bundle: Path, tmp_path: Path) -> No
     shim = os.path.join(parent, "__bundleup__")
     env = env_for(
         tmp_path,
-        BUNDLEUP_SITE=parent,
-        BUNDLEUP_PATHS=parent,
+        BUNDLEUP_RUNTIME_SITE=parent,
+        BUNDLEUP_RUNTIME_PATHS=parent,
         PYTHONPATH=os.pathsep.join([shim, "/keep/me"]),
     )
     out = probe(bundle, env)
@@ -162,6 +166,15 @@ def test_other_pythons_are_left_alone(bundle: Path, tmp_path: Path) -> None:
     assert str(imported) == expected
 
 
+def test_a_bundle_sets_no_variable_the_cli_reads(bundle: Path, tmp_path: Path) -> None:
+    """bundleup must work from inside a bundled program (second review: the runtime set
+    BUNDLEUP_PYTHON, which is also --python's variable)."""
+    help_text = "\n".join(p.format_help() for p in parsers().values())
+    cli_variables = set(re.findall(r"\[env: (BUNDLEUP_[A-Z_]+)\]", help_text))
+    seen = set(probe(bundle, env_for(tmp_path))["env"])
+    assert cli_variables and seen and not seen & cli_variables
+
+
 def test_bundleup_cache_override(bundle: Path, tmp_path: Path) -> None:
     out = probe(bundle, env_for(tmp_path, BUNDLEUP_CACHE=str(tmp_path / "c")))
     assert out["file"].startswith(str(tmp_path / "c"))
@@ -183,6 +196,26 @@ def test_untrusted_shared_temp_dir_is_skipped(bundle: Path, tmp_path: Path) -> N
     finally:
         home.chmod(0o755)
     assert out["file"].startswith(str(copy.parent / ".bundleup"))
+
+
+@pytest.mark.skipif(WINDOWS, reason="POSIX ownership and permission bits")
+def test_a_copy_planted_next_to_the_bundle_is_ignored(bundle: Path, tmp_path: Path) -> None:
+    """A bundle in a shared directory (/tmp, a team drive) must not run a copy someone else put
+    in `.bundleup/` beside it (second review: it did)."""
+    env = env_for(tmp_path)
+    site = Path(probe(bundle, env)["site"])  # a genuine unpacked copy, to tamper with
+    shared = tmp_path / "shared"
+    shared.mkdir()
+    copy = shared / bundle.name
+    copy.write_bytes(bundle.read_bytes())
+    planted = shared / ".bundleup" / site.name
+    shutil.copytree(site, planted)
+    script = planted / "__bundleup_script__" / "probe.py"
+    script.write_text("print('HIJACKED')\n")
+    (shared / ".bundleup").chmod(0o777)  # anyone could have written it
+    fresh = env_for(tmp_path / "victim")  # nothing unpacked in the user cache yet
+    r = run(copy, fresh)
+    assert r.returncode == 0 and "HIJACKED" not in r.stdout, r.stdout
 
 
 def test_pycache_prefix_gets_the_precompiled_bytecode(bundle: Path, tmp_path: Path) -> None:

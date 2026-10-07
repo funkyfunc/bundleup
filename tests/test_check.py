@@ -99,30 +99,40 @@ def test_sizes_count_bytecode_towards_its_package_largest_first(tmp_path: Path) 
     assert sizes[1].size_bytes == expected
 
 
-def test_a_range_narrows_when_the_project_needs_a_newer_python(tmp_path: Path) -> None:
-    """requires-python may promise more than the code delivers (ADR-0030): the project's own code
-    is compiled with the oldest Python in the range, and a failure narrows the range."""
+def test_the_range_starts_at_the_oldest_python_the_code_compiles_on(tmp_path: Path) -> None:
+    """requires-python may promise more than the code delivers (ADR-0030): the project's code is
+    compiled with the installed Pythons below the target, oldest first; versions nobody could
+    check are a warning (second review)."""
+    from dataclasses import replace
+
     from bundleup._python import PythonRange
 
     site = tmp_path / "site"
-    install(site, "app", {"app/__init__.py": "x = (\n", "app/ok.py": "y = 1\n"})
-    for name in ("__init__", "ok"):  # pretend both compiled for the target
-        pyc = site / _bytecode.pyc_path(f"app/{name}.py", TARGET.cache_tag)
-        pyc.parent.mkdir(exist_ok=True)
-        pyc.write_bytes(b"")
+    install(site, "app", {"app/__init__.py": "match x:\n    case 1: pass\n"})
+    pyc = site / _bytecode.pyc_path("app/__init__.py", TARGET.cache_tag)
+    pyc.parent.mkdir(exist_ok=True)
+    pyc.write_bytes(b"")  # it compiled for the target
+    target = replace(TARGET, version=(3, 14))
     wide = PythonRange((3, 9), None)
-    narrowed, diags = c.oldest_python(
-        site,
-        project="app",
-        script=None,
-        pythons=wide,
-        target=TARGET,
-        python=sys.executable,
-        run=run,
-    )
-    assert narrowed == PythonRange(TARGET.version, TARGET.version)
-    assert [(d.code, d.file, d.line) for d in diags] == [("python-range", "app/__init__.py", 1)]
-    unchanged, none = c.oldest_python(
-        site, project="app", script=None, pythons=wide, target=TARGET, python=None, run=run
-    )
-    assert (unchanged, none) == (wide, [])  # no interpreter for the oldest: trust requires-python
+
+    def fake(cmd: list[str]) -> str:  # "python 3.9" can't compile a match statement
+        return '[["app/__init__.py", 1, "invalid syntax"]]' if cmd[0] == "py39" else "[]"
+
+    def oldest(interpreters: dict[tuple[int, int], str | None]) -> tuple[PythonRange, list[str]]:
+        found, diags = c.oldest_python(
+            site,
+            project="app",
+            script=None,
+            pythons=wide,
+            target=target,
+            interpreters=interpreters,
+            run=fake,
+        )
+        return found, [d.code for d in diags]
+
+    some = {(3, 9): "py39", (3, 10): None, (3, 11): "py311", (3, 12): None, (3, 13): None}
+    assert oldest(some) == (PythonRange((3, 11), None), ["python-range"])
+    assert oldest({(3, 9): "py39"}) == (PythonRange((3, 14), None), ["python-range"])
+    assert oldest({(3, 9): "py311"}) == (wide, [])
+    nothing: dict[tuple[int, int], str | None] = {(3, 9): None, (3, 10): None}
+    assert oldest(nothing) == (wide, ["python-range-unchecked"])

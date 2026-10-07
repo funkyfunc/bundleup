@@ -39,7 +39,7 @@ EXAMPLES = f"""\
 examples:
   bundleup build                    bundle the project here into dist/<name>.pyz
   bundleup build path/to/script.py  bundle a PEP 723 script and its dependencies
-  bundleup build --python 3.9       build for Python 3.9 (a bundle runs on one version)
+  bundleup build --python 3.9       build with Python 3.9 (pure Python runs on 3.9 and newer)
   bundleup check                    report what won't survive bundling, and package sizes
   bundleup verify dist/app.pyz      check a bundle (and its unpacked copy) against its manifest
 
@@ -251,14 +251,14 @@ def _add_build_options(command: argparse.ArgumentParser, *, output: bool) -> Non
         dest="lock_mode",
         action="store_const",
         const="locked",
-        help="fail if uv.lock is out of date (as in uv; the default when CI is set)",
+        help="fail if the lock is out of date (as in uv; the default when there is one)",
     )
     lock.add_argument(
         "--frozen",
         dest="lock_mode",
         action="store_const",
         const="frozen",
-        help="use uv.lock as is, without checking it (as in uv)",
+        help="bundle the lock as it is, without checking it (as in uv)",
     )
     command.add_argument(
         "--strict",
@@ -286,19 +286,6 @@ def _add_output_options(command: argparse.ArgumentParser, *, verbose: str) -> No
 def _env_path(name: str) -> Path | None:
     value = os.environ.get(name)
     return Path(value) if value else None
-
-
-def _in_ci() -> bool:
-    return os.environ.get("CI", "").lower() not in ("", "0", "false", "no")
-
-
-def _has_lockfile(path: Path) -> bool:
-    """uv.lock for a project, <script>.lock for a PEP 723 script (which often has none)."""
-    return (
-        (path / "uv.lock").exists()
-        if path.is_dir()
-        else path.with_name(path.name + ".lock").exists()
-    )
 
 
 def _diagnostic(error: BundleupError) -> Diagnostic:
@@ -368,15 +355,12 @@ def _emit_json(
 def _options(opts: argparse.Namespace) -> BuildOptions:
     from ._build import BuildOptions
 
-    # In CI a stale lock must fail rather than silently bundle something else (rule 9). Without a
-    # lockfile there's nothing to be stale, and `uv export --locked` would refuse to start.
-    in_ci_with_lock = _in_ci() and _has_lockfile(Path(opts.path))
     return BuildOptions(
         path=Path(opts.path),
         output=getattr(opts, "output", None),
         python=opts.python,
         entry=opts.entry,
-        lock_mode=opts.lock_mode or ("locked" if in_ci_with_lock else None),
+        lock_mode=opts.lock_mode,  # None: --locked when there's a lock (ADR-0033)
         python_platform=opts.python_platform,
         strict=opts.strict,
         format=opts.format,

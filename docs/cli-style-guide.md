@@ -179,7 +179,7 @@ and the generated [CLI reference](cli-reference.md):
 - `--json` with `schema_version`, stable `code` slugs, [JSON Schema](schema/build-v1.json)
   (16-20); `error:`/`hint:` messages, uv output quoted under the message, exit codes 0/1/2/3/130,
   "this is a bug" for crashes, a suggestion for mistyped commands (21-27);
-- `BUNDLEUP_OUTPUT`, `BUNDLEUP_PYTHON`, `BUNDLEUP_ENTRY` (28); CI implies `--locked` when a
+- `BUNDLEUP_OUTPUT`, `BUNDLEUP_PYTHON`, `BUNDLEUP_ENTRY` (28); `--locked` is the default when a
   lockfile exists (9);
 - help under ~30 lines with examples and `[env: ...]` (32-33), generated reference checked by a
   test (34), startup budget checked by a test (35);

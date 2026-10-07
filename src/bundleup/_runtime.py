@@ -13,9 +13,13 @@ if TYPE_CHECKING:
     from typing import Optional, Sequence
 
 SHIM = "__bundleup__"  # in the payload: this module and the children's sitecustomize.py
-ENV_SITE = "BUNDLEUP_SITE"  # the active bundle's unpacked payload
-ENV_PATHS = "BUNDLEUP_PATHS"  # everything activate() added to sys.path, os.pathsep-separated
-ENV_PYTHON = "BUNDLEUP_PYTHON"  # identity() of the bundle's interpreter
+# Internal: set by a running bundle for its children. A namespace of their own, so they never
+# collide with the CLI's settings (BUNDLEUP_PYTHON is --python; second review, 2026-10-07).
+ENV_SITE = "BUNDLEUP_RUNTIME_SITE"  # the active bundle's unpacked payload
+ENV_PATHS = (
+    "BUNDLEUP_RUNTIME_PATHS"  # everything activate() added to sys.path, os.pathsep-separated
+)
+ENV_PYTHON = "BUNDLEUP_RUNTIME_PYTHON"  # identity() of the bundle's interpreter
 
 
 def identity() -> str:

@@ -323,16 +323,17 @@ def _prepare(
     diagnostics += coverage
     diagnostics += _unlocked_script(source)
     pythons = python_range(site, pylock=pylock, target=target, source=source, native=native)
-    oldest = f"{pythons.min[0]}.{pythons.min[1]}"
+    interpreters = {
+        (3, minor): find_interpreter(uv, f"3.{minor}", cwd=stage, progress=progress)
+        for minor in range(pythons.min[1], target.version[1])
+    }
     pythons, narrowed = _check.oldest_python(
         site,
         project=canonicalize_name(source.name),
         script=script,
         pythons=pythons,
         target=target,
-        python=find_interpreter(uv, oldest, cwd=stage, progress=progress)
-        if pythons.min != target.version
-        else None,
+        interpreters=interpreters,
         run=run_python,
     )
     diagnostics += narrowed

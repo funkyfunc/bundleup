@@ -171,13 +171,16 @@ def oldest_python(
     script: str | None,
     pythons: PythonRange,
     target: Target,
-    python: str | None,
+    interpreters: dict[tuple[int, int], str | None],
     run: Callable[[list[str]], str],
 ) -> tuple[PythonRange, list[Diagnostic]]:
-    """A pure-Python bundle claims every version its requires-python allows (ADR-0030); check that
-    the project's own code compiles on the oldest, with `python` (that version's interpreter, if
-    one is installed here). If it doesn't, the bundle runs on the target's version only."""
-    if python is None or pythons.min == target.version:
+    """A pure-Python bundle claims every version its requires-python allows (ADR-0030). Check
+    that the project's own code compiles on the versions below the target, using whichever of
+    them are installed here (`interpreters`: version -> interpreter or None): the range starts at
+    the oldest one that compiles. Versions nobody could check are a warning, not a silent claim
+    (second review, 2026-10-07)."""
+    below = sorted(v for v in interpreters if pythons.min <= v < target.version)
+    if not below:
         return pythons, []
     mine = owners(site, project=project, script=script)
     files = sorted(
@@ -188,24 +191,58 @@ def oldest_python(
         # Only what compiled for the target: anything else is already a syntax-error.
         and (site / _bytecode.pyc_path(path, target.cache_tag)).exists()
     )
-    found = compile_errors(site, files, python=python, run=run) if files else []
-    if not found:
+    if not files:
         return pythons, []
-    path, line, message = found[0]
-    oldest = f"{pythons.min[0]}.{pythons.min[1]}"
-    here = f"{target.version[0]}.{target.version[1]}"
-    where = f"{str(path).removeprefix(_verify.SCRIPT_DIR + '/')}{f':{line}' if line else ''}"
-    diag = Diagnostic(
-        "python-range",
-        "warning",
-        f"{where} doesn't compile on Python {oldest} ({message}), which requires-python allows, so "
-        f"the bundle runs on Python {here} only",
-        hint="raise requires-python to the oldest Python the code works on",
-        package=project,
-        file=str(path),
-        line=line if isinstance(line, int) else None,
-    )
-    return PythonRange(target.version, target.version), [diag]
+    verified: tuple[int, int] | None = None  # the oldest version the code compiled on
+    failure: list[str | int | None] | None = None  # the oldest version's first error
+    failed_on: tuple[int, int] | None = None
+    for version in below:
+        python = interpreters[version]
+        if python is None:
+            continue
+        found = compile_errors(site, files, python=python, run=run)
+        if not found:
+            verified = version
+            break
+        if failure is None:
+            failure, failed_on = found[0], version
+    if failure is not None and failed_on is not None:
+        # Claim only from the oldest version that compiled (versions between it and the failure
+        # weren't checked), or the target's.
+        start = verified or target.version
+        narrowed = PythonRange(start, pythons.max)
+        path, line, message = failure
+        where = f"{str(path).removeprefix(_verify.SCRIPT_DIR + '/')}{f':{line}' if line else ''}"
+        return narrowed, [
+            Diagnostic(
+                "python-range",
+                "warning",
+                f"{where} doesn't compile on Python {_v(failed_on)} ({message}), which "
+                f"requires-python allows, so the bundle runs on Python {narrowed} only",
+                hint="raise requires-python to the oldest Python the code works on",
+                package=project,
+                file=str(path),
+                line=line if isinstance(line, int) else None,
+            )
+        ]
+    unchecked = [v for v in below if interpreters[v] is None and (verified is None or v < verified)]
+    if not unchecked:
+        return pythons, []
+    span = _v(unchecked[0]) if len(unchecked) == 1 else f"{_v(unchecked[0])}-{_v(unchecked[-1])}"
+    return pythons, [
+        Diagnostic(
+            "python-range-unchecked",
+            "warning",
+            f"the bundle claims Python {pythons} from requires-python, but no Python {span} is "
+            "installed here to check that the code compiles on it",
+            hint=f"install one to check: uv python install {_v(unchecked[0])}",
+            package=project,
+        )
+    ]
+
+
+def _v(version: tuple[int, int]) -> str:
+    return f"{version[0]}.{version[1]}"
 
 
 def syntax_errors(

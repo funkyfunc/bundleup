@@ -180,12 +180,16 @@ def _roots(archive: str) -> "list[tuple[str, bool]]":
     if tmp:
         uid = os.getuid() if hasattr(os, "getuid") else 0
         roots.append((os.path.join(os.path.abspath(tmp), "bundleup-%d" % uid), True))
-    roots.append((os.path.join(os.path.dirname(archive), ".bundleup"), False))
+    # Next to the bundle: the bundle's directory may be shared (/tmp, a team drive), so this root
+    # is trusted only if we own it and nobody else can write to it, like the temp root (a copy
+    # planted there would otherwise run as us; second review, 2026-10-07).
+    roots.append((os.path.join(os.path.dirname(archive), ".bundleup"), True))
     return roots
 
 
 def _private(root: str) -> bool:
-    """A shared temp directory is only trusted if we own it and nobody else can write to it."""
+    """A shared root (the temp one, or the one next to the bundle) is only trusted if we own it
+    and nobody else can write to it."""
     if not hasattr(os, "getuid"):
         return True
     try:

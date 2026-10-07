@@ -25,7 +25,7 @@ if sys.version_info >= (3, 11):
 else:
     import tomli as tomllib
 from ._python import Target
-from ._source import Source
+from ._source import Source, find_uv_lock
 from ._steps import Progress, run
 
 # Copied into every .pyz payload's __bundleup__/ (ADR-0027): the code that activates the payload,
@@ -96,6 +96,13 @@ def from_pylock(source: Source, stage: Path) -> tuple[list[list[str]], Path]:
     return installs, check
 
 
+def has_lock(source: Source) -> bool:
+    """A uv lock to check: the project's (or its workspace's) uv.lock, or `<script>.lock`."""
+    if source.is_script:
+        return source.path.with_name(source.path.name + ".lock").is_file()
+    return find_uv_lock(source.path) is not None
+
+
 def export(
     uv: str, source: Source, *, lock_mode: str | None, stage: Path, progress: Progress
 ) -> tuple[list[list[str]], Path]:
@@ -108,8 +115,12 @@ def export(
     selection = (
         ["--script", str(source.path)] if source.is_script else ["--no-dev", "--no-editable"]
     )
-    if lock_mode:
-        selection.append(f"--{lock_mode}")
+    # A lock is checked against pyproject.toml / the script by default: uv would otherwise
+    # re-lock a stale one, rewriting uv.lock and bundling versions nobody reviewed (ADR-0033).
+    # --frozen uses it as is. A script without a lock has nothing to check (uv refuses --locked).
+    mode = lock_mode or ("locked" if has_lock(source) else None)
+    if mode:
+        selection.append(f"--{mode}")
     as_requirements = ["--no-hashes", "--no-header", "--no-annotate", "-o", str(reqs)]
     as_pylock = ["--format", "pylock.toml", "-o", str(pylock)]
     commands = [[uv, "export", "--quiet", *selection, *fmt] for fmt in (as_requirements, as_pylock)]
@@ -122,10 +133,13 @@ def export(
             for future in futures:
                 future.result()
     except UvError as e:
-        if lock_mode == "locked" and "needs to be updated" in (e.detail or ""):
+        if mode == "locked" and "needs to be updated" in (e.detail or ""):
+            what = f"{source.path.name}.lock" if source.is_script else "uv.lock"
+            fix = f"uv lock --script {source.path.name}" if source.is_script else "uv lock"
+            against = "the script" if source.is_script else "pyproject.toml"
             raise LockfileOutdatedError(
-                "uv.lock is out of date with pyproject.toml",
-                hint="run `uv lock`, then build again",
+                f"{what} is out of date with {against}",
+                hint=f"run `{fix}`, then build again (or --frozen bundles the lock as it is)",
                 detail=e.detail,
             ) from None
         raise

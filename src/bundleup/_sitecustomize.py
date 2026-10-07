@@ -16,8 +16,8 @@ def _bundleup_child() -> None:
     norm = os.path.normcase(here)
     sys.path[:] = [p for p in sys.path if os.path.normcase(os.path.abspath(p or ".")) != norm]
     site = os.path.dirname(here)
-    expected = os.environ.get("BUNDLEUP_PYTHON")
-    active = os.environ.get("BUNDLEUP_SITE", "")
+    expected = os.environ.get("BUNDLEUP_RUNTIME_PYTHON")
+    active = os.environ.get("BUNDLEUP_RUNTIME_SITE", "")
     if expected and os.path.normcase(os.path.abspath(active)) == os.path.normcase(site):
         actual = repr((sys.prefix, tuple(sys.version_info[:2]), getattr(sys, "abiflags", "")))
         if actual == expected:
