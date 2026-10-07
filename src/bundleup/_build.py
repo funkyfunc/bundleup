@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Literal
 
+from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
 
 from . import _check, _config, _coverage, _platforms, _targets
@@ -397,12 +398,14 @@ def check(
     *,
     progress: Callable[[ProgressEvent], None] | None = None,
     also_platforms: Sequence[str] = (),
+    matrix: bool = False,
 ) -> CheckReport:
     """Install, compile and analyze like `build`, without writing anything: what won't survive
     bundling (for `options.format`), and how big each package is. Findings are in the report
     (`ok` is False when there are errors); raises a BundleupError subclass only when the build
     itself fails. `options.output` and `options.strict` are ignored. `also_platforms`: more uv
-    platform names to check from the lock alone (ADR-0031), for the same Python version."""
+    platform names to check from the lock alone (ADR-0031), for the same Python version.
+    `matrix`: wheel coverage for every platform and Python version (`report.matrix`)."""
     options, fmt, _preset = _settle(options)
     others = [_platforms.parse(name).name for name in also_platforms]  # bad names fail first
     report = progress or ignore
@@ -410,6 +413,7 @@ def check(
     with tempfile.TemporaryDirectory(prefix="bundleup-") as tmp:
         p = _prepare(options, fmt=fmt, stage=Path(tmp), steps=steps, progress=report)
         extra = _also_platforms(p.pylock, p.target, others)
+        cells = _matrix(p.pylock, p.source) if matrix else []
         steps.finish()
     return CheckReport(
         name=p.source.name,
@@ -421,4 +425,12 @@ def check(
         duration_s=time.perf_counter() - steps.started,
         pythons=p.pythons,
         reach=p.reach,
+        matrix=cells,
     )
+
+
+def _matrix(pylock: Path, source: Source) -> list[_coverage.MatrixCell]:
+    """`check --matrix`: wheel coverage for every platform and every Python the project allows."""
+    spec = SpecifierSet(source.requires_python or "")
+    pythons = [v for v in _coverage.MATRIX_PYTHONS if spec.contains(f"{v[0]}.{v[1]}.0")]
+    return _coverage.matrix(pylock.read_text(encoding="utf-8"), pythons)

@@ -207,6 +207,16 @@ def test_check_also_platform(tmp_path: Path, script: Path) -> None:
     assert r.returncode == 2 and "can't build for 'solaris'" in r.stderr
 
 
+def test_check_matrix(tmp_path: Path, script: Path) -> None:
+    r = cli("check", "app.py", "--matrix", "--json", cwd=tmp_path)
+    assert r.returncode == 0, r.stderr
+    document = json.loads(r.stdout)
+    jsonschema.validate(document, CHECK_SCHEMA)
+    assert document["result"]["matrix"] and all(c["ok"] for c in document["result"]["matrix"])
+    r = cli("check", "app.py", "--matrix", cwd=tmp_path)
+    assert r.stdout.startswith("Wheels for each platform")  # a listing: stdout
+
+
 def test_error_not_a_project(tmp_path: Path) -> None:
     r = cli("build", "nowhere", cwd=tmp_path)
     assert r.returncode == 1 and r.stdout == ""

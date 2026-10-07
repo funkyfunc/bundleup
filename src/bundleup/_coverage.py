@@ -141,3 +141,60 @@ def diagnostics(found: list[Gap], platform: Platform, pylock: str) -> list[Diagn
                 )
             )
     return diags
+
+
+# The platforms `check --matrix` shows, with short labels, and the Python versions it considers.
+MATRIX_PLATFORMS = {
+    "x86_64-unknown-linux-gnu": "Linux x86_64",
+    "aarch64-unknown-linux-gnu": "Linux arm64",
+    "x86_64-unknown-linux-musl": "Linux x86_64 musl",
+    "aarch64-apple-darwin": "macOS arm64",
+    "x86_64-apple-darwin": "macOS x86_64",
+    "x86_64-pc-windows-msvc": "Windows x86_64",
+    "aarch64-pc-windows-msvc": "Windows arm64",
+}
+MATRIX_PYTHONS = [(3, minor) for minor in range(9, 15)]
+
+
+@dataclass(frozen=True)
+class MatrixCell:
+    """One platform and Python version: the locked packages without a wheel there."""
+
+    platform: str  # uv's name
+    label: str
+    python: tuple[int, int]
+    missing: tuple[str, ...]  # packages with wheels, none for this cell (can't be bundled)
+    source_only: tuple[str, ...]  # packages with no wheels at all (built here: fine if pure)
+
+    @property
+    def ok(self) -> bool:
+        return not self.missing
+
+    def to_json_dict(self) -> dict[str, object]:
+        return {
+            "platform": self.platform,
+            "python": f"{self.python[0]}.{self.python[1]}",
+            "ok": self.ok,
+            "missing": list(self.missing),
+            "source_only": list(self.source_only),
+        }
+
+
+def matrix(pylock: str, pythons: list[tuple[int, int]]) -> list[MatrixCell]:
+    """Where the locked packages can be bundled: every platform in MATRIX_PLATFORMS for every
+    Python in `pythons`, from the lock alone (ADR-0031)."""
+    cells = []
+    for name, label in MATRIX_PLATFORMS.items():
+        platform = parse(name)
+        for python in pythons:
+            found = gaps(pylock, platform, python)
+            cells.append(
+                MatrixCell(
+                    name,
+                    label,
+                    python,
+                    tuple(g.package for g in found if not g.source_only),
+                    tuple(g.package for g in found if g.source_only),
+                )
+            )
+    return cells

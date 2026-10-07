@@ -21,11 +21,12 @@ import json
 import os
 from collections import defaultdict
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from . import _bytecode, _platforms, _verify
+from ._coverage import MatrixCell
 from ._errors import Diagnostic
 from ._python import Portability, PythonRange
 from ._text import listing, plural
@@ -92,6 +93,7 @@ class CheckReport:
     diagnostics: list[Diagnostic]
     duration_s: float
     pythons: PythonRange | None = None  # the versions a bundle would run on (ADR-0030)
+    matrix: list[MatrixCell] = field(default_factory=list)  # `check --matrix` (ADR-0031)
     reach: Portability | None = None  # whether it would run on any OS / CPU (ADR-0034)
 
     @property
@@ -122,6 +124,7 @@ class CheckReport:
             "size_bytes": self.size_bytes,
             "packages": [p.to_json_dict() for p in self.packages],
             "duration_s": round(self.duration_s, 3),
+            "matrix": [cell.to_json_dict() for cell in self.matrix],
         }
 
 

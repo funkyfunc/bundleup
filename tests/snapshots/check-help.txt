@@ -1,6 +1,6 @@
 usage: bundleup check [-h] [--format FORMAT] [--target NAME] [--python VERSION] [--entry NAME]
                       [--python-platform OS] [--locked | --frozen] [--strict] [--also-platform OS]
-                      [--json] [-q] [-v] [--color WHEN]
+                      [--matrix] [--json] [-q] [-v] [--color WHEN]
                       [path]
 
 Install and compile like `build`, then report what won't work in a bundle and how big each package is. Every build runs the same checks.
@@ -18,8 +18,8 @@ options:
   --locked              fail if the lock is out of date (as in uv; the default when there is one)
   --frozen              bundle the lock as it is, without checking it (as in uv)
   --strict              warnings fail too (errors always do)
-  --also-platform OS    also check, from the lock alone, that every package has a wheel for this
-                        platform
+  --also-platform OS    also check, from the lock alone, that every package has a wheel there
+  --matrix              show which OS, CPU and Python versions the lock's wheels cover
   --json                print one JSON document on stdout
   -q, --quiet           -q: warnings and errors only; -qq: errors
   -v, --verbose         -v: every package's size; -vv: commands run

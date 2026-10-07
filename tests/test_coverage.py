@@ -66,3 +66,13 @@ def test_covered_targets_and_markers() -> None:
     assert c.suggestion(found, parse("windows"), PYLOCK) is None
     # A compiled wheel for another Python version doesn't count.
     assert "pillow" in [g.package for g in c.gaps(PYLOCK, parse("linux"), (3, 12))]
+
+
+def test_the_matrix_covers_every_platform_and_python() -> None:
+    cells = c.matrix(PYLOCK, [(3, 11), (3, 12)])
+    assert len(cells) == len(c.MATRIX_PLATFORMS) * 2
+    by = {(cell.platform, cell.python): cell for cell in cells}
+    assert by[("x86_64-unknown-linux-gnu", (3, 11))].ok  # pillow has a 2_28 wheel for 3.11
+    assert by[("x86_64-unknown-linux-gnu", (3, 12))].missing == ("pillow",)  # cp311 only
+    assert not by[("x86_64-pc-windows-msvc", (3, 11))].ok
+    assert by[("aarch64-apple-darwin", (3, 11))].source_only == ("docopt",)

@@ -123,7 +123,12 @@ def parsers() -> dict[str, argparse.ArgumentParser]:
         action="append",
         default=[],
         metavar="OS",
-        help="also check, from the lock alone, that every package has a wheel for this platform",
+        help="also check, from the lock alone, that every package has a wheel there",
+    )
+    check.add_argument(
+        "--matrix",
+        action="store_true",
+        help="show which OS, CPU and Python versions the lock's wheels cover",
     )
     _add_output_options(check, verbose="-v: every package's size; -vv: commands run")
     targets = commands.add_parser(
@@ -493,7 +498,9 @@ def _run_check(opts: argparse.Namespace) -> ExitCode:
     status, on_progress = _progress(opts, style)
     try:
         options = _expanded(opts, style)
-        report = check(options, progress=on_progress, also_platforms=opts.also_platform)
+        report = check(
+            options, progress=on_progress, also_platforms=opts.also_platform, matrix=opts.matrix
+        )
     except BundleupError as e:
         status.clear()
         return _failed(e, "check", opts, style)
@@ -508,7 +515,31 @@ def _run_check(opts: argparse.Namespace) -> ExitCode:
     if opts.quiet == 0:
         for line in _check_lines(report, opts, style):
             print(line, file=err)
+    if report.matrix:  # asked for: a listing, so stdout (rule 10)
+        for line in _matrix_lines(report, Style(sys.stdout, opts.color)):
+            print(line)
     return code
+
+
+def _matrix_lines(report: CheckReport, style: Style) -> list[str]:
+    """`check --matrix`: a grid of platforms by Python version, then what's missing where."""
+    pythons = sorted({cell.python for cell in report.matrix})
+    labels = list(dict.fromkeys(cell.label for cell in report.matrix))
+    width = max(len(label) for label in labels)
+    cells = {(cell.label, cell.python): cell for cell in report.matrix}
+    head = (" " * width + "".join(f"  {v[0]}.{v[1]:<4}" for v in pythons)).rstrip()
+    lines = [style.bold("Wheels for each platform, from the lock:"), head]
+    for label in labels:
+        row = label.ljust(width)
+        for version in pythons:
+            cell = cells[(label, version)]
+            row += "  " + ("ok" if cell.ok else f"x {len(cell.missing)}").ljust(6)
+        lines.append(row.rstrip())
+    for cell in report.matrix:
+        if not cell.ok:
+            where = f"{cell.label}, Python {cell.python[0]}.{cell.python[1]}"
+            lines.append(style.dim(f"  {where}: no wheel for {', '.join(cell.missing)}"))
+    return lines
 
 
 def _verify_diagnostics(report: VerifyReport) -> list[Diagnostic]:

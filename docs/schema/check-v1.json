@@ -170,6 +170,44 @@
             "duration_s": {
               "type": "number",
               "minimum": 0
+            },
+            "matrix": {
+              "type": "array",
+              "description": "With --matrix (added within version 1): wheel coverage from the lock, one entry per platform and Python version",
+              "items": {
+                "type": "object",
+                "required": [
+                  "platform",
+                  "python",
+                  "ok",
+                  "missing",
+                  "source_only"
+                ],
+                "properties": {
+                  "platform": {
+                    "type": "string",
+                    "description": "uv's platform name"
+                  },
+                  "python": {
+                    "type": "string"
+                  },
+                  "ok": {
+                    "type": "boolean"
+                  },
+                  "missing": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  },
+                  "source_only": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
             }
           }
         }
