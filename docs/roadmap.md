@@ -15,7 +15,7 @@ marked *Proposed*.
 19. **Release 0.1.0**: everything is prepared ([docs/releasing.md](releasing.md), [CHANGELOG](../CHANGELOG.md),
     [release.yml](../.github/workflows/release.yml)); publishing needs the owner (trusted publishing on pypi.org, then a tag).
 
-Deferred: agent triage of `corpus-failure` issues (ADR-0017, by the owner); standalone executables
+Deferred: packages a target already provides (would break "the lock decides"); agent triage of `corpus-failure` issues (ADR-0017, by the owner); standalone executables
 (needs its own ADR); Lambda layers; one bundle for several platforms; escape hatches (extra files,
 external dependencies).
 
@@ -43,6 +43,7 @@ Details are in the linked ADRs and findings, and in git history.
 | 16 | `_build.py` split by step; shared helpers | 2026-10-07 | `src/bundleup/` |
 | 18 | Re-benchmark against pex's fastest configuration: builds 1.1-2.4× faster, start-up far ahead | 2026-10-07 | [findings](findings/2026-10-07-speed-vs-pex-best.md) |
 | 19a | `[tool.bundleup]` configuration | 2026-10-07 | [ADR-0032](adr/0032-tool-bundleup-configuration.md) |
+| 20 | The second review's fixes: `--locked` by default, cache-root trust, runtime variables, range check, any-OS pure bundles, Skills size limit | 2026-10-07 | [findings](findings/2026-10-07-second-review.md), [ADR-0033](adr/0033-a-stale-lock-is-an-error.md), [ADR-0034](adr/0034-pure-python-bundles-run-on-any-os.md) |
 | 17 | Docs match the code: MISSION, vision, README, roadmap, CLAUDE.md | 2026-10-07 | the review's section 1 |
 
 Before writing code in an unfamiliar area, look at [references.md](references.md) for projects

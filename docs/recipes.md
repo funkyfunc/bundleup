@@ -30,6 +30,11 @@ compatibility: Runs scripts/tool.pyz with Python 3.11 on Linux x86_64; needs no 
 Run `python scripts/tool.pyz --help` to see the options, then ...
 ```
 
+The sandbox already has many libraries installed (pandas, numpy, pillow, python-pptx and more,
+per Anthropic's docs). If your script only needs those, you don't need bundleup there; a bundle
+always carries its own locked versions, which costs space. A Skill must stay under 30 MB
+uncompressed, and the preset warns when the bundle is bigger.
+
 Check it before shipping: `bundleup check tool.py --target claude-api --strict`. If a package has
 no wheel for the sandbox, the error names the platforms it does have wheels for. Not yet tested in
 the real sandbox (it needs an API account); the target's Python and platform are the documented

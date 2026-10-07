@@ -52,7 +52,8 @@ and git.
   (`uv.lock` or `pylock.toml`; a lockfile is required, ADR-0028) or a PEP 723 script. Outputs: a
   `.pyz` (default), `--format dir`, `--format lambda`; presets `lambda`, `lambda-arm64`,
   `claude-api`. Builds for this machine or another platform. Pure-Python bundles run on every
-  Python version their lock allows (ADR-0030); compiled ones on one. Every build checks the code
+  Python version their lock allows (ADR-0030) and on any OS when the lock agrees (ADR-0034);
+  compiled ones on one version and platform. A stale lock is an error (ADR-0033). Every build checks the code
   and, for other platforms, wheel coverage from the lock (ADR-0024, ADR-0031).
 - **Runtime:** unpacks once to a content-addressed cache; checks Python version, platform, CPU,
   C library, macOS version; isolates from the machine's packages; children of the bundle's own
@@ -64,9 +65,10 @@ and git.
 - **Speed** ([findings](docs/findings/2026-10-07-speed-vs-pex-best.md)): against pex's fastest
   configuration, builds 1.1-2.4× faster; warm start equals a venv; first runs 2.3-15× faster.
 - **Not yet:** a PyPI release (0.0.1 is a placeholder; [docs/releasing.md](docs/releasing.md)).
-- **ADR status:** 0023-0026 are **Proposed** (written while the owner was away, 2026-10-05/06);
-  0027-0031 were accepted when the owner asked for the [independent
-  review](docs/findings/2026-10-07-independent-review.md)'s findings to be fixed.
+- **ADR status:** 0023-0026 and 0033-0034 are **Proposed** (written while the owner was away);
+  0027-0032 are accepted fixes the owner asked for, with designs the owner hasn't reviewed.
+  Two independent reviews: [first](docs/findings/2026-10-07-independent-review.md),
+  [second](docs/findings/2026-10-07-second-review.md).
 - bundleup depends on the `uv` package (bundled binary) but prefers a uv ≥ 0.9 on `PATH`
   (ADR-0011). Rust stays reserved for a future scanner (ADR-0008).
 
@@ -142,7 +144,8 @@ UPDATE_SNAPSHOTS=1 uv run pytest -q tests/test_cli.py                       # af
 - **Use uv** for all Python tooling. Standalone scripts use PEP 723 headers and run with `uv run`.
 - **Mind the target Pythons:** the runtime bootstrap must work on macOS's system Python 3.9.
 - **Git:** stage explicit paths, never `git add -A`: other sessions may be editing the repo at the
-  same time. Commit only when asked. Commit messages describe the change only. No AI attribution
+  same time. Work on a branch and merge to `main` when CI is green; commit each fix as soon as it
+  passes (never `git checkout -- .` over uncommitted work). Commit only when asked. Commit messages describe the change only. No AI attribution
   (no `Co-Authored-By`, no "Generated with" lines).
 
 ## Working with the user

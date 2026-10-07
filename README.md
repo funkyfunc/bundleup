@@ -33,8 +33,9 @@ bundleup reads `pyproject.toml` + `uv.lock` (or a standard `pylock.toml`, or the
 [uv](https://docs.astral.sh/uv/) at build time; the bundle needs only Python. On first run it
 unpacks to a cache (`~/Library/Caches/bundleup`, `~/.cache/bundleup`, or a temp directory if
 those aren't writable), so later runs start as fast as an installed virtualenv. A pure-Python
-bundle runs on every Python version its lock allows (`Python 3.10+`); one with compiled code runs
-on the version it was built for. A bundle only sees
+bundle runs on every Python version its lock allows (`Python 3.10+`), and on any OS when the lock
+picks the same packages everywhere (`on any OS`); one with compiled code runs on the version and
+platform it was built for. A bundle only sees
 its own packages and the standard library; set `BUNDLEUP_INHERIT_PATH=1` to also let it use
 packages installed on the machine (they come after the bundle's, but a machine package can still
 win over a bundled namespace package of the same name: a Python rule, PEP 420). If it's started

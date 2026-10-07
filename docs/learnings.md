@@ -6,6 +6,16 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-07** · process · `git checkout -- .` discards every uncommitted change in the tree,
+  with no undo (a stash only helps if made first). An agent ran it while tidying and lost an hour
+  of fixes, redone from its own record. Commit to a working branch as soon as a fix passes, and
+  merge to `main` only when CI is green (the second review also found red commits on `main`).
+  Evidence: [second review](findings/2026-10-07-second-review.md).
+- **2026-10-07** · security · A cache directory next to a bundle must get the same ownership check
+  as a shared temp directory: a bundle in `/tmp` or on a team drive otherwise runs a copy another
+  user planted beside it. Internal environment variables need their own prefix: the runtime's
+  `BUNDLEUP_PYTHON` doubled as `--python`'s default and broke bundleup inside bundles. Evidence:
+  [second review](findings/2026-10-07-second-review.md).
 - **2026-10-07** · benchmarks · Against pex's fastest path (`--venv-repository` from a uv-synced
   venv, `--venv prepend`), bundleup's build lead shrinks to 1.1-2.4× (uv does most of the work for
   both); its start-up lead stays (warm = venv, first run 2.3-15× faster). pex can't subset uv's

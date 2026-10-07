@@ -35,8 +35,9 @@ A bundler in the spirit of esbuild: **one fast command, sensible defaults, one a
 
 - **In:** a project that already declares its dependencies: `pyproject.toml` + `uv.lock` or
   `pylock.toml` (PEP 751), or a single PEP 723 script.
-- **Out:** one `.pyz` per target platform. Runs with `python app.pyz`, on every Python version the
-  lock allows when it's pure Python. No install, no network. Thin variants from the same resolved
+- **Out:** one `.pyz`. Runs with `python app.pyz`; when it's pure Python, on every Python version
+  the lock allows and on any OS ([ADR-0034](docs/adr/0034-pure-python-bundles-run-on-any-os.md)),
+  otherwise one per target platform. No install, no network. Thin variants from the same resolved
   files: a plain directory for host apps and an AWS Lambda zip
   ([ADR-0025](docs/adr/0025-dir-and-lambda-formats-and-presets.md)). Not built: one bundle for
   several platforms.

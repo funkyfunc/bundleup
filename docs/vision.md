@@ -74,11 +74,13 @@ the user has to figure out a venv and pip.
 **After:**
 
 ```bash
-bundleup build scripts/make_deck.py --target claude-api -o scripts/make_deck.pyz
+bundleup build scripts/make_deck.py -o scripts/make_deck.pyz
 ```
 
-You ship `make_deck.pyz` inside the skill. In the sandbox, `python make_deck.pyz` just works: no
-install, no network.
+You ship `make_deck.pyz` inside the skill. On the user's machine, `python make_deck.pyz` just
+works, on macOS, Linux or Windows when the code is pure Python: no install, no network. (In the
+Claude API sandbox, python-pptx is already installed; bundle for it with `--target claude-api`
+when a script needs packages the sandbox doesn't have.)
 
 If something can't work, you find out at **build** time, not from a user:
 - "make_deck needs Python >=3.12, but the target is Python 3.11";

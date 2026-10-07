@@ -2,8 +2,9 @@
 
 - **Status:** Accepted (2026-10-07)
 - **Date:** 2026-10-07
-- **Deciders:** the owner asked for the [independent review](../findings/2026-10-07-independent-review.md)'s
-  findings to be fixed; design by an agent
+- **Deciders:** the owner approved fixing the [independent review](../findings/2026-10-07-independent-review.md)'s
+  findings, from a plan that named this fix; the details were designed by an agent and haven't
+  been reviewed by the owner; design by an agent
 - **Supersedes:** the child-process part of [ADR-0010](0010-bundle-format-and-loader.md)
   (`PYTHONPATH` pointing at the payload); amends [ADR-0021](0021-isolate-from-machine-packages.md)'s
   consequence that children still see the machine's packages

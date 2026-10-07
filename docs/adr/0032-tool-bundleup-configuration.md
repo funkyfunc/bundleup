@@ -2,8 +2,9 @@
 
 - **Status:** Accepted (2026-10-07)
 - **Date:** 2026-10-07
-- **Deciders:** the owner asked for the [independent review](../findings/2026-10-07-independent-review.md)'s
-  findings to be fixed (it asked for configuration); design by an agent, following the
+- **Deciders:** the owner approved fixing the [independent review](../findings/2026-10-07-independent-review.md)'s
+  findings, from a plan that named this fix; the details were designed by an agent and haven't
+  been reviewed by the owner (it asked for configuration); design by an agent, following the
   [CLI style guide](../cli-style-guide.md) rules 28-31 (ADR-0016)
 
 ## Context

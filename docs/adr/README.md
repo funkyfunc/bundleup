@@ -41,3 +41,5 @@ and change only the old one's status line.
 | [0030](0030-pure-python-bundles-run-on-a-range.md) | A pure-Python bundle runs on every Python version its lock allows | Accepted |
 | [0031](0031-wheel-coverage-from-the-lock.md) | Wheel coverage is checked from the lock, before installing, for any number of targets | Accepted |
 | [0032](0032-tool-bundleup-configuration.md) | Project settings live in `[tool.bundleup]` | Accepted |
+| [0033](0033-a-stale-lock-is-an-error.md) | A stale lock is an error by default; bundleup never rewrites it | Proposed |
+| [0034](0034-pure-python-bundles-run-on-any-os.md) | A pure-Python bundle runs on any OS when the lock selects the same packages everywhere | Proposed |

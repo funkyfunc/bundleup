@@ -2,8 +2,9 @@
 
 - **Status:** Accepted (2026-10-07)
 - **Date:** 2026-10-07
-- **Deciders:** the owner asked for the [independent review](../findings/2026-10-07-independent-review.md)'s
-  findings to be fixed; design by an agent
+- **Deciders:** the owner approved fixing the [independent review](../findings/2026-10-07-independent-review.md)'s
+  findings, from a plan that named this fix; the details were designed by an agent and haven't
+  been reviewed by the owner; design by an agent
 - **Extends:** [ADR-0014](0014-output-formats-and-target-presets.md) (cross-target builds) and
   [ADR-0024](0024-check-command-and-build-analysis.md) (`bundleup check`)
 
