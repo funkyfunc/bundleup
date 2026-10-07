@@ -136,19 +136,26 @@ merged; ask if unsure.
     a project's `pylock.toml` when it has no `uv.lock`; works with uv- and pip-written locks. Was:
     ([ADR-0006](adr/0006-delegate-to-uv-and-existing-files.md)): a hedge against depending on uv's own lockfile.
 
-**Items 1-12 are done (2026-10-06).** Proposed next, for the owner to order (an agent's
-suggestion, not yet agreed):
+**Items 1-12 are done (2026-10-06).** An independent review on 2026-10-07
+([findings](findings/2026-10-07-independent-review.md)) found real gaps; the owner asked for all
+of it to be fixed. In order:
 
-13. **Confirm or change the Proposed ADRs 0023-0026** (written while the owner was away), and
-    ADR-0013's remaining features.
-14. **First real release to PyPI** (0.1.0): the version, a changelog, a release workflow with
-    trusted publishing, and the README's status line. Needs the owner.
-15. **Agent triage of `corpus-failure` issues** (item 6 step 6, deferred by the owner).
-16. **Standalone executables** ([ADR-0014](adr/0014-output-formats-and-target-presets.md) defers
-    them; needs its own ADR): a `.pyz` paired with a portable Python for machines without one.
-17. **Smaller follow-ups:** Lambda layers (`python/` prefix); `bundleup verify` for `dir` and
-    Lambda outputs; a `splunk` preset; automatic `uv python install` when a target's Python is
-    missing (ADR-0025 left it out); trying the `claude-api` preset in the real sandbox.
+13. **Bugs the review found:** children of other Pythons pick up the bundle (PYTHONPATH leak);
+    the claude-api preset's platform level and the misleading "only publishes source" hint;
+    `uv.lock` silently written into the project, unlocked scripts; backslash `RECORD` paths;
+    unchecked-hash `.pyc` in `dir`/`lambda`; `--strict` deleting a good Lambda zip; the Lambda
+    handler taken from a console script; no libc/macOS-version check at start-up;
+    `cache clean` missing `pycache_prefix` files; listings on stderr; smoke failures filing no
+    issue; the weekly summary paused.
+14. **Pure-Python bundles run on every minor version** the lock allows; a versioned shebang.
+15. **Wheel coverage from the lock**: which packages have no wheel for a target, for several
+    targets at once, without installing (`check`), and precise errors in cross builds.
+16. **Split `_build.py`**, remove duplicated helpers, type the entry point.
+17. **Docs match the code**: MISSION, vision, README, a shorter roadmap and "Current state".
+18. **Re-benchmark against pex's best configuration** and restate the speed claims.
+19. **`[tool.bundleup]` configuration and a 0.1 release** (the release itself needs the owner).
+
+Deferred: agent triage of corpus issues; standalone executables (needs an ADR); Lambda layers.
 
 Before writing code in an unfamiliar area, look at [references.md](references.md) for projects
 that solved similar problems.
