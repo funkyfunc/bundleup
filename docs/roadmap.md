@@ -12,8 +12,8 @@ before work starts, and everything has to respect the accepted ADRs (in particul
 In order. Take the first open item. Decisions need an ADR; one the owner hasn't confirmed is
 marked *Proposed*.
 
-18. **Re-benchmark against pex's best configuration** and restate the speed claims.
-19. **`[tool.bundleup]` configuration and a 0.1 release** (publishing needs the owner).
+19. **Release 0.1.0**: everything is prepared ([docs/releasing.md](releasing.md), [CHANGELOG](../CHANGELOG.md),
+    [release.yml](../.github/workflows/release.yml)); publishing needs the owner (trusted publishing on pypi.org, then a tag).
 
 Deferred: agent triage of `corpus-failure` issues (ADR-0017, by the owner); standalone executables
 (needs its own ADR); Lambda layers; one bundle for several platforms; escape hatches (extra files,
@@ -41,6 +41,8 @@ Details are in the linked ADRs and findings, and in git history.
 | 14 | Pure-Python bundles run on a range of Python versions | 2026-10-07 | [ADR-0030](adr/0030-pure-python-bundles-run-on-a-range.md) |
 | 15 | Wheel coverage from the lock, for any number of targets | 2026-10-07 | [ADR-0031](adr/0031-wheel-coverage-from-the-lock.md) |
 | 16 | `_build.py` split by step; shared helpers | 2026-10-07 | `src/bundleup/` |
+| 18 | Re-benchmark against pex's fastest configuration: builds 1.1-2.4× faster, start-up far ahead | 2026-10-07 | [findings](findings/2026-10-07-speed-vs-pex-best.md) |
+| 19a | `[tool.bundleup]` configuration | 2026-10-07 | [ADR-0032](adr/0032-tool-bundleup-configuration.md) |
 | 17 | Docs match the code: MISSION, vision, README, roadmap, CLAUDE.md | 2026-10-07 | the review's section 1 |
 
 Before writing code in an unfamiliar area, look at [references.md](references.md) for projects

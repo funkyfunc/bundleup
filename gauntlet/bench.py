@@ -36,7 +36,12 @@ sys.path.insert(0, str(Path(__file__).parent))
 import run_bundlers as rb
 
 BENCH = rb.WORK / "bench"
-TOOLS = ["venv", "bundleup", "shiv", "pex"]
+TOOLS = ["venv", "bundleup", "shiv", "pex", "pex-pylock", "pex-venv"]
+# pex's fastest paths (the 2026-10-07 review: compare with these, not only with pex resolving
+# through pip): build from uv's PEP 751 lock, or reuse a uv-synced venv; run as a venv, which
+# removes most of pex's start-up cost. Timed from the lock to the artifact, like bundleup.
+PEX = ["uvx", "--from", rb.TOOLS["pex"] or "pex"]
+PEX_FAST = ["--venv", "prepend"]
 
 
 @dataclass(frozen=True)
@@ -92,6 +97,10 @@ def build(tool: str, project: Path, *, meta: rb.Meta, py: str, stage: Path) -> f
     out = bundle_path(tool, stage)
     if tool == "bundleup":
         cmd = [str(rb.BUNDLEUP), "build", str(project), "--python", py, "-o", str(out), "--quiet"]
+    elif tool in ("pex-pylock", "pex-venv"):
+        start = time.perf_counter()
+        pex_fast_build(tool, project, meta=meta, py=py, stage=stage, out=out)
+        return time.perf_counter() - start
     else:
         inputs = rb.prepare(project, meta, stage / "inputs")
         cmd = rb.build_command(tool, py, inputs=inputs, entry=meta["entry"], out=out)
@@ -100,8 +109,33 @@ def build(tool: str, project: Path, *, meta: rb.Meta, py: str, stage: Path) -> f
     return time.perf_counter() - start
 
 
+def pex_fast_build(
+    tool: str, project: Path, *, meta: rb.Meta, py: str, stage: Path, out: Path
+) -> None:
+    """pex from uv's lock (--pylock) or from a uv-synced venv (--venv-repository)."""
+    entry = ["-e", meta["entry"], "-o", str(out), "--python", py, *PEX_FAST]
+    if tool == "pex-pylock":
+        lock = stage / "pylock.toml"
+        export = ["uv", "export", "-q", "--frozen", "--no-dev", "--no-emit-project",
+                  "--format", "pylock.toml", "-o", str(lock)]  # fmt: skip
+        rb.sh(export, cwd=project).check_returncode()
+        cmd = [*PEX, "pex", "--pylock", str(lock), "--project", str(project), *entry]
+    else:
+        venv = stage / "pex-venv"
+        shutil.rmtree(venv, ignore_errors=True)
+        env = {**os.environ, "UV_PROJECT_ENVIRONMENT": str(venv)}
+        sync = ["uv", "sync", "-q", "--frozen", "--no-dev", "--no-editable", "--python", py]
+        rb.sh(sync, cwd=project, env=env).check_returncode()
+        # The venv fixes the interpreter; pex refuses some venvs when --python is given too.
+        no_python = [a for a in entry if a not in ("--python", py)]
+        cmd = [*PEX, "pex", "--venv-repository", str(venv), *no_python]
+    done = rb.sh(cmd)
+    if done.returncode:
+        raise RuntimeError(f"{tool} failed: {done.stderr[-1500:]}")
+
+
 def bundle_path(tool: str, stage: Path) -> Path:
-    return stage / ("app.pex" if tool == "pex" else "app.pyz")
+    return stage / ("app.pex" if tool.startswith("pex") else "app.pyz")
 
 
 def bench(tool: str, project: Path, *, version: str, runs: int, cold_runs: int, builds: int) -> Row:
@@ -161,14 +195,20 @@ def main() -> int:
     for project in projects:
         for version in opts.python or ["3.12"]:
             for tool in opts.tool or TOOLS:
-                r = bench(
-                    tool,
-                    project,
-                    version=version,
-                    runs=opts.runs,
-                    cold_runs=opts.cold_runs,
-                    builds=opts.builds,
-                )
+                try:
+                    r = bench(
+                        tool,
+                        project,
+                        version=version,
+                        runs=opts.runs,
+                        cold_runs=opts.cold_runs,
+                        builds=opts.builds,
+                    )
+                except RuntimeError as e:  # a tool that can't build this project: say so
+                    print(
+                        f"| {tool} | {project.name} | {version} | can't build: {e} |".split("\n")[0]
+                    )
+                    continue
                 rows.append(r)
                 times = f"{cell(r.build_ms)} | {cell(r.first_run_ms)} | {cell(r.warm_ms)}"
                 print(f"| {tool} | {r.project} | {version} | {times} |", flush=True)

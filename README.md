@@ -63,6 +63,9 @@ Python has three ways to hand a program to someone else, and the middle one is m
 
 pex, shiv and zipapps can do parts of this. bundleup's bet is a much better experience on top of
 the same correct approach: no flags to get it fast, plain-language errors, and a pre-ship check.
+Measured against pex's fastest configuration: builds 1.1-2.4× faster, warm starts as fast as an
+installed venv (pex adds 45-80 ms), first runs 2.3-15× faster
+([findings](https://github.com/funkyfunc/bundleup/blob/main/docs/findings/2026-10-07-speed-vs-pex-best.md)).
 See [docs/vision.md](https://github.com/funkyfunc/bundleup/blob/main/docs/vision.md).
 
 ## Where to start reading

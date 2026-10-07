@@ -185,11 +185,12 @@ and the generated [CLI reference](cli-reference.md):
   test (34), startup budget checked by a test (35);
 - presets (`--target`, printed expansion, `bundleup targets`, `list_targets()`) (7, 39;
   [ADR-0025](adr/0025-dir-and-lambda-formats-and-presets.md));
+- `[tool.bundleup]` in `pyproject.toml` or a PEP 723 script, below flags and environment (29-31,
+  [ADR-0032](adr/0032-tool-bundleup-configuration.md));
 - `--strict` (27) on `build` and `check`; diagnostics carry `package`, `file` and `line` (18);
 - library API: `__all__`, `py.typed`, `build(BuildOptions, progress=...)`, frozen results with
   `to_json_dict()`, one exception root, a library that never prints or exits, API snapshot test
   (38-44); snapshots of every output mode and exit-code tests (47-50).
 
-Not yet: `--dry-run` (8); `[tool.bundleup]`
-configuration (29-31); progress counts per item (51); Ctrl-C and crash exit codes
+Not yet: `--dry-run` (8); progress counts per item (51); Ctrl-C and crash exit codes
 are tested in-process rather than through a subprocess (48).

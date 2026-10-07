@@ -13,7 +13,7 @@ from typing import Callable, Literal
 
 from packaging.utils import canonicalize_name
 
-from . import _check, _coverage, _platforms, _targets
+from . import _check, _config, _coverage, _platforms, _targets
 from ._check import CheckReport
 from ._errors import (
     BundleupError,
@@ -120,6 +120,7 @@ def build(
     Raises a BundleupError subclass for every expected failure. Never prints; reports steps
     and commands through `progress` if given.
     """
+    options, _config_used = _config.apply(options)  # [tool.bundleup] (ADR-0032)
     options, _flags = _targets.apply(options)
     fmt = _format(options)
     report = progress or ignore
@@ -363,6 +364,7 @@ def check(
     (`ok` is False when there are errors); raises a BundleupError subclass only when the build
     itself fails. `options.output` and `options.strict` are ignored. `also_platforms`: more uv
     platform names to check from the lock alone (ADR-0031), for the same Python version."""
+    options, _config_used = _config.apply(options)  # [tool.bundleup] (ADR-0032)
     options, _flags = _targets.apply(options)
     others = [_platforms.parse(name).name for name in also_platforms]  # bad names fail first
     fmt = _format(options)

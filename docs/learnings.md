@@ -6,6 +6,11 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-07** · benchmarks · Against pex's fastest path (`--venv-repository` from a uv-synced
+  venv, `--venv prepend`), bundleup's build lead shrinks to 1.1-2.4× (uv does most of the work for
+  both); its start-up lead stays (warm = venv, first run 2.3-15× faster). pex can't subset uv's
+  `pylock.toml` (no dependency metadata) and refuses `--python` with some `--venv-repository`
+  venvs. Evidence: [findings](findings/2026-10-07-speed-vs-pex-best.md).
 - **2026-10-07** · platforms · uv's platform names map to wheel levels (`uv help pip install`):
   `x86_64-unknown-linux-gnu` is `manylinux_2_28`, macOS targets 13.0 unless
   `MACOSX_DEPLOYMENT_TARGET` says otherwise; uv offers manylinux 2_17, 2_28 and 2_31-2_40 only.

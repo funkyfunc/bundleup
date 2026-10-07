@@ -386,11 +386,16 @@ def _options(opts: argparse.Namespace) -> BuildOptions:
 
 def _expanded(opts: argparse.Namespace, style: Style) -> BuildOptions:
     """The options with a --target preset filled in; says what it expanded to (rule 7)."""
+    from ._config import apply as apply_config
     from ._targets import apply
 
-    options, flags = apply(_options(opts))
+    options, configured = apply_config(_options(opts))
+    if configured and not opts.json and opts.verbose >= 1:
+        print(style.dim(f"Using [tool.bundleup]: {', '.join(configured)}"), file=sys.stderr)
+    preset = options.target  # from a flag, the environment or [tool.bundleup]
+    options, flags = apply(options)
     if flags and not opts.json and opts.quiet == 0:
-        print(style.dim(f"Using target {opts.target}: {' '.join(flags)}"), file=sys.stderr)
+        print(style.dim(f"Using target {preset}: {' '.join(flags)}"), file=sys.stderr)
     return options
 
 

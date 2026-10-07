@@ -61,8 +61,9 @@ and git.
   every other installed Python) passes locally and in CI on Linux x64/arm64, macOS arm64 and
   Windows; Lambda zips run in AWS's Lambda image; nightly: top-200 PyPI smoke test, a 22-program
   corpus and four real test suites (failures open issues). Warm start equals an installed venv.
-- **Not yet:** a PyPI release (0.0.1 is a placeholder), `[tool.bundleup]` configuration, speed
-  claims re-measured against pex's fastest configuration (roadmap 18-19).
+- **Speed** ([findings](docs/findings/2026-10-07-speed-vs-pex-best.md)): against pex's fastest
+  configuration, builds 1.1-2.4× faster; warm start equals a venv; first runs 2.3-15× faster.
+- **Not yet:** a PyPI release (0.0.1 is a placeholder; [docs/releasing.md](docs/releasing.md)).
 - **ADR status:** 0023-0026 are **Proposed** (written while the owner was away, 2026-10-05/06);
   0027-0031 were accepted when the owner asked for the [independent
   review](docs/findings/2026-10-07-independent-review.md)'s findings to be fixed.

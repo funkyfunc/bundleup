@@ -1,0 +1,41 @@
+# Publish to PyPI when a version tag (v0.1.0) is pushed (docs/releasing.md). Uses PyPI trusted
+# publishing: no token is stored here; the owner registers this workflow on pypi.org once. Runs
+# only bundleup's own code.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v10.2.0
+      - name: The tag matches the version
+        run: |
+          version=$(uv run --frozen python -c "import bundleup; print(bundleup.__version__)")
+          test "v$version" = "${GITHUB_REF_NAME}" || { echo "tag ${GITHUB_REF_NAME} != v$version"; exit 1; }
+      - run: uv build
+      - uses: actions/upload-artifact@v7
+        with:
+          name: dist
+          path: dist
+
+  publish:
+    needs: build
+    runs-on: ubuntu-24.04
+    environment: pypi
+    permissions:
+      id-token: write # trusted publishing
+    steps:
+      - uses: actions/download-artifact@v8
+        with:
+          name: dist
+          path: dist
+      - uses: astral-sh/setup-uv@v10.2.0
+      - run: uv publish --trusted-publishing always

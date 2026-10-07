@@ -1,0 +1,26 @@
+# Changelog
+
+Versions follow uv's scheme until 1.0: a minor version may break things
+([style guide](docs/cli-style-guide.md) rule 37).
+
+## Unreleased (0.1.0)
+
+The first working release. From a project with `uv.lock` or `pylock.toml`, or a PEP 723 script:
+
+- `bundleup build`: one `.pyz` that runs on plain Python with no install step; a pure-Python one
+  runs on every Python version its lock allows, one with compiled code on the version it was built
+  for. Also `--format dir` (a plain directory for host applications) and `--format lambda` (an AWS
+  Lambda zip), and builds for other platforms (`--python-platform`, presets `--target lambda`,
+  `lambda-arm64`, `claude-api`).
+- `bundleup check`: what won't survive bundling, before shipping: code that doesn't compile on
+  the target Python, packages without a wheel for a platform (from the lock alone, for any number
+  of platforms with `--also-platform`), data files outside packages, Lambda size limits; package
+  sizes. Every build runs the same checks; `--strict` makes warnings fail.
+- `bundleup verify`: a bundle (and its unpacked copy) against its manifest of file hashes.
+- `bundleup cache list|clean`, `bundleup targets`.
+- Every build is checked against the lock and every wheel's `RECORD`, and is reproducible.
+- Bundles unpack once to a cache, start as fast as an installed venv, check the Python version,
+  platform, CPU, C library and macOS version first, ignore the machine's own packages, and let
+  child processes of their own interpreter see their packages (and no other Python).
+- `--json` output with JSON Schemas, stable exit codes and diagnostic codes, `[tool.bundleup]`
+  configuration, and a typed library API (`bundleup.build()`, `check()`, ...).
