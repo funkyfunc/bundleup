@@ -14,7 +14,7 @@ PackageSize: name: str, version: str | None, size_bytes: int, native: bool
 Preset: name: str, description: str, format: Format, python: str, platform_for: Callable[[str], str], size_limit: tuple[int, str] | None
 VerifyReport: bundle: Path, name: str, files: int, problems: list[str], cache: Path | None, cache_problems: list[str]
 CachedBundle: path: Path, name: str, size_bytes: int, last_used: float
-CleanReport: removed: list[Path], freed_bytes: int, dry_run: bool
+CleanReport: removed: list[Path], freed_bytes: int, dry_run: bool, in_use: list[Path]
 ExitCode: OK=0, BUILD_FAILED=1, USAGE_ERROR=2, INTERNAL_ERROR=3, INTERRUPTED=130
 BundleMismatchError: code='bundle-mismatch' exit_code=3
 BundleupError: code='build-failed' exit_code=1

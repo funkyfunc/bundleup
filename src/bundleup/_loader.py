@@ -488,8 +488,28 @@ def _run(site: str) -> None:
         runpy.run_path(os.path.join(site, target), run_name="__main__")
 
 
+_IN_USE = []  # type: list[BinaryIO]  # held open for the process's life (see _hold)
+
+
+def _hold(site: str) -> None:
+    """Mark this unpacked copy in use while the program runs: a shared lock on its lock file,
+    which `bundleup cache clean` can't take, so it never deletes files a running program needs
+    (third review). POSIX only, best effort, a few microseconds."""
+    if os.name == "nt":
+        return
+    try:
+        import fcntl
+
+        handle = open(os.path.join(os.path.dirname(site), ".lock-" + DIRNAME), "a+b")  # noqa: SIM115
+        fcntl.flock(handle.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except (OSError, ImportError):
+        return  # a read-only cache, or locks unsupported: nothing to protect it from
+    _IN_USE.append(handle)
+
+
 if __name__ == "__main__":
     _check()
     _site = _find() or _extract()
+    _hold(_site)
     _activate(_site)
     _run(_site)

@@ -137,3 +137,33 @@ def test_cli_json(cache: Path, capsys: pytest.CaptureFixture[str]) -> None:
 
 def test_cache_needs_a_subcommand(cache: Path) -> None:
     assert _cli.main(["cache"]) == 2
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the in-use lock is POSIX only")
+def test_clean_never_removes_a_copy_a_running_program_uses(cache: Path, tmp_path: Path) -> None:
+    """Third review: a long-running service's copy looked unused after 30 days (the mark is set at
+    start-up) and `cache clean` deleted files it still needed."""
+    script = tmp_path / "service.py"
+    script.write_text(
+        '# /// script\n# requires-python = ">=3.9"\n# dependencies = []\n# ///\n'
+        "import sys, time\nprint('ready', flush=True)\nsys.stdin.read()\n"
+    )
+    bundle = tmp_path / "service.pyz"
+    assert _cli.main(["build", str(script), "-o", str(bundle), "-q"]) == 0
+    service = subprocess.Popen(
+        [sys.executable, str(bundle)],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        text=True,
+    )
+    try:
+        assert service.stdout and service.stdout.readline().strip() == "ready"
+        (copy,) = bundleup.list_cache()
+        old = time.time() - 40 * DAY
+        os.utime(copy.path, (old, old))
+        report = bundleup.clean_cache(older_than_days=30)
+        assert report.in_use == [copy.path] and copy.path not in report.removed
+        assert copy.path.is_dir()
+    finally:
+        service.communicate("")
+    assert copy.path in bundleup.clean_cache(older_than_days=30).removed  # once it has exited

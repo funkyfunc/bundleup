@@ -4,29 +4,70 @@
   "title": "bundleup cache list|clean --json, schema version 1",
   "description": "One document on stdout at exit. Within schema_version 1 changes are additive only: consumers must ignore unknown keys.",
   "type": "object",
-  "required": ["schema_version", "command", "ok", "exit_code", "result", "diagnostics"],
+  "required": [
+    "schema_version",
+    "command",
+    "ok",
+    "exit_code",
+    "result",
+    "diagnostics"
+  ],
   "properties": {
-    "schema_version": { "const": 1 },
-    "command": { "enum": ["cache list", "cache clean"] },
-    "ok": { "type": "boolean" },
-    "exit_code": { "enum": [0, 1, 2, 3, 130] },
+    "schema_version": {
+      "const": 1
+    },
+    "command": {
+      "enum": [
+        "cache list",
+        "cache clean"
+      ]
+    },
+    "ok": {
+      "type": "boolean"
+    },
+    "exit_code": {
+      "enum": [
+        0,
+        1,
+        2,
+        3,
+        130
+      ]
+    },
     "result": {
       "oneOf": [
         {
           "type": "object",
           "description": "cache list",
-          "required": ["bundles"],
+          "required": [
+            "bundles"
+          ],
           "properties": {
             "bundles": {
               "type": "array",
               "items": {
                 "type": "object",
-                "required": ["path", "name", "size_bytes", "last_used"],
+                "required": [
+                  "path",
+                  "name",
+                  "size_bytes",
+                  "last_used"
+                ],
                 "properties": {
-                  "path": { "type": "string" },
-                  "name": { "type": "string" },
-                  "size_bytes": { "type": "integer", "minimum": 0 },
-                  "last_used": { "type": "integer", "description": "Seconds since the epoch" }
+                  "path": {
+                    "type": "string"
+                  },
+                  "name": {
+                    "type": "string"
+                  },
+                  "size_bytes": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "last_used": {
+                    "type": "integer",
+                    "description": "Seconds since the epoch"
+                  }
                 }
               }
             }
@@ -35,15 +76,38 @@
         {
           "type": "object",
           "description": "cache clean",
-          "required": ["removed", "freed_bytes", "dry_run"],
+          "required": [
+            "removed",
+            "freed_bytes",
+            "dry_run"
+          ],
           "properties": {
-            "removed": { "type": "array", "items": { "type": "string" } },
-            "freed_bytes": { "type": "integer", "minimum": 0 },
-            "dry_run": { "type": "boolean" }
+            "removed": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "freed_bytes": {
+              "type": "integer",
+              "minimum": 0
+            },
+            "dry_run": {
+              "type": "boolean"
+            },
+            "in_use": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "Old copies left alone because a running program holds them (added within version 1)"
+            }
           }
         }
       ]
     },
-    "diagnostics": { "type": "array" }
+    "diagnostics": {
+      "type": "array"
+    }
   }
 }

@@ -19,6 +19,7 @@ import sys
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import IO
 
 from . import _bytecode, _loader
 
@@ -49,12 +50,14 @@ class CleanReport:
     removed: list[Path] = field(default_factory=list)
     freed_bytes: int = 0
     dry_run: bool = False
+    in_use: list[Path] = field(default_factory=list)  # old copies a running program still uses
 
     def to_json_dict(self) -> dict[str, object]:
         return {
             "removed": [str(p) for p in self.removed],
             "freed_bytes": self.freed_bytes,
             "dry_run": self.dry_run,
+            "in_use": [str(p) for p in self.in_use],
         }
 
 
@@ -109,6 +112,27 @@ def list_cache() -> list[CachedBundle]:
     return sorted(found, key=lambda b: b.last_used, reverse=True)
 
 
+def _claim(unpacked: Path) -> IO[bytes] | None:
+    """Exclusive use of an unpacked copy, if no running bundle holds it: an open lock file, or
+    None when it's in use. Where locks aren't available it's claimed, as before."""
+    if os.name == "nt":
+        return open(os.devnull, "rb")  # a placeholder handle, closed by the caller
+    import fcntl
+
+    try:
+        # Returned open on purpose: the open file is the lock, released when the caller closes it.
+        # Never created here: without a lock file, no running bundle holds the copy.
+        handle = open(unpacked.parent / f".lock-{unpacked.name}", "r+b")  # noqa: SIM115
+    except OSError:
+        return open(os.devnull, "rb")  # no lock file (or a read-only cache): not in use
+    try:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except OSError:
+        handle.close()
+        return None
+    return handle
+
+
 def clean_cache(
     *, older_than_days: float = 30, build: bool = False, dry_run: bool = False
 ) -> CleanReport:
@@ -116,9 +140,17 @@ def clean_cache(
     lock files; with `build`, also the build cache. With `dry_run`, only report."""
     now = time.time()
     doomed: list[Path] = []
+    busy: list[Path] = []
+    held: list[IO[bytes]] = []  # exclusive locks on the copies being removed, released when done
     for unpacked in list_cache():
-        if now - unpacked.last_used > older_than_days * DAY:
-            doomed += [unpacked.path, *_bytecode_copies(unpacked.path)]
+        if now - unpacked.last_used <= older_than_days * DAY:
+            continue
+        lock = _claim(unpacked.path)
+        if lock is None:
+            busy.append(unpacked.path)  # a running bundle holds it (the loader's _hold)
+            continue
+        held.append(lock)
+        doomed += [unpacked.path, *_bytecode_copies(unpacked.path)]
     for root in cache_roots():
         for entry in os.scandir(root):
             age = now - entry.stat(follow_symlinks=False).st_mtime
@@ -128,8 +160,9 @@ def clean_cache(
                 unpacked = root / entry.name[len(".lock-") :]
                 if unpacked in doomed or (not unpacked.exists() and age > LEFTOVER_AGE):
                     doomed.append(Path(entry.path))
-    if build and _bytecode.cache_dir().exists():
-        doomed.append(_bytecode.cache_dir())
+    if build:  # compiled bytecode, and Pythons installed only to check code (ADR-0035)
+        builds = [_bytecode.cache_dir(), _bytecode.cache_dir().parent / "pythons"]
+        doomed += [path for path in builds if path.exists()]
     freed = sum(_size(p) if p.is_dir() else p.stat().st_size for p in doomed)
     if not dry_run:
         for path in doomed:
@@ -137,4 +170,6 @@ def clean_cache(
                 shutil.rmtree(path, ignore_errors=True)
             else:
                 path.unlink(missing_ok=True)
-    return CleanReport(sorted(doomed), freed, dry_run)
+    for lock in held:
+        lock.close()
+    return CleanReport(sorted(doomed), freed, dry_run, sorted(busy))
