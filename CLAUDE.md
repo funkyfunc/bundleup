@@ -65,10 +65,10 @@ and git.
 - **Speed** ([findings](docs/findings/2026-10-07-speed-vs-pex-best.md)): against pex's fastest
   configuration, builds 1.1-2.4× faster; warm start equals a venv; first runs 2.3-15× faster.
 - **Not yet:** a PyPI release (0.0.1 is a placeholder; [docs/releasing.md](docs/releasing.md)).
-- **ADR status:** 0023-0026 and 0033-0034 are **Proposed** (written while the owner was away);
+- **ADR status:** 0023-0026 and 0033-0037 are **Proposed** (written while the owner was away);
   0027-0032 are accepted fixes the owner asked for, with designs the owner hasn't reviewed.
-  Two independent reviews: [first](docs/findings/2026-10-07-independent-review.md),
-  [second](docs/findings/2026-10-07-second-review.md).
+  Three independent reviews: [first](docs/findings/2026-10-07-independent-review.md),
+  [second](docs/findings/2026-10-07-second-review.md), [third](docs/findings/2026-10-07-third-review.md).
 - bundleup depends on the `uv` package (bundled binary) but prefers a uv ≥ 0.9 on `PATH`
   (ADR-0011). Rust stays reserved for a future scanner (ADR-0008).
 
@@ -134,6 +134,8 @@ UPDATE_SNAPSHOTS=1 uv run pytest -q tests/test_cli.py                       # af
 
 ## Working rules
 
+- **Scope is frozen until 0.1 has users** (third review): no new formats, presets or nightly
+  automation. Write an ADR only for public behaviour; the owner reviews the Proposed ones.
 - **Measure, don't claim.** Speed, size and correctness claims come from gauntlet runs compared
   with pex.
 - **The control group must pass** before trusting any bundler result. A failure there is a broken

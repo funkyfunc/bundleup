@@ -1,6 +1,7 @@
 # ADR-0027: Child processes see the bundle only when they run the bundle's own Python
 
-- **Status:** Accepted (2026-10-07)
+- **Status:** Accepted (2026-10-07); which children activate is amended by
+  [ADR-0037](0037-children-activate-only-for-bundle-code.md)
 - **Date:** 2026-10-07
 - **Deciders:** the owner approved fixing the [independent review](../findings/2026-10-07-independent-review.md)'s
   findings, from a plan that named this fix; the details were designed by an agent and haven't

@@ -6,6 +6,12 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-07** · runtime · `sys.argv` is already set when `sitecustomize` runs (3.9-3.13), so a
+  child can tell `-c`, `-m` (module name from `sys.orig_argv` on 3.10+) and a script path apart.
+  `ast.parse(feature_version=)` misses tokenizer changes (PEP 701 f-strings parse with
+  `feature_version=(3, 10)`); only a real interpreter is exact. `uv python install` into a
+  private `UV_PYTHON_INSTALL_DIR` with `--no-bin --no-registry` leaves the user's Pythons alone.
+  Darwin 25 is macOS 26. Evidence: [third review](findings/2026-10-07-third-review.md).
 - **2026-10-07** · process · `git checkout -- .` discards every uncommitted change in the tree,
   with no undo (a stash only helps if made first). An agent ran it while tidying and lost an hour
   of fixes, redone from its own record. Commit to a working branch as soon as a fix passes, and

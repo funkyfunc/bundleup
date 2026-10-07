@@ -22,6 +22,7 @@ bundleup build --python 3.11 --python-platform linux   # build on a Mac for Linu
 bundleup build --json           # the result as JSON on stdout, for scripts and agents
 bundleup check                  # what won't survive bundling, and each package's size
 bundleup check --also-platform windows   # which packages lack a wheel for another OS
+bundleup check --matrix         # which OS, CPU and Python versions the lock's wheels cover
 bundleup build --target lambda  # an AWS Lambda .zip (Python 3.13, x86_64; `bundleup targets` lists presets)
 bundleup build --format dir     # a plain directory, for apps that load packages from one
 bundleup verify dist/app.pyz    # check a bundle (and its unpacked copy) against its manifest
@@ -39,7 +40,8 @@ platform it was built for. A bundle only sees
 its own packages and the standard library; set `BUNDLEUP_INHERIT_PATH=1` to also let it use
 packages installed on the machine (they come after the bundle's, but a machine package can still
 win over a bundled namespace package of the same name: a Python rule, PEP 420). If it's started
-with the wrong Python or on the wrong platform, it says so in one sentence. Programs it starts with
+with the wrong Python, it runs itself again with a matching one if one is installed; otherwise, and on
+the wrong platform, it says so in one sentence. Programs it starts with
 its own Python see its packages; any other Python it starts doesn't. A project needs a lockfile:
 bundleup never writes one into it (run `uv lock` first).
 

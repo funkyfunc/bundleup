@@ -77,10 +77,12 @@ the user has to figure out a venv and pip.
 bundleup build scripts/make_deck.py -o scripts/make_deck.pyz
 ```
 
-You ship `make_deck.pyz` inside the skill. On the user's machine, `python make_deck.pyz` just
-works, on macOS, Linux or Windows when the code is pure Python: no install, no network. (In the
-Claude API sandbox, python-pptx is already installed; bundle for it with `--target claude-api`
-when a script needs packages the sandbox doesn't have.)
+You ship `make_deck.pyz` inside the skill. On a user's machine like yours, `python make_deck.pyz`
+just works: no install, no network. python-pptx needs compiled packages (lxml, Pillow), so that
+bundle is for one OS, CPU and Python version; `bundleup check --matrix` shows which platforms the
+lock can serve, and one bundle per platform covers the rest (one file for all of them isn't built
+yet). Pure-Python scripts get one bundle for every OS. (In the Claude API sandbox python-pptx is
+preinstalled; `--target claude-api` is for scripts that need packages it doesn't have.)
 
 If something can't work, you find out at **build** time, not from a user:
 - "make_deck needs Python >=3.12, but the target is Python 3.11";
