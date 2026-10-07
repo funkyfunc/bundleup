@@ -52,6 +52,15 @@ class PythonRange:
 
 
 @dataclass(frozen=True)
+class Portability:
+    """Whether a bundle runs on any OS and any CPU (ADR-0034): only without compiled code, and
+    only when the lock selects the same packages everywhere."""
+
+    any_os: bool = False
+    any_cpu: bool = False
+
+
+@dataclass(frozen=True)
 class Target:
     """What a bundle is built for: this machine's interpreter, or another platform (ADR-0014)."""
 
@@ -66,23 +75,38 @@ class Target:
     markers: dict[str, str]  # the PEP 508 environment uv.lock's markers are evaluated against
     python_platform: _platforms.Platform | None = None  # set when building for another platform
 
-    def describe(self, native: bool, pythons: PythonRange | None = None) -> str:
-        where = PLATFORM_NAMES.get(self.platform, self.platform)
+    def describe(
+        self,
+        native: bool,
+        pythons: PythonRange | None = None,
+        reach: Portability | None = None,
+    ) -> str:
         python = str(pythons) if pythons else f"{self.version[0]}.{self.version[1]}"
-        return f"Python {python} on {where}" + (f" {self.machine}" if native else "")
+        if reach and reach.any_os:
+            return f"Python {python} on any OS"
+        where = PLATFORM_NAMES.get(self.platform, self.platform)
+        pinned = native or bool(reach and not reach.any_cpu)
+        return f"Python {python} on {where}" + (f" {self.machine}" if pinned else "")
 
     def to_json_dict(
-        self, *, native: bool, pythons: PythonRange | None = None
+        self,
+        *,
+        native: bool,
+        pythons: PythonRange | None = None,
+        reach: Portability | None = None,
     ) -> dict[str, object]:
         exact = PythonRange(self.version, self.version)
+        pinned = native or bool(reach and not reach.any_cpu)
         return {
+            # Runs on Linux, macOS and Windows alike (added within schema version 1, ADR-0034).
+            "any_os": bool(reach and reach.any_os),
             "python": f"{self.version[0]}.{self.version[1]}",
             # Every version the bundle runs on (added within schema version 1, ADR-0030).
             "python_range": (pythons or exact).to_json_dict(),
             "python_full_version": self.full_version,
             "implementation": self.implementation,
             "platform": self.platform,
-            "machine": self.machine if native else None,  # None: runs on any CPU
+            "machine": self.machine if pinned else None,  # None: runs on any CPU
             "python_platform": self.python_platform.name if self.python_platform else None,
         }
 

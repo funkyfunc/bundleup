@@ -34,12 +34,20 @@ from ._payload import (
     Prepared,
     check_wheel_platforms,
     inspect_site,
+    portability,
     precompile,
     pth_files,
     python_range,
     resolve_entry,
 )
-from ._python import PythonRange, Target, check_requires_python, find_interpreter, find_python
+from ._python import (
+    Portability,
+    PythonRange,
+    Target,
+    check_requires_python,
+    find_interpreter,
+    find_python,
+)
 from ._source import Source, load_source, project_version, safe_name, script_metadata, script_path
 from ._steps import Progress, ProgressEvent, Steps, ignore, run
 from ._targets import FORMATS, Format
@@ -83,6 +91,7 @@ class BuildResult:
     format: str = "pyz"
     entry: str | None = None  # what runs: "module:function", "module", or the script's path
     pythons: PythonRange | None = None  # the versions it runs on; None means target.version
+    reach: Portability | None = None  # whether it runs on any OS / CPU (ADR-0034)
 
     @property
     def handler(self) -> str | None:
@@ -104,7 +113,9 @@ class BuildResult:
             "version": self.version,
             "packages": self.packages,
             "native": self.native,
-            "target": self.target.to_json_dict(native=self.native, pythons=self.pythons),
+            "target": self.target.to_json_dict(
+                native=self.native, pythons=self.pythons, reach=self.reach
+            ),
             "duration_s": round(self.duration_s, 3),
             "timings": {step: round(seconds, 3) for step, seconds in self.timings.items()},
             "format": self.format,
@@ -172,6 +183,7 @@ def build(
         format=fmt,
         entry=str(p.entry) if p.entry else None,
         pythons=p.pythons,
+        reach=p.reach,
     )
 
 
@@ -337,6 +349,7 @@ def _prepare(
         run=run_python,
     )
     diagnostics += narrowed
+    reach = portability(pylock, target=target, pythons=pythons, native=native)
     diagnostics.sort(key=lambda d: d.level != "error")
     return Prepared(
         source,
@@ -351,6 +364,7 @@ def _prepare(
         diagnostics,
         sizes,
         pythons,
+        reach,
     )
 
 
@@ -384,4 +398,5 @@ def check(
         diagnostics=sorted([*p.diagnostics, *extra], key=lambda d: d.level != "error"),
         duration_s=time.perf_counter() - steps.started,
         pythons=p.pythons,
+        reach=p.reach,
     )

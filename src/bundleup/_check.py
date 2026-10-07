@@ -27,7 +27,7 @@ from typing import TYPE_CHECKING
 
 from . import _bytecode, _platforms, _verify
 from ._errors import Diagnostic
-from ._python import PythonRange
+from ._python import Portability, PythonRange
 from ._text import listing, plural
 
 if TYPE_CHECKING:
@@ -85,6 +85,7 @@ class CheckReport:
     diagnostics: list[Diagnostic]
     duration_s: float
     pythons: PythonRange | None = None  # the versions a bundle would run on (ADR-0030)
+    reach: Portability | None = None  # whether it would run on any OS / CPU (ADR-0034)
 
     @property
     def errors(self) -> list[Diagnostic]:
@@ -107,7 +108,9 @@ class CheckReport:
         return {
             "name": self.name,
             "version": self.version,
-            "target": self.target.to_json_dict(native=self.native, pythons=self.pythons),
+            "target": self.target.to_json_dict(
+                native=self.native, pythons=self.pythons, reach=self.reach
+            ),
             "native": self.native,
             "size_bytes": self.size_bytes,
             "packages": [p.to_json_dict() for p in self.packages],

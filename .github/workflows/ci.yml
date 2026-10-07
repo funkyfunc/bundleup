@@ -87,6 +87,9 @@ jobs:
           - { name: macos-to-linux, build: macos-15, run: ubuntu-24.04, platform: x86_64-manylinux_2_28 }
           - { name: linux-to-windows, build: ubuntu-24.04, run: windows-2025, platform: x86_64-pc-windows-msvc }
           - { name: linux-to-macos, build: ubuntu-24.04, run: macos-15, platform: aarch64-apple-darwin }
+          # Built for the Mac it ran on: pure-Python bundles must run on other OSes (ADR-0034).
+          - { name: any-os-macos-to-linux, build: macos-15, run: ubuntu-24.04-arm, platform: host }
+          - { name: any-os-macos-to-windows, build: macos-15, run: windows-2025, platform: host }
     runs-on: ${{ matrix.build }}
     steps:
       - uses: actions/checkout@v7

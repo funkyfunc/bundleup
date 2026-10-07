@@ -25,7 +25,7 @@ NAME = "app"
 DIRNAME = "app-0000000000000000"
 PYTHON = (3, 12)  # the oldest Python minor version it runs on
 PYTHON_MAX = (3, 12)  # type: tuple[int, int] | None  # the newest; None: no limit (ADR-0030)
-PLATFORM = "darwin"
+PLATFORM = "darwin"  # type: str | None  # None: any OS (a pure bundle, ADR-0034)
 MACHINE = None  # type: str | None  # set when the bundle contains native code
 ABIFLAGS = None  # type: str | None  # set when the bundle contains native code (POSIX only)
 TARGET = "Python 3.12 on macOS"
@@ -81,7 +81,7 @@ def _check() -> None:
     # Only refuse a CPU that is known to differ: Windows reports it through an environment
     # variable, which a stripped-down environment may lack.
     machine = _machine() if MACHINE else ""
-    if sys.platform != PLATFORM or (machine and machine != MACHINE):
+    if (PLATFORM and sys.platform != PLATFORM) or (machine and machine != MACHINE):
         names = {"darwin": "macOS", "linux": "Linux", "win32": "Windows"}
         _fail(
             "this app was bundled for %s, but this machine is %s %s."

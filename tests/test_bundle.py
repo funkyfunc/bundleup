@@ -245,6 +245,9 @@ def test_a_pure_python_bundle_runs_on_other_versions(bundle: Path, tmp_path: Pat
     with zipfile.ZipFile(bundle) as zf:
         manifest = json.loads(zf.read("manifest.json"))
     assert manifest["target"]["python_range"]["max"] is None  # no upper limit
+    assert manifest["target"]["any_os"] is True  # and any OS (ADR-0034)
+    anywhere = relabel(bundle, tmp_path / "anywhere.pyz", PLATFORM=None)
+    assert run(anywhere, env_for(tmp_path)).returncode == 0
     assert bundle.read_bytes().startswith(b"#!/usr/bin/env python3\n")
     if not os.path.exists(SYSTEM_PYTHON):
         pytest.skip("needs a second Python")

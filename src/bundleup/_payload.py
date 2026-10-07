@@ -20,7 +20,7 @@ from ._errors import (
     NoCompatibleWheelError,
     UsageError,
 )
-from ._python import PythonRange, Target
+from ._python import Portability, PythonRange, Target
 from ._source import Source
 from ._steps import Progress, run
 from ._text import listing
@@ -179,6 +179,42 @@ OLDEST = (3, 9)
 NEWEST_KNOWN = (3, 20)
 
 
+# One of each OS and CPU bundleup builds for: a pure bundle runs on all of them if the lock
+# selects the same packages for each (ADR-0034).
+SURVEY = [
+    "x86_64-unknown-linux-gnu",
+    "aarch64-unknown-linux-gnu",
+    "x86_64-apple-darwin",
+    "aarch64-apple-darwin",
+    "x86_64-pc-windows-msvc",
+    "aarch64-pc-windows-msvc",
+]
+
+
+def portability(pylock: Path, *, target: Target, pythons: PythonRange, native: bool) -> Portability:
+    """Whether a pure-Python payload runs on any OS and any CPU: the lock's markers, evaluated
+    for each OS and CPU and every Python in the range, select exactly the packages bundled.
+    `colorama; sys_platform == "win32"` ties a bundle to its OS; a CPU marker to its CPU."""
+    if native:
+        return Portability()
+    lock = pylock.read_text(encoding="utf-8")
+    selected = set(_verify.locked_packages(lock, target.markers))
+    newest = pythons.max or NEWEST_KNOWN
+    versions = {target.full_version} | {f"3.{m}.0" for m in range(pythons.min[1], newest[1] + 1)}
+
+    def same(name: str) -> bool:
+        platform = _platforms.parse(name)
+        return all(
+            set(_verify.locked_packages(lock, platform.markers(python_full_version=v))) == selected
+            for v in versions
+        )
+
+    results = {name: same(name) for name in SURVEY}
+    any_os = all(results.values())
+    own = [n for n in SURVEY if _platforms.parse(n).sys_platform == target.platform]
+    return Portability(any_os=any_os, any_cpu=any_os or all(results[n] for n in own))
+
+
 def python_range(
     site: Path, *, pylock: Path, target: Target, source: Source, native: bool
 ) -> PythonRange:
@@ -236,3 +272,4 @@ class Prepared:
     diagnostics: list[Diagnostic]
     sizes: list[_check.PackageSize]
     pythons: PythonRange  # the minor versions the bundle runs on (ADR-0030)
+    reach: Portability  # whether it runs on any OS and CPU (ADR-0034)

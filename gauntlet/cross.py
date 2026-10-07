@@ -1,5 +1,6 @@
 """Cross-target gauntlet (ADR-0014): build every project for another platform on one machine, then
-run the bundles on that platform.
+run the bundles on that platform. With `--python-platform host`, build for this machine and run
+on other OSes: pure-Python bundles must run anywhere (ADR-0034); OS-specific ones are skipped.
 
     # on the build machine (e.g. macOS):
     uv run gauntlet/cross.py build --python 3.11 --python-platform x86_64-manylinux_2_28 --dir out
@@ -23,6 +24,7 @@ import json
 import shutil
 import sys
 import time
+import zipfile
 from dataclasses import asdict
 from pathlib import Path
 
@@ -56,7 +58,9 @@ def build_all(python: str, platform: str, out: Path, only: list[str]) -> int:
         src = project / meta["script"] if "script" in meta else project
         bundle = out / f"{meta['id']}.pyz"
         cmd = [str(rb.BUNDLEUP), "build", str(src), "--python", py]
-        built = rb.sh([*cmd, "--python-platform", platform, "-o", str(bundle), "--json"])
+        # "host": build for this machine; pure-Python bundles then run on any OS (ADR-0034).
+        target = [] if platform == "host" else ["--python-platform", platform]
+        built = rb.sh([*cmd, *target, "-o", str(bundle), "--json"])
         records.append(
             {"id": meta["id"], "built": built.returncode == 0, "output": built.stdout[-2000:]}
         )
@@ -84,6 +88,12 @@ def run_one(project: Path, python: str, out: Path, built: dict[str, bool]) -> li
     stage.mkdir(parents=True)
     bundle = stage / "app.pyz"
     shutil.copy(out / f"{meta['id']}.pyz", bundle)
+    with zipfile.ZipFile(bundle) as zf:
+        made_for = json.loads(zf.read("manifest.json"))["target"]
+    if not made_for.get("any_os", False) and made_for["platform"] != sys.platform:
+        res.outcome = "skipped"  # compiled code or OS-specific dependencies: not for this OS
+        res.detail = f"built for {made_for['platform']} only"
+        return [res]
     args = meta.get("args", [])
     home, cwd = rb.fresh_dirs(stage, "base")
     start = time.perf_counter()
@@ -123,7 +133,10 @@ def main() -> int:
     parser.add_argument("action", choices=["build", "run"])
     parser.add_argument("only", nargs="*", help="project id prefixes")
     parser.add_argument("--python", required=True)
-    parser.add_argument("--python-platform", help="build: the target platform, in uv's terms")
+    parser.add_argument(
+        "--python-platform",
+        help="build: the target platform, in uv's terms, or `host` for this machine",
+    )
     parser.add_argument("--dir", type=Path, required=True, help="where bundles go / come from")
     parser.add_argument("--jobs", type=int, default=4)
     parser.add_argument("--out", help="run: write results JSON to gauntlet/results/<out>.json")

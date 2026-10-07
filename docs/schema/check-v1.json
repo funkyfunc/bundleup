@@ -117,6 +117,10 @@
                       "description": "null: no upper limit"
                     }
                   }
+                },
+                "any_os": {
+                  "type": "boolean",
+                  "description": "Runs on Linux, macOS and Windows alike: pure Python, and the lock selects the same packages everywhere (added within version 1, ADR-0034)"
                 }
               }
             },
@@ -173,7 +177,7 @@
     },
     "diagnostics": {
       "type": "array",
-      "description": "Codes: syntax-error (error in the project's code, warning in a dependency), data-files, pth-not-run, unlocked, python-range, source-only (warnings), no-wheel, lambda-too-big (errors), or any build error code",
+      "description": "Codes: syntax-error (error in the project's code, warning in a dependency), data-files, pth-not-run, unlocked, python-range, python-range-unchecked, source-only (warnings), no-wheel, lambda-too-big (errors), or any build error code",
       "items": {
         "type": "object",
         "required": [

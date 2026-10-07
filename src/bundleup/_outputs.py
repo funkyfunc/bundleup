@@ -32,7 +32,7 @@ from ._payload import (
     verify_payload,
     write_payload,
 )
-from ._python import PythonRange, Target
+from ._python import Portability, PythonRange, Target
 from ._source import Source, safe_name
 from ._steps import Progress, Steps, run
 from ._targets import Format
@@ -71,6 +71,7 @@ def manifest(
     files: dict[str, str],
     loader: dict[str, str] | None,
     pythons: PythonRange,
+    reach: Portability,
 ) -> bytes:
     """What's inside the bundle, with hashes: read by `bundleup verify` and by reviewers
     (`unzip -p app.pyz manifest.json`). Sorted, so the same inputs give the same bytes."""
@@ -79,7 +80,7 @@ def manifest(
         "bundleup_version": __version__,
         "name": source.name,
         "version": version,
-        "target": target.to_json_dict(native=native, pythons=pythons),
+        "target": target.to_json_dict(native=native, pythons=pythons, reach=reach),
         "entry": list(entry) if entry else None,
         "cache_dir": cache_dir,
         "format": fmt,
@@ -171,10 +172,10 @@ def write_pyz(p: Prepared, output: Path, *, stage: Path, steps: Steps, progress:
         "DIRNAME": cache_dir,
         "PYTHON": p.pythons.min,
         "PYTHON_MAX": p.pythons.max,
-        "PLATFORM": target.platform,
-        "MACHINE": target.machine if native else None,
+        "PLATFORM": None if p.reach.any_os else target.platform,  # None: any OS (ADR-0034)
+        "MACHINE": target.machine if native or not p.reach.any_cpu else None,
         "ABIFLAGS": target.abiflags if native else None,
-        "TARGET": target.describe(native, p.pythons),
+        "TARGET": target.describe(native, p.pythons, p.reach),
         "ENTRY": tuple(p.entry),  # a plain tuple: the loader reads its repr
         "PTH": pth_files(p.site),
         "LIBC": needs.libc if native else None,
@@ -206,6 +207,7 @@ def write_pyz(p: Prepared, output: Path, *, stage: Path, steps: Steps, progress:
             "__main__.pyc": _verify.record_hash(loader_pyc.read_bytes()),
         },
         pythons=p.pythons,
+        reach=p.reach,
     )
     write_bundle(
         output,
@@ -235,6 +237,7 @@ def _plain_manifest(p: Prepared, fmt: Format, written: dict[str, str]) -> bytes:
         files=written,
         loader=None,
         pythons=p.pythons,
+        reach=p.reach,
     )
 
 

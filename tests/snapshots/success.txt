@@ -1,2 +1,2 @@
 Bundled app → app.pyz (<SIZE>) in <DURATION>
-  Python <VERSION> on <PLATFORM> · 0 packages
+  Python <VERSION> on any OS · 0 packages
