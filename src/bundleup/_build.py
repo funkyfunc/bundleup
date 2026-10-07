@@ -4,11 +4,12 @@ the output. Each step lives in its own module: _source, _python, _uv, _payload, 
 from __future__ import annotations
 
 import os
+import re
 import shutil
 import tempfile
 import time
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Literal
 
@@ -73,6 +74,10 @@ class BuildOptions:
     # What to write (ADR-0025): "pyz" (the default), "dir" or "lambda".
     format: Format | None = None
     target: str | None = None  # a preset such as "lambda" (`bundleup targets`); flags win
+    # More Python versions and platforms: a .pyz gets a payload for every combination of
+    # [python, *more_pythons] and [python_platform, *more_python_platforms] (ADR-0038).
+    more_pythons: tuple[str, ...] = ()
+    more_python_platforms: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -95,6 +100,8 @@ class BuildResult:
     entry: str | None = None  # what runs: "module:function", "module", or the script's path
     pythons: PythonRange | None = None  # the versions it runs on; None means target.version
     reach: Portability | None = None  # whether it runs on any OS / CPU (ADR-0034)
+    # A bundle for several platforms: each payload's target, as in `target` (ADR-0038).
+    payloads: list[dict[str, object]] = field(default_factory=list)
 
     @property
     def handler(self) -> str | None:
@@ -123,6 +130,7 @@ class BuildResult:
             "timings": {step: round(seconds, 3) for step, seconds in self.timings.items()},
             "format": self.format,
             "entry": self.entry,
+            "payloads": self.payloads,
         }
 
 
@@ -137,24 +145,40 @@ def build(
     options, fmt, preset = _settle(options)
     report = progress or ignore
     steps = Steps(report)
+    combinations = _combinations(options)
+    if len(combinations) > 1 and fmt != "pyz":
+        raise UsageError(
+            f"a {fmt} output is for one platform and Python version",
+            hint="give one --python and one --python-platform, or build a .pyz",
+        )
     with tempfile.TemporaryDirectory(prefix="bundleup-") as tmp:
         stage = Path(tmp)
-        p = _prepare(options, fmt=fmt, stage=stage, steps=steps, progress=report)
-        failing = [d for d in p.diagnostics if d.level == "error" or options.strict]
+        prepared: list[Prepared] = []
+        for i, combination in enumerate(combinations):
+            if _served(prepared, combination):
+                continue  # an earlier pure-Python payload already runs there (ADR-0038)
+            where = stage if len(combinations) == 1 else stage / f"target-{i}"
+            where.mkdir(exist_ok=True)
+            prepared.append(
+                _prepare(combination, fmt=fmt, stage=where, steps=steps, progress=report)
+            )
+        p = prepared[0]
+        p_diagnostics = _merged_diagnostics(prepared)
+        failing = [d for d in p_diagnostics if d.level == "error" or options.strict]
         if failing:
             raise CheckFailedError(
                 f"found {_count(failing)}, so nothing was written",
-                diagnostics=p.diagnostics,
+                diagnostics=p_diagnostics,
                 hint=_STRICT_HINT if not any(d.level == "error" for d in failing) else None,
             )
         name = safe_name(p.source.name)
         default = {"pyz": f"{name}.pyz", "dir": name, "lambda": f"{name}-lambda.zip"}[fmt]
         output = (options.output or p.source.workdir / "dist" / default).absolute()
-        diagnostics = list(p.diagnostics)
+        diagnostics = list(p_diagnostics)
         if fmt == "pyz":
             limit = preset.size_limit if preset else None
             diagnostics += write_pyz(
-                p,
+                prepared,
                 output,
                 stage=stage,
                 steps=steps,
@@ -197,7 +221,56 @@ def build(
         entry=str(p.entry) if p.entry else None,
         pythons=p.pythons,
         reach=p.reach,
+        payloads=[
+            x.target.to_json_dict(native=x.native, pythons=x.pythons, reach=x.reach)
+            for x in prepared
+        ]
+        if len(prepared) > 1
+        else [],
     )
+
+
+def _combinations(options: BuildOptions) -> list[BuildOptions]:
+    """One set of options per Python version and platform asked for (ADR-0038)."""
+    pythons = [options.python, *options.more_pythons]
+    platforms = [options.python_platform, *options.more_python_platforms]
+    single = {"more_pythons": (), "more_python_platforms": ()}
+    return [
+        replace(options, python=python, python_platform=platform, **single)
+        for python in pythons
+        for platform in platforms
+    ]
+
+
+def _served(prepared: list[Prepared], options: BuildOptions) -> bool:
+    """Whether an already prepared pure-Python payload runs on this combination too, so it needs
+    no payload of its own: its Python range covers the version and it runs on any OS (or on this
+    one, any CPU)."""
+    version = re.fullmatch(r"(\d+)\.(\d+)", options.python or "")
+    if version is None:
+        return False  # uv's choice or an interpreter path: can't tell before building
+    wanted = (int(version[1]), int(version[2]))
+    platform = _platforms.parse(options.python_platform) if options.python_platform else None
+    for p in prepared:
+        if p.native or not p.pythons.contains(wanted):
+            continue
+        if p.reach.any_os:
+            return True
+        if platform and p.reach.any_cpu and platform.sys_platform == p.target.platform:
+            return True
+    return False
+
+
+def _merged_diagnostics(prepared: list[Prepared]) -> list[Diagnostic]:
+    """Every payload's findings, once each; for several payloads, each says which one it's about."""
+    if len(prepared) == 1:
+        return list(prepared[0].diagnostics)
+    seen: dict[tuple[str, str], Diagnostic] = {}
+    for p in prepared:
+        label = p.target.describe(p.native, p.pythons, p.reach)
+        for d in p.diagnostics:
+            seen.setdefault((d.code, d.message), replace(d, message=f"{d.message} [{label}]"))
+    return sorted(seen.values(), key=lambda d: d.level != "error")
 
 
 _STRICT_HINT = "--strict makes warnings fail too; build without it to allow them"
@@ -407,6 +480,11 @@ def check(
     platform names to check from the lock alone (ADR-0031), for the same Python version.
     `matrix`: wheel coverage for every platform and Python version (`report.matrix`)."""
     options, fmt, _preset = _settle(options)
+    if options.more_pythons or options.more_python_platforms:
+        raise UsageError(
+            "check looks at one Python version and platform at a time",
+            hint="--matrix shows every platform and Python version from the lock",
+        )
     others = [_platforms.parse(name).name for name in also_platforms]  # bad names fail first
     report = progress or ignore
     steps = Steps(report)

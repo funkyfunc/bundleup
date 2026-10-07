@@ -79,5 +79,6 @@ class Steps:
 
     def finish(self) -> None:
         if self.current is not None:
-            self.timings[self.current] = time.perf_counter() - self.mark
+            elapsed = time.perf_counter() - self.mark  # summed: several payloads repeat steps
+            self.timings[self.current] = self.timings.get(self.current, 0.0) + elapsed
             self.current = None

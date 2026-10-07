@@ -276,7 +276,8 @@ def _find_cache(bundle: Path, cache_dir: str) -> Path | None:
     return None
 
 
-MANIFEST_KEYS = ("name", "files", "payload", "cache_dir", "loader")
+MANIFEST_KEYS = ("name", "loader")
+PAYLOAD_KEYS = ("files", "payload", "cache_dir")  # at the top, or in each of "payloads" (ADR-0038)
 
 
 def _read_manifest(bundle: Path) -> dict[str, Any]:  # Any: JSON
@@ -288,7 +289,9 @@ def _read_manifest(bundle: Path) -> dict[str, Any]:  # Any: JSON
             f"{bundle} isn't a bundleup bundle with a manifest ({type(e).__name__}: {e})",
             hint="bundles carry manifest.json since bundleup's `build` command; rebuild it",
         ) from None
+    payloads = manifest.get("payloads") or [manifest]
     missing = [key for key in MANIFEST_KEYS if key not in manifest]
+    missing += sorted({key for p in payloads for key in PAYLOAD_KEYS if key not in p})
     if missing:
         raise NotABundleError(f"{bundle}'s manifest is incomplete (no {', '.join(missing)})")
     return manifest
@@ -308,29 +311,41 @@ def _check_loader(outer: zipfile.ZipFile, expected: dict[str, str]) -> list[str]
     return problems
 
 
+def _payloads(manifest: dict[str, Any]) -> list[dict[str, Any]]:  # Any: JSON
+    """Each payload's entry: the manifest itself for a single payload, else its "payloads"."""
+    return manifest.get("payloads") or [{**manifest, "member": "payload.zip"}]
+
+
 def _check_payload_zip(outer: zipfile.ZipFile, manifest: dict[str, Any]) -> list[str]:  # Any: JSON
-    """payload.zip's hash, then every file inside it, against the manifest."""
+    """A payload's hash, then every file inside it, against its manifest entry."""
+    member = manifest["member"]
     try:
         with tempfile.TemporaryFile() as spool:
             digest = hashlib.sha256()
-            with outer.open("payload.zip") as source:  # can be hundreds of MB: stream it
+            with outer.open(member) as source:  # can be hundreds of MB: stream it
                 for chunk in iter(lambda: source.read(1 << 20), b""):
                     digest.update(chunk)
                     spool.write(chunk)
             if digest.hexdigest() != manifest["payload"]["sha256"]:
-                return ["changed file: payload.zip doesn't match its recorded hash"]
+                return [f"changed file: {member} doesn't match its recorded hash"]
             spool.seek(0)
             with zipfile.ZipFile(spool) as payload:
                 return _check_payload(payload, manifest["files"])
     except (OSError, KeyError, zipfile.BadZipFile) as e:
-        return [f"corrupted: payload.zip can't be read ({type(e).__name__}: {e})"]
+        return [f"corrupted: {member} can't be read ({type(e).__name__}: {e})"]
 
 
 def _check_bundle(bundle: Path, manifest: dict[str, Any]) -> list[str]:  # Any: JSON
     """The bundle file against its manifest. Corruption is a problem to report, not a crash."""
     try:
         with zipfile.ZipFile(bundle) as outer:
-            return _check_loader(outer, manifest["loader"]) + _check_payload_zip(outer, manifest)
+            problems = _check_loader(outer, manifest["loader"])
+            checked: set[str] = set()
+            for payload in _payloads(manifest):
+                if payload["member"] not in checked:  # identical payloads are stored once
+                    checked.add(payload["member"])
+                    problems += _check_payload_zip(outer, payload)
+            return problems
     except (OSError, zipfile.BadZipFile) as e:
         return [f"corrupted: {bundle.name} can't be read ({type(e).__name__}: {e})"]
 
@@ -342,8 +357,16 @@ def verify(bundle: Path) -> VerifyReport:
     """
     bundle = bundle.absolute()
     manifest = _read_manifest(bundle)
-    files: dict[str, str] = manifest["files"]
+    payloads = _payloads(manifest)
     problems = _check_bundle(bundle, manifest)
-    cache = _find_cache(bundle, manifest["cache_dir"])
-    cache_problems = _check_cache(cache, files) if cache else []
-    return VerifyReport(bundle, manifest["name"], len(files), problems, cache, cache_problems)
+    # This machine's unpacked copy: of whichever payload was unpacked here (one per machine).
+    cache, cache_problems = None, []
+    for payload in payloads:
+        cache = _find_cache(bundle, payload["cache_dir"])
+        if cache:
+            cache_problems = _check_cache(cache, payload["files"])
+            break
+    unique = {p["member"]: len(p["files"]) for p in payloads}
+    return VerifyReport(
+        bundle, manifest["name"], sum(unique.values()), problems, cache, cache_problems
+    )

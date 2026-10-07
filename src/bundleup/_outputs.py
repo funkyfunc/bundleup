@@ -99,12 +99,13 @@ def manifest(
 def write_bundle(
     output: Path,
     *,
-    payload: Path,
+    payloads: dict[str, Path],
     loader: Path,
     loader_pyc: Path,
     manifest_json: bytes,
 ) -> None:
-    """Write shebang + outer zip to a temporary file, then rename it over `output`."""
+    """Write shebang + outer zip to a temporary file, then rename it over `output`. `payloads`:
+    member name -> payload zip (one, `payload.zip`, unless the bundle is for several platforms)."""
     output.parent.mkdir(parents=True, exist_ok=True)
     tmp = output.with_name(f".{output.name}.tmp-{os.getpid()}")
     try:
@@ -113,13 +114,12 @@ def write_bundle(
             # re-runs itself with a matching one (ADR-0036).
             f.write(b"#!/usr/bin/env python3\n")
             with zipfile.ZipFile(f, "w", zipfile.ZIP_STORED) as zf:
-                info = zipfile.ZipInfo("payload.zip", FIXED_TIME)
-                info.external_attr = 0o100644 << 16
-                with (
-                    open(payload, "rb") as src,
-                    zf.open(info, "w", force_zip64=payload.stat().st_size > 0x7FFFFFFF) as dest,
-                ):
-                    shutil.copyfileobj(src, dest, 1 << 20)
+                for member, payload in sorted(payloads.items()):
+                    info = zipfile.ZipInfo(member, FIXED_TIME)
+                    info.external_attr = 0o100644 << 16
+                    big = payload.stat().st_size > 0x7FFFFFFF
+                    with open(payload, "rb") as src, zf.open(info, "w", force_zip64=big) as dest:
+                        shutil.copyfileobj(src, dest, 1 << 20)
                 for path, name in ((loader, "__main__.py"), (loader_pyc, "__main__.pyc")):
                     info = zipfile.ZipInfo(name, FIXED_TIME)
                     info.external_attr = 0o100644 << 16
@@ -152,8 +152,27 @@ def lambda_upload_warning(output: Path) -> Diagnostic:
     )
 
 
+def _loader_settings(p: Prepared, *, member: str, dirname: str) -> dict[str, object]:
+    """What the loader needs to know about one payload (its config, or one PAYLOADS entry)."""
+    target, native = p.target, p.native
+    needs = runtime_needs(p.site)
+    return {
+        "dirname": dirname,
+        "member": member,
+        "python": p.pythons.min,
+        "python_max": p.pythons.max,
+        "platform": None if p.reach.any_os else target.platform,  # None: any OS (ADR-0034)
+        "machine": target.machine if native or not p.reach.any_cpu else None,
+        "abiflags": target.abiflags if native else None,
+        "target": target.describe(native, p.pythons, p.reach),
+        "pth": pth_files(p.site),
+        "libc": needs.libc if native else None,
+        "macos": needs.macos if native else None,
+    }
+
+
 def write_pyz(
-    p: Prepared,
+    ps: list[Prepared],
     output: Path,
     *,
     stage: Path,
@@ -162,22 +181,32 @@ def write_pyz(
     size_limit: tuple[int, str] | None = None,
     strict: bool = False,
 ) -> list[Diagnostic]:
-    """The default: shebang + outer zip with the loader, the manifest and the payload. With a
+    """The default: shebang + outer zip with the loader, the manifest and the payload, or one
+    payload per platform and Python version when there are several (ADR-0038). With a
     destination's `size_limit` (a preset's), warns when the bundle is over it, and refuses before
     writing under `strict`."""
-    assert p.entry is not None  # resolved for every .pyz
+    first = ps[0]
+    assert first.entry is not None  # resolved for every .pyz
+    name = safe_name(first.source.name)
     steps.start("zip")
-    payload = stage / "payload.zip"
-    digest, written = write_payload(p.site, payload)
+    zipped = []  # (prepared, staged zip, digest, written)
+    for i, p in enumerate(ps):
+        staged = stage / f"payload-{i}.zip"
+        digest, written = write_payload(p.site, staged)
+        zipped.append((p, staged, digest, written))
+    members: dict[str, Path] = {}  # identical payloads are stored once
+    for _p, staged, digest, _written in zipped:
+        member = "payload.zip" if len(ps) == 1 else f"payload-{digest[:16]}.zip"
+        members.setdefault(member, staged)
+    total = sum(path.stat().st_size for path in members.values())
     diags = []
-    if size_limit and payload.stat().st_size > size_limit[0]:
+    if size_limit and total > size_limit[0]:
         limit, what = size_limit
         diags.append(
             Diagnostic(
                 "size-limit",
                 "warning",
-                f"the bundle is {payload.stat().st_size / 1e6:.0f} MB, over {what} "
-                f"({limit / 1e6:.0f} MB)",
+                f"the bundle is {total / 1e6:.0f} MB, over {what} ({limit / 1e6:.0f} MB)",
                 hint="`bundleup check -v` lists the largest packages",
             )
         )
@@ -188,65 +217,106 @@ def write_pyz(
                 hint="--strict makes warnings fail too; build without it to allow them",
             )
     steps.start("verify")
-    locked = verify_payload(
-        p.site, pylock=p.pylock, target=p.target, written=written, script=p.script
-    )
+    locked = [
+        verify_payload(p.site, pylock=p.pylock, target=p.target, written=written, script=p.script)
+        for p, _staged, _digest, written in zipped
+    ]
     steps.start("write")
-    cache_dir = f"{safe_name(p.source.name)}-{digest[:16]}"
-    target, native = p.target, p.native
-    needs = runtime_needs(p.site)
+    settings = []
+    for p, _staged, digest, _written in zipped:
+        member = "payload.zip" if len(ps) == 1 else f"payload-{digest[:16]}.zip"
+        settings.append(_loader_settings(p, member=member, dirname=f"{name}-{digest[:16]}"))
+    main = settings[0]
     config = {
-        "NAME": p.source.name,
-        "DIRNAME": cache_dir,
-        "PYTHON": p.pythons.min,
-        "PYTHON_MAX": p.pythons.max,
-        "PLATFORM": None if p.reach.any_os else target.platform,  # None: any OS (ADR-0034)
-        "MACHINE": target.machine if native or not p.reach.any_cpu else None,
-        "ABIFLAGS": target.abiflags if native else None,
-        "TARGET": target.describe(native, p.pythons, p.reach),
-        "ENTRY": tuple(p.entry),  # a plain tuple: the loader reads its repr
-        "PTH": pth_files(p.site),
-        "LIBC": needs.libc if native else None,
-        "MACOS": needs.macos if native else None,
-        "MEMBER": "payload.zip",
-        "PAYLOADS": [],
+        "NAME": first.source.name,
+        "DIRNAME": main["dirname"],
+        "PYTHON": main["python"],
+        "PYTHON_MAX": main["python_max"],
+        "PLATFORM": main["platform"],
+        "MACHINE": main["machine"],
+        "ABIFLAGS": main["abiflags"],
+        "TARGET": main["target"],
+        "ENTRY": tuple(first.entry),  # a plain tuple: the loader reads its repr
+        "PTH": main["pth"],
+        "LIBC": main["libc"],
+        "MACOS": main["macos"],
+        "MEMBER": main["member"],
+        "PAYLOADS": settings if len(ps) > 1 else [],
     }
     loader, loader_pyc = stage / "__main__.py", stage / "__main__.pyc"
     loader.write_text(render_loader(config), encoding="utf-8")
     run(
-        [target.executable, "-I", "-c", COMPILE_LOADER, str(loader), str(loader_pyc)],
+        [first.target.executable, "-I", "-c", COMPILE_LOADER, str(loader), str(loader_pyc)],
         what="compiling the loader",
         progress=progress,
         error=BundleupError,
         env=COMPILE_ENV,
     )
-    manifest_json = manifest(
-        source=p.source,
-        version=p.version,
-        target=target,
-        native=native,
-        entry=p.entry,
-        cache_dir=cache_dir,
-        fmt="pyz",
-        payload=payload,
-        payload_sha256=digest,
-        locked=locked,
-        files=written,
-        loader={
-            "__main__.py": _verify.record_hash(loader.read_bytes()),
-            "__main__.pyc": _verify.record_hash(loader_pyc.read_bytes()),
-        },
-        pythons=p.pythons,
-        reach=p.reach,
-    )
+    hashes = {
+        "__main__.py": _verify.record_hash(loader.read_bytes()),
+        "__main__.pyc": _verify.record_hash(loader_pyc.read_bytes()),
+    }
+    if len(ps) == 1:
+        p, staged, digest, written = zipped[0]
+        manifest_json = manifest(
+            source=p.source,
+            version=p.version,
+            target=p.target,
+            native=p.native,
+            entry=p.entry,
+            cache_dir=str(main["dirname"]),
+            fmt="pyz",
+            payload=staged,
+            payload_sha256=digest,
+            locked=locked[0],
+            files=written,
+            loader=hashes,
+            pythons=p.pythons,
+            reach=p.reach,
+        )
+    else:
+        manifest_json = _multi_manifest(zipped, settings, locked, hashes)
     write_bundle(
-        output,
-        payload=payload,
-        loader=loader,
-        loader_pyc=loader_pyc,
-        manifest_json=manifest_json,
+        output, payloads=members, loader=loader, loader_pyc=loader_pyc, manifest_json=manifest_json
     )
     return diags
+
+
+def _multi_manifest(
+    zipped: list[tuple[Prepared, Path, str, dict[str, str]]],
+    settings: list[dict[str, object]],
+    locked: list[list[_verify.LockedPackage]],
+    loader: dict[str, str],
+) -> bytes:
+    """The manifest of a bundle for several platforms: the shared fields once, then each payload
+    with its own target, hashes, packages and files (ADR-0038)."""
+    first = zipped[0][0]
+    payloads = []
+    for (p, staged, digest, written), entry, packages in zip(zipped, settings, locked):
+        payloads.append(
+            {
+                "member": entry["member"],
+                "payload": {"sha256": digest, "size": staged.stat().st_size},
+                "cache_dir": entry["dirname"],
+                "target": p.target.to_json_dict(native=p.native, pythons=p.pythons, reach=p.reach),
+                "packages": [
+                    {"name": x.name, "version": x.version}
+                    for x in sorted(packages, key=lambda x: x.name)
+                ],
+                "files": written,
+            }
+        )
+    document = {
+        "manifest_version": 1,
+        "bundleup_version": __version__,
+        "name": first.source.name,
+        "version": first.version,
+        "entry": list(first.entry) if first.entry else None,
+        "format": "pyz",
+        "loader": loader,
+        "payloads": payloads,
+    }
+    return json.dumps(document, indent=1, sort_keys=True).encode("utf-8") + b"\n"
 
 
 def _plain_manifest(p: Prepared, fmt: Format, written: dict[str, str]) -> bytes:

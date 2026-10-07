@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -130,11 +132,19 @@ def find_python(
         try:
             exe = run(cmd, cwd=source.workdir, what="finding a Python", progress=progress).strip()
         except UvError as e:
-            wanted = f"Python {request}" if request else "a Python for this project"
-            install = f"uv python install {request}" if request else "uv python install"
-            raise PythonNotFoundError(
-                f"couldn't find {wanted}", hint=f"install it with `{install}`", detail=e.detail
-            ) from None
+            # A version that isn't installed: fetch it into bundleup's own directory (ADR-0035),
+            # so `--python 3.11 --python 3.13` works without setting anything up (ADR-0038).
+            fetched = None
+            if request and re.fullmatch(r"\d+\.\d+", request):
+                outside = Path(tempfile.gettempdir())  # uv answers a project's venv from inside it
+                fetched = fetch_interpreter(uv, request, cwd=outside, progress=progress)
+            if not fetched:
+                wanted = f"Python {request}" if request else "a Python for this project"
+                install = f"uv python install {request}" if request else "uv python install"
+                raise PythonNotFoundError(
+                    f"couldn't find {wanted}", hint=f"install it with `{install}`", detail=e.detail
+                ) from None
+            exe = fetched
     probe = [exe, "-I", "-S", "-c", PROBE]
     info = json.loads(run(probe, what=f"inspecting {exe}", progress=progress, error=ProjectError))
     major, minor = info["version"]

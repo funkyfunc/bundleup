@@ -229,9 +229,9 @@ def _add_build_options(command: argparse.ArgumentParser, *, output: bool) -> Non
     command.add_argument(
         "--python",
         metavar="VERSION",
-        default=os.environ.get("BUNDLEUP_PYTHON"),
+        action="append",
         help=_env_help(
-            "a version (3.12) or a path; default: uv's choice",
+            "a version (3.12) or a path; repeatable; default: uv's",
             "BUNDLEUP_PYTHON",
         ),
     )
@@ -247,8 +247,8 @@ def _add_build_options(command: argparse.ArgumentParser, *, output: bool) -> Non
     command.add_argument(
         "--python-platform",
         metavar="OS",
-        default=os.environ.get("BUNDLEUP_PYTHON_PLATFORM"),
-        help=_env_help("another OS/CPU, uv's names (e.g. linux)", "BUNDLEUP_PYTHON_PLATFORM"),
+        action="append",
+        help=_env_help("an OS/CPU, uv's names (linux); repeatable", "BUNDLEUP_PYTHON_PLATFORM"),
     )
     lock = command.add_mutually_exclusive_group()
     lock.add_argument(
@@ -286,6 +286,11 @@ def _add_output_options(command: argparse.ArgumentParser, *, verbose: str) -> No
         default="auto",
         help="auto, always or never (default: auto; also NO_COLOR, FORCE_COLOR)",
     )
+
+
+def _env_list(name: str) -> list[str]:
+    value = os.environ.get(name)
+    return [value] if value else []
 
 
 def _env_path(name: str) -> Path | None:
@@ -360,13 +365,18 @@ def _emit_json(
 def _options(opts: argparse.Namespace) -> BuildOptions:
     from ._build import BuildOptions
 
+    # Repeatable flags; the environment variable is the default when none is given.
+    pythons = opts.python or _env_list("BUNDLEUP_PYTHON")
+    platforms = opts.python_platform or _env_list("BUNDLEUP_PYTHON_PLATFORM")
     return BuildOptions(
         path=Path(opts.path),
         output=getattr(opts, "output", None),
-        python=opts.python,
+        python=pythons[0] if pythons else None,
+        more_pythons=tuple(pythons[1:]),
         entry=opts.entry,
         lock_mode=opts.lock_mode,  # None: --locked when there's a lock (ADR-0033)
-        python_platform=opts.python_platform,
+        python_platform=platforms[0] if platforms else None,
+        more_python_platforms=tuple(platforms[1:]),
         strict=opts.strict,
         format=opts.format,
         target=opts.target,

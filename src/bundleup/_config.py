@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from ._build import BuildOptions
 
 
-# Key in [tool.bundleup] -> BuildOptions field. Strings unless listed in BOOLEANS.
+# Key in [tool.bundleup] -> BuildOptions field. Strings unless listed in BOOLEANS or LISTS.
 KEYS = {
     "target": "target",
     "format": "format",
@@ -32,6 +32,8 @@ KEYS = {
     "strict": "strict",
 }
 BOOLEANS = {"strict"}
+# Keys that also take a list: a .pyz for several Pythons or platforms (ADR-0038).
+LISTS = {"python": "more_pythons", "python-platform": "more_python_platforms"}
 # Per-run settings: flags and environment only (rule 29).
 PER_RUN = {"json", "quiet", "verbose", "color", "dry-run", "locked", "frozen"}
 
@@ -82,6 +84,14 @@ def apply(options: BuildOptions) -> tuple[BuildOptions, list[str]]:
             close = difflib.get_close_matches(key, KEYS, n=1)
             hint = f"did you mean `{close[0]}`?" if close else f"keys: {', '.join(sorted(KEYS))}"
             raise _invalid(where, f"unknown key `{key}`", hint)
+        if key in LISTS and isinstance(value, list):
+            if not value or not all(isinstance(v, str) for v in value):
+                raise _invalid(where, f"`{key}` must be a string or a list of strings",
+                               f'for example: {key} = ["3.11", "3.12"]')  # fmt: skip
+            if getattr(options, field) is None:
+                changes[field], changes[LISTS[key]] = value[0], tuple(value[1:])
+                used.append(f"{key} = {value}")
+            continue
         wanted = bool if key in BOOLEANS else str
         if not isinstance(value, wanted):
             kind = "true or false" if wanted is bool else "a string"
