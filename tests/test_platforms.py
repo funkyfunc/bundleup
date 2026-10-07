@@ -98,7 +98,7 @@ def test_the_macos_version_from_darwins(
         machine = "arm64"
 
     Uname.release = release  # type: ignore[attr-defined]  # a stand-in for os.uname()
-    monkeypatch.setattr(_loader.os, "uname", lambda: Uname)
+    monkeypatch.setattr(_loader.os, "uname", lambda: Uname, raising=False)  # none on Windows
     assert _loader._macos() == macos
 
 
