@@ -45,63 +45,29 @@ Do these **as you go**, not only at the end:
 
 ## Current state
 
-- Done: research (4 rounds, see [docs/research/](docs/research/README.md)), mission/vision, gauntlet of 24 projects (21 is the large pure-Python
-  performance check), baseline of pex/shiv/zipapps ([findings](docs/findings/2026-10-03-baseline.md)).
-- Named `bundleup` ([ADR-0009](docs/adr/0009-name-bundleup.md)); repo github.com/funkyfunc/bundleup.
-  PyPI has only the 0.0.1 placeholder; the working bundler isn't released yet.
-- **Milestone 1 done (2026-10-04):** `bundleup <project-dir | script.py>` builds `dist/<name>.pyz`
-  for the current platform and one Python version. Passes every gauntlet project on 3.9 and 3.12
-  (incl. 19, child processes) and every hostile condition; first run faster than shiv; warm start
-  equal to an installed venv (on 3.9, only when both use the same binary: `/usr/bin/python3`'s
-  xcrun shim adds ~5 ms); builds 1.8–6× faster than pex
-  ([findings](docs/findings/2026-10-04-milestone-1.md)). Design in
-  [ADR-0010](docs/adr/0010-bundle-format-and-loader.md) (format, loader, cache; accepted) and
-  [ADR-0011](docs/adr/0011-cli-and-build-pipeline.md) (pipeline accepted; its CLI is superseded by
-  [ADR-0016](docs/adr/0016-cli-and-api-conventions.md): verbs, `bundleup build [PATH]`).
+A snapshot, not a changelog: history is in [docs/roadmap.md](docs/roadmap.md) "Done", the ADRs
+and git.
+
+- **What works (2026-10-07):** `bundleup build|check|targets|verify|cache` from a project
+  (`uv.lock` or `pylock.toml`; a lockfile is required, ADR-0028) or a PEP 723 script. Outputs: a
+  `.pyz` (default), `--format dir`, `--format lambda`; presets `lambda`, `lambda-arm64`,
+  `claude-api`. Builds for this machine or another platform. Pure-Python bundles run on every
+  Python version their lock allows (ADR-0030); compiled ones on one. Every build checks the code
+  and, for other platforms, wheel coverage from the lock (ADR-0024, ADR-0031).
+- **Runtime:** unpacks once to a content-addressed cache; checks Python version, platform, CPU,
+  C library, macOS version; isolates from the machine's packages; children of the bundle's own
+  interpreter see its packages, other Pythons don't (ADR-0027).
+- **Evidence:** the gauntlet (24 projects, every hostile condition, plus running pure bundles on
+  every other installed Python) passes locally and in CI on Linux x64/arm64, macOS arm64 and
+  Windows; Lambda zips run in AWS's Lambda image; nightly: top-200 PyPI smoke test, a 22-program
+  corpus and four real test suites (failures open issues). Warm start equals an installed venv.
+- **Not yet:** a PyPI release (0.0.1 is a placeholder), `[tool.bundleup]` configuration, speed
+  claims re-measured against pex's fastest configuration (roadmap 18-19).
+- **ADR status:** 0023-0026 are **Proposed** (written while the owner was away, 2026-10-05/06);
+  0027-0031 were accepted when the owner asked for the [independent
+  review](docs/findings/2026-10-07-independent-review.md)'s findings to be fixed.
 - bundleup depends on the `uv` package (bundled binary) but prefers a uv ≥ 0.9 on `PATH`
-  (ADR-0011, at the user's request).
-- **Builds are 2-9× faster than pex** after parallel compression and a per-wheel bytecode cache
-  (gauntlet 21: 2.5 s vs pex 5.5 s; [findings](docs/findings/2026-10-05-faster-builds.md),
-  [ADR-0020](docs/adr/0020-parallel-zip-and-bytecode-cache.md)). Rust stays reserved
-  for the analyzer's scanner ([findings](docs/findings/2026-10-04-large-project-and-rust.md)).
-- Engineering tooling done (Ruff, pyright, hooks; [ADR-0015](docs/adr/0015-engineering-tooling.md)).
-- **CI** (public repo, free): checks, tests on 4 OSes, and the gauntlet on Linux x64/arm64, Windows
-  x64 and macOS arm64 × Python 3.9/3.11/3.12. bundleup passes everywhere, including Windows.
-- **Correctness checks:** every build fails unless the payload matches `uv.lock` and every
-  wheel's `RECORD` exactly (`src/bundleup/_verify.py`); the gauntlet's `matches-venv` condition
-  compares each bundle with a `uv sync` install. Every bundle carries `manifest.json`;
-  `bundleup verify` checks a bundle and its unpacked copy against it
-  ([ADR-0019](docs/adr/0019-manifest-and-verify-command.md)). Item 4 is done. The nightly top-PyPI smoke
-  test: the top 100 pass on all four OSes ([findings](docs/findings/2026-10-05-ci-and-correctness.md)).
-- **CLI follows the style guide** (ADR-0016): `bundleup build [PATH]`, `--json`, `error:`/`hint:`,
-  exit codes, a typed library API with lazy exports
-  ([ADR-0018](docs/adr/0018-package-layout-and-lazy-api.md)). Open rules are listed
-  in the style guide's "Implementation status".
-- **`bundleup check`** (roadmap item 10, [ADR-0024](docs/adr/0024-check-command-and-build-analysis.md),
-  **Proposed**): code the target Python can't compile (error in the project, warning in a
-  dependency), data files outside packages, sizes; every build runs it; `--strict`. Wheel
-  executables (`bin/ruff`) and `.pth` files now work like a venv
-  ([ADR-0023](docs/adr/0023-payload-behaves-like-site-packages.md), **Proposed**; gauntlet 22-23).
-- **Output formats and presets** (roadmap item 11, [ADR-0025](docs/adr/0025-dir-and-lambda-formats-and-presets.md),
-  **Proposed**): `--format dir|lambda`, `--target lambda|lambda-arm64|claude-api`,
-  `bundleup targets`; `gauntlet/formats.py` (CI runs Lambda zips in AWS's Lambda image).
-- **Real-world suites** (item 4 done): click, packaging, markupsafe, itsdangerous tests pass
-  identically from bundles on four OSes, nightly (`suites.yml`;
-  [findings](docs/findings/2026-10-06-formats-checks-and-suites.md)).
-- **`pylock.toml` input** (roadmap item 12, [ADR-0026](docs/adr/0026-pylock-toml-input.md),
-  **Proposed**): used when a project has no `uv.lock`. The roadmap's "Next up" list is done.
-- **Weekly nightly summary** (`weekly.yml`, Mondays): a findings page on a `weekly/<date>` branch;
-  Actions can't open PRs in this repo (a setting), so it opens an issue linking the branch.
-- **Cross-target builds** (ADR-0014): `bundleup build --python 3.11 --python-platform linux` on a Mac;
-  wheels checked against the target; CI proves three build→run pairs.
-- **Nightly corpus** (item 6): 20 PyPI CLIs + 2 repos run installed vs bundled; failures become
-  `corpus-failure` issues (agent triage deferred).
-- **Runtime hardening** (item 8): unpack lock for simultaneous first runs; bundles hide the
-  machine's own packages unless `BUNDLEUP_INHERIT_PATH=1` ([ADR-0021](docs/adr/0021-isolate-from-machine-packages.md));
-  `bundleup cache list|clean` ([ADR-0022](docs/adr/0022-cache-command.md)).
-- Next: roadmap items 1-12 are done; [docs/roadmap.md](docs/roadmap.md) "Next up" lists proposed
-  items 13-17 for the owner to order. ADRs 0023-0026 are **Proposed** (written 2026-10-05/06
-  while the owner was away).
+  (ADR-0011). Rust stays reserved for a future scanner (ADR-0008).
 
 ## Layout
 

@@ -9,154 +9,39 @@ before work starts, and everything has to respect the accepted ADRs (in particul
 
 ## Next up
 
-In order. Items marked *Proposed* need the user's confirmation of the ADR before the work is
-merged; ask if unsure.
+In order. Take the first open item. Decisions need an ADR; one the owner hasn't confirmed is
+marked *Proposed*.
 
-1. ~~**Engineering tooling**~~ **Done 2026-10-05** (`bf90979`). ([ADR-0015](adr/0015-engineering-tooling.md)): Ruff (format + lint,
-   `target-version = "py39"`), pyright, a `pre-commit`-compatible hook config (format, lint, type
-   check on commit; tests on push). Land it as one checkpoint commit that also reformats existing
-   code. Follow [python-for-js-reviewers.md](python-for-js-reviewers.md) when fixing what the
-   checks flag.
-2. ~~**CI on GitHub Actions**~~ **Done 2026-10-05:** [`ci.yml`](../.github/workflows/ci.yml); every
-   push runs checks, tests on 4 OSes and the gauntlet on 9 OS × Python jobs. Was: **CI on GitHub Actions, across the platform matrix** ([ADR-0015](adr/0015-engineering-tooling.md),
-   [ADR-0017](adr/0017-platform-matrix-and-corpus-testing.md), [testing-strategy.md](testing-strategy.md)).
-   - **First, ask the owner to make the repo public** (they're fine with it): GitHub Actions is
-     free and unlimited on standard runners for public repos. Private repos get 2,000 minutes a
-     month, then per-minute charges (macOS $0.062/min), which runs out fast.
-   - **Every push:** lint, type check, unit tests.
-   - **Every push (or nightly if slow):** the gauntlet, including hostile conditions, on this
-     matrix:
-
-     | OS | Runner | Pythons |
-     |---|---|---|
-     | Linux x64 | `ubuntu-24.04` | 3.9, 3.11, 3.12 (+ 3.13/3.14 as they matter) |
-     | Linux arm64 | `ubuntu-24.04-arm` | 3.11, 3.12 |
-     | Windows x64 | `windows-2025` | 3.11, 3.12 |
-     | macOS arm64 | `macos-15` | system 3.9, 3.12 |
-     | macOS Intel / Windows arm64 | `macos-15-intel` / `windows-11-arm` | nightly spot checks |
-
-   - **Limits to design around:** 20 concurrent jobs (5 macOS), 6 hours per job, artifact storage
-     quotas (store JSON results, not bundles).
-   - **Local machines are for debugging, not CI:** the Mac (macOS, system Python 3.9, Linux
-     containers/VMs via Colima/Lima/UTM) and the owner's System76 laptop (real x86_64 Linux, can host
-     a Windows VM). No hardware purchases until a concrete need appears.
-3. ~~**User review**~~ **Done 2026-10-05:** ADR-0010 accepted, ADR-0016 accepted with verbs
-   (`bundleup build`), ADR-0011's CLI superseded by ADR-0016. Was: **User review of [ADR-0010](adr/0010-bundle-format-and-loader.md),
-   [ADR-0011](adr/0011-cli-and-build-pipeline.md) and [ADR-0016](adr/0016-cli-and-api-conventions.md)**
-   (all Proposed). Summarize each for the user in JavaScript terms and ask for decisions,
-   including the **command shape** (verbs vs default action; see
-   [cli-style-guide.md](cli-style-guide.md) "Open decision").
-4. **Correctness verification beyond the gauntlet.** The gauntlet proves bundles *run and behave*
-   for 22 hand-written projects; nothing yet proves a bundle contains *exactly* the right files.
-   In order of value (**done 2026-10-05:** lock vs bundle and `RECORD` checks on every build, the
-   differential test as the gauntlet's `matches-venv` condition):
-   - **Lockfile vs bundle check:** every locked runtime distribution present at the locked
-     version; nothing extra (no dev dependencies); a build-time error if not.
-   - **Wheel integrity:** every bundled file matches the sha256 in its wheel's `RECORD`.
-   - ~~**Embedded manifest + `bundleup verify`**~~ **Done 2026-10-05**
-     ([ADR-0019](adr/0019-manifest-and-verify-command.md)): the bundle records every file's hash;
-     `bundleup verify app.pyz` (or `uvx bundleup verify`) re-checks it. The owner chose a command
-     over a hook inside every bundle (2026-10-05); it lands after item 5 adds verb commands. Together with the two checks above and reproducible
-     builds, this is a hash chain from `uv.lock` to every file that runs
-     ([testing-strategy.md](testing-strategy.md) "What correct means").
-   - **Differential test vs an installed venv:** for any project, compare the bundle with
-     `uv sync` (same distributions and versions via `importlib.metadata`, every top-level module
-     importable, same entry points).
-   - ~~**Breadth smoke test (nightly CI)**~~ **Built 2026-10-05**
-     ([`gauntlet/smoke.py`](../gauntlet/smoke.py), [`nightly.yml`](../.github/workflows/nightly.yml)):
-     bundle the top few hundred PyPI packages and import
-     each one's top-level modules; turn every failure into a gauntlet project or a learning.
-   - ~~**Real-world suites**~~ **Done 2026-10-06** ([`gauntlet/suites.py`](../gauntlet/suites.py),
-     [`suites.yml`](../.github/workflows/suites.yml), [findings](findings/2026-10-06-formats-checks-and-suites.md)):
-     click, packaging, markupsafe and itsdangerous's own suites pass identically in a venv and
-     from their bundles on four OSes.
-5. ~~**Align the CLI with the style guide**~~ **Done 2026-10-05** (see the style guide's
-   "Implementation status" for the rules still open). Was: **Align the CLI with the style guide** ([cli-style-guide.md](cli-style-guide.md),
-   [ADR-0016](adr/0016-cli-and-api-conventions.md)): `bundleup build [PATH]` (verbs), stderr/stdout split,
-   `error:`/`hint:` messages, exit codes, `--json`, library API (`build()`, `BuildOptions`,
-   `BundleupError`), snapshot tests.
-6. **Nightly corpus testing with AI triage** (**steps 1-5 built 2026-10-05**:
-   [`corpus.toml`](../gauntlet/corpus.toml), [`corpus.py`](../gauntlet/corpus.py),
-   [`corpus_issues.py`](../gauntlet/corpus_issues.py), [`corpus.yml`](../.github/workflows/corpus.yml);
-   step 6 deferred by the owner; step 7 built 2026-10-05: [`weekly.yml`](../.github/workflows/weekly.yml)) ([testing-strategy.md](testing-strategy.md),
-   [ADR-0017](adr/0017-platform-matrix-and-corpus-testing.md), accepted 2026-10-05: issues first, agent
-   triage (step 6) later). Real open-source projects,
-   cloned and bundled every night, so bundleup is tested on code nobody wrote for us. Needs items
-   4–5 first (correctness checks, stable `--json` and exit codes). Build it in this order:
-   1. **Corpus list** (a checked-in file): a stratified mix, not random repos. Public, clearly
-      licensed GitHub projects with `pyproject.toml` + `uv.lock` + a CLI entry point; popular CLI
-      apps from PyPI (wrapped in a tiny locked project); PEP 723 scripts; top PyPI packages
-      (import-only). **Pin every entry to a commit SHA.** Start with ~20 and grow.
-   2. **Nightly workflow** on GitHub-hosted runners across the matrix (item 2): for each project,
-      clone at the pinned commit, install it normally (`uv sync`) **and** bundle it, then run the
-      same command both ways (`--help`, `--version`, or a documented smoke command).
-   3. **Pass/fail oracle:** same exit code and output both ways, plus the correctness checks from
-      item 4 (lock vs bundle, `RECORD` hashes, environment snapshot). A clear refusal (e.g. "needs
-      system libraries") counts as a pass.
-   4. **Results:** one small JSON record per run: project, commit, OS, Python, bundleup version,
-      failing phase (build / run / compare), exit code, error excerpt, timings.
-   5. **Deduplicate** by failure signature (phase + exception + package + bundleup function) and
-      open or update **one GitHub issue per signature**, labelled `corpus-failure`, with every
-      reproduction attached.
-   6. **AI triage:** a scheduled agent takes new `corpus-failure` issues, reproduces each, classifies
-      it (bundleup bug / bad refusal message / project problem / flaky), **reduces real bugs to a
-      new gauntlet project**, proposes a fix as a pull request, and re-runs the gauntlet plus the
-      original project. **The owner merges; agents never merge their own fixes.**
-   7. **Weekly summary** in `docs/findings/`: pass rate by OS and Python, new and fixed signatures.
-      Built: every Monday, [`weekly_summary.py`](../gauntlet/weekly_summary.py) writes
-      `docs/findings/<date>-nightly-summary.md` on a branch and opens a pull request (or an issue
-      with a link, while Actions may not open pull requests).
-   - **Safety:** third-party code runs only on ephemeral GitHub-hosted runners with no secrets, or
-     in a throwaway VM/container on the System76 laptop. Never directly on personal machines.
-   - **Budget and fair use:** batch size and matrix width are configuration; cap agent triage per
-     night; keep batches modest (tens of projects a night), since GitHub's terms forbid
-     "disproportionate burden".
-7. ~~**Cross-target builds**~~ **Done 2026-10-05** (`--python-platform`; CI builds on macOS → runs on
-   Linux, Linux → Windows, Linux → macOS; [`gauntlet/cross.py`](../gauntlet/cross.py)). Was: (`--python`, `--python-platform` in uv's vocabulary;
-   [ADR-0014](adr/0014-output-formats-and-target-presets.md), accepted): build a Linux bundle from
-   a Mac. Gauntlet coverage for at least manylinux x86_64 + CPython 3.11.
-8. ~~**Runtime hardening**~~ **Done 2026-10-05:** `BUNDLEUP_CACHE` override and cache order (milestone 1);
-   per-build unpack lock (16 simultaneous first runs 3.2 s → 0.55 s); `bundleup cache list|clean`
-   ([ADR-0022](adr/0022-cache-command.md)); isolated `sys.path` ([ADR-0021](adr/0021-isolate-from-machine-packages.md)).
-9. ~~**Faster large builds**~~ **Done 2026-10-05** ([findings](findings/2026-10-05-faster-builds.md),
-   [ADR-0020](adr/0020-parallel-zip-and-bytecode-cache.md)). Was: threaded compression, per-wheel `.pyc` cache
-   ([findings](findings/2026-10-04-large-project-and-rust.md)).
-10. ~~**`bundleup check`**~~ **Done 2026-10-05** ([ADR-0024](adr/0024-check-command-and-build-analysis.md),
-   Proposed): code the target Python can't compile (an error in the project, a warning in a
-   dependency), data files outside packages, a size report, `--strict`; every build runs it. On
-   the way, two breakages found and fixed instead of warned about: wheel executables and `.pth`
-   files ([ADR-0023](adr/0023-payload-behaves-like-site-packages.md)). Was: the pre-ship analyzer,
-   including the compatibility pre-check (native code that doesn't match the target, already
-   enforced by cross builds).
-11. ~~**`--format dir`** and **`--target lambda`**~~ **Done 2026-10-06** ([ADR-0025](adr/0025-dir-and-lambda-formats-and-presets.md),
-   Proposed): `--format dir|lambda`, presets `lambda`, `lambda-arm64`, `claude-api`, `bundleup targets`;
-   [`gauntlet/formats.py`](../gauntlet/formats.py) runs Lambda zips in AWS's Lambda image in CI.
-   Was: ([ADR-0014](adr/0014-output-formats-and-target-presets.md), accepted).
-12. ~~**`pylock.toml` input**~~ **Done 2026-10-06** ([ADR-0026](adr/0026-pylock-toml-input.md), Proposed):
-    a project's `pylock.toml` when it has no `uv.lock`; works with uv- and pip-written locks. Was:
-    ([ADR-0006](adr/0006-delegate-to-uv-and-existing-files.md)): a hedge against depending on uv's own lockfile.
-
-**Items 1-12 are done (2026-10-06).** An independent review on 2026-10-07
-([findings](findings/2026-10-07-independent-review.md)) found real gaps; the owner asked for all
-of it to be fixed. In order:
-
-13. ~~**Bugs the review found**~~ **Done 2026-10-07** (ADR-0027, 0028, 0029): children of other Pythons pick up the bundle (PYTHONPATH leak);
-    the claude-api preset's platform level and the misleading "only publishes source" hint;
-    `uv.lock` silently written into the project, unlocked scripts; backslash `RECORD` paths;
-    unchecked-hash `.pyc` in `dir`/`lambda`; `--strict` deleting a good Lambda zip; the Lambda
-    handler taken from a console script; no libc/macOS-version check at start-up;
-    `cache clean` missing `pycache_prefix` files; listings on stderr; smoke failures filing no
-    issue; the weekly summary paused.
-14. ~~**Pure-Python bundles run on every minor version**~~ **Done 2026-10-07**
-    ([ADR-0030](adr/0030-pure-python-bundles-run-on-a-range.md)); a versioned shebang.
-15. ~~**Wheel coverage from the lock**~~ **Done 2026-10-07** ([ADR-0031](adr/0031-wheel-coverage-from-the-lock.md)): which packages have no wheel for a target, for several
-    targets at once, without installing (`check`), and precise errors in cross builds.
-16. ~~**Split `_build.py`**~~ **Done 2026-10-07**: remove duplicated helpers, type the entry point.
-17. **Docs match the code**: MISSION, vision, README, a shorter roadmap and "Current state".
 18. **Re-benchmark against pex's best configuration** and restate the speed claims.
-19. **`[tool.bundleup]` configuration and a 0.1 release** (the release itself needs the owner).
+19. **`[tool.bundleup]` configuration and a 0.1 release** (publishing needs the owner).
 
-Deferred: agent triage of corpus issues; standalone executables (needs an ADR); Lambda layers.
+Deferred: agent triage of `corpus-failure` issues (ADR-0017, by the owner); standalone executables
+(needs its own ADR); Lambda layers; one bundle for several platforms; escape hatches (extra files,
+external dependencies).
+
+### Done
+
+Details are in the linked ADRs and findings, and in git history.
+
+| # | Item | Done | Where |
+|---|---|---|---|
+| 1 | Engineering tooling: Ruff, pyright, hooks | 2026-10-05 | [ADR-0015](adr/0015-engineering-tooling.md) |
+| 2 | CI on 4 OSes: checks, tests, gauntlet | 2026-10-05 | [ci.yml](../.github/workflows/ci.yml), [ADR-0017](adr/0017-platform-matrix-and-corpus-testing.md) |
+| 3 | Owner review of ADRs 0010, 0011, 0016 (verbs: `bundleup build`) | 2026-10-05 | [ADR-0016](adr/0016-cli-and-api-conventions.md) |
+| 4 | Correctness: lock and RECORD checks, manifest + `verify`, `matches-venv`, nightly smoke test, real projects' test suites | 2026-10-06 | [ADR-0019](adr/0019-manifest-and-verify-command.md), [findings](findings/2026-10-06-formats-checks-and-suites.md) |
+| 5 | CLI follows the style guide; typed library API | 2026-10-05 | [cli-style-guide.md](cli-style-guide.md), [ADR-0018](adr/0018-package-layout-and-lazy-api.md) |
+| 6 | Nightly corpus with `corpus-failure` issues (agent triage deferred) | 2026-10-05 | [corpus.yml](../.github/workflows/corpus.yml), [ADR-0017](adr/0017-platform-matrix-and-corpus-testing.md) |
+| 7 | Cross-target builds | 2026-10-05 | [ADR-0014](adr/0014-output-formats-and-target-presets.md) |
+| 8 | Runtime hardening: unpack lock, isolation, `cache list/clean` | 2026-10-05 | [ADR-0021](adr/0021-isolate-from-machine-packages.md), [ADR-0022](adr/0022-cache-command.md) |
+| 9 | Faster builds: parallel zip, bytecode cache | 2026-10-05 | [ADR-0020](adr/0020-parallel-zip-and-bytecode-cache.md) |
+| 10 | `bundleup check`; wheel executables and `.pth` files | 2026-10-05 | [ADR-0023](adr/0023-payload-behaves-like-site-packages.md), [ADR-0024](adr/0024-check-command-and-build-analysis.md) |
+| 11 | `--format dir/lambda`, presets, `bundleup targets` | 2026-10-06 | [ADR-0025](adr/0025-dir-and-lambda-formats-and-presets.md) |
+| 12 | `pylock.toml` input | 2026-10-06 | [ADR-0026](adr/0026-pylock-toml-input.md) |
+| 13 | The independent review's bugs: child-process leak, lockfiles, libc/macOS checks, claude-api preset, RECORD paths, and more | 2026-10-07 | [ADR-0027](adr/0027-children-see-the-bundle-only-from-its-own-python.md), [ADR-0028](adr/0028-a-project-needs-a-lockfile.md), [ADR-0029](adr/0029-start-up-checks-c-library-and-macos-version.md), [review](findings/2026-10-07-independent-review.md) |
+| 14 | Pure-Python bundles run on a range of Python versions | 2026-10-07 | [ADR-0030](adr/0030-pure-python-bundles-run-on-a-range.md) |
+| 15 | Wheel coverage from the lock, for any number of targets | 2026-10-07 | [ADR-0031](adr/0031-wheel-coverage-from-the-lock.md) |
+| 16 | `_build.py` split by step; shared helpers | 2026-10-07 | `src/bundleup/` |
+| 17 | Docs match the code: MISSION, vision, README, roadmap, CLAUDE.md | 2026-10-07 | the review's section 1 |
 
 Before writing code in an unfamiliar area, look at [references.md](references.md) for projects
 that solved similar problems.

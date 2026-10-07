@@ -35,16 +35,19 @@ A bundler in the spirit of esbuild: **one fast command, sensible defaults, one a
 
 - **In:** a project that already declares its dependencies: `pyproject.toml` + `uv.lock` or
   `pylock.toml` (PEP 751), or a single PEP 723 script.
-- **Out:** one `.pyz` per target platform (or one multi-platform `.pyz`). Runs with
-  `python app.pyz`. No install, no network. Planned thin variants from the same resolved files: a
-  vendored directory for host apps and a native AWS Lambda zip
-  ([ADR-0014](docs/adr/0014-output-formats-and-target-presets.md), Proposed).
-- **Check:** a report of everything that will break once packed, *before* you ship: `__file__`
-  reads, `importlib.metadata` lookups, dynamic imports, targets with no matching wheel, dependencies
-  that only ship source, code that needs a newer Python than you target.
-- **Run time:** a small bootstrap that checks the Python version and platform first and fails with
-  a clear message, runs pure-Python code from the zip, and extracts native extensions to a
-  content-addressed cache.
+- **Out:** one `.pyz` per target platform. Runs with `python app.pyz`, on every Python version the
+  lock allows when it's pure Python. No install, no network. Thin variants from the same resolved
+  files: a plain directory for host apps and an AWS Lambda zip
+  ([ADR-0025](docs/adr/0025-dir-and-lambda-formats-and-presets.md)). Not built: one bundle for
+  several platforms.
+- **Check:** a report of what will break once packed, *before* you ship: targets with no matching
+  wheel (from the lock, for any number of platforms), code that doesn't compile on the Python you
+  target, data files a package expects under `sys.prefix`, Lambda size limits. `__file__` reads,
+  metadata lookups and dynamic imports aren't flagged because they work: the payload is unpacked
+  to real files ([ADR-0024](docs/adr/0024-check-command-and-build-analysis.md)).
+- **Run time:** a small bootstrap that checks the Python version, platform, CPU, C library and
+  macOS version first and fails with a clear message, then unpacks the whole payload once to a
+  content-addressed cache and runs from there ([ADR-0010](docs/adr/0010-bundle-format-and-loader.md)).
 
 ## What we're not building
 
@@ -82,8 +85,8 @@ how Pipenv, Yarn 2, PyOxidizer and stickytape failed:
 
 1. **Compatibility first, speed as proof, consolidation later.** Every winner was a drop-in for
    something on day one (npm's registry, Rollup's plugin API, flake8's rule codes, pip's CLI).
-   → Read the files people already have (`uv.lock`, `pylock.toml`, PEP 723). Accept familiar
-   pex/shiv-style flags. Show a measured speedup over pex, not a claim.
+   → Read the files people already have (`uv.lock`, `pylock.toml`, PEP 723). Use uv's flag names
+   (`--python`, `--python-platform`, `--locked`). Show a measured speedup over pex, not a claim.
 2. **Boring beats clever in Python.** PyOxidizer's in-memory imports failed; PyApp's "install it
    normally, cache on disk" works. pnpm's ordinary-looking `node_modules` beat Yarn 2's
    Plug'n'Play.

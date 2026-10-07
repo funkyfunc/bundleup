@@ -6,16 +6,18 @@ And it tells you *before* you ship what won't survive the trip.
 
 Dead simple to use, but also powerful and fast: esbuild's experience, for Python.
 
-> **Status: pre-alpha.** The bundler works for the machine you build on (one platform, one Python
-> version per bundle) and passes the [gauntlet](https://github.com/funkyfunc/bundleup/blob/main/gauntlet/README.md)
-> on macOS. The PyPI release (0.0.1) is still a placeholder; run it from a checkout for now.
+> **Status: pre-alpha.** Builds for this machine or another platform (Linux, macOS, Windows;
+> x86_64 and arm64), passes the [gauntlet](https://github.com/funkyfunc/bundleup/blob/main/gauntlet/README.md)
+> on all four in CI, and the own test suites of click, packaging, markupsafe and itsdangerous pass
+> from bundles. Not yet released: the PyPI package (0.0.1) is a placeholder; run it from a
+> checkout for now.
 
 ## Usage
 
 ```bash
 bundleup build                  # the project in this directory -> dist/<name>.pyz
 bundleup build path/to/script.py  # a PEP 723 script with inline dependencies
-bundleup build --python 3.9     # build for another Python (a bundle runs on one Python version)
+bundleup build --python 3.9     # build with Python 3.9 (pure Python: runs on 3.9 and newer)
 bundleup build --python 3.11 --python-platform linux   # build on a Mac for Linux x86_64
 bundleup build --json           # the result as JSON on stdout, for scripts and agents
 bundleup check                  # what won't survive bundling, and each package's size
@@ -30,11 +32,15 @@ python dist/<name>.pyz          # run it: no install, no network
 bundleup reads `pyproject.toml` + `uv.lock` (or a standard `pylock.toml`, or the script's `# /// script` block) and needs
 [uv](https://docs.astral.sh/uv/) at build time; the bundle needs only Python. On first run it
 unpacks to a cache (`~/Library/Caches/bundleup`, `~/.cache/bundleup`, or a temp directory if
-those aren't writable), so later runs start as fast as an installed virtualenv. A bundle only sees
+those aren't writable), so later runs start as fast as an installed virtualenv. A pure-Python
+bundle runs on every Python version its lock allows (`Python 3.10+`); one with compiled code runs
+on the version it was built for. A bundle only sees
 its own packages and the standard library; set `BUNDLEUP_INHERIT_PATH=1` to also let it use
 packages installed on the machine (they come after the bundle's, but a machine package can still
 win over a bundled namespace package of the same name: a Python rule, PEP 420). If it's started
-with the wrong Python or on the wrong platform, it says so in one sentence.
+with the wrong Python or on the wrong platform, it says so in one sentence. Programs it starts with
+its own Python see its packages; any other Python it starts doesn't. A project needs a lockfile:
+bundleup never writes one into it (run `uv lock` first).
 
 Every build checks the code first: a file of your project that doesn't compile on the target
 Python stops the build, and anything that may not work in a bundle (a dependency's file that needs

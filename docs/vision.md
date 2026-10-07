@@ -42,20 +42,25 @@ aiming to be the esbuild: **dead simple to use, but also powerful and fast.**
 What that means concretely:
 
 **Dead simple**
-- One command, no config file needed. `bundleup app.py` should do the right thing.
+- One command, no config file needed: `bundleup build app.py` does the right thing.
 - Reads the files you already have: `pyproject.toml`, `uv.lock`, `pylock.toml`, PEP 723 scripts.
-- Sensible defaults: target the platform you're on and the Python range your project declares.
+- Sensible defaults: the platform you're on; for pure-Python code, every Python version the lock
+  allows ([ADR-0030](adr/0030-pure-python-bundles-run-on-a-range.md)); with compiled code, the
+  one version it was built for.
 - Errors that name the cause and the fix, not stack traces.
 
 **Powerful**
-- Several target platforms and Python versions from one machine.
-- Native dependencies handled correctly (extracted to a cache, not loaded from the zip).
-- A pre-ship check that finds what will break.
-- Escape hatches for the long tail: force-extract a package, include extra files, mark a
-  dependency external.
+- Other platforms from one machine (`--python-platform`, presets such as `--target lambda`), one
+  bundle per target.
+- Native dependencies handled correctly: the whole payload unpacks once to a cache, so compiled
+  code, `__file__` paths and package metadata work as in a venv.
+- A pre-ship check that finds what will break (`bundleup check`).
+- Not built yet: escape hatches for the long tail (include extra files, mark a dependency
+  external) and one bundle for several platforms.
 
 **Fast**
-- Measured, not claimed: build time compared with pex on every gauntlet project.
+- Measured, not claimed: build time compared with pex, including pex's fastest configuration
+  ([findings](findings/)).
 - Warm rebuilds should feel instant, the way esbuild made bundling disappear from the dev loop.
 - Fast start-up of the bundle itself, including the first run.
 
@@ -69,29 +74,34 @@ the user has to figure out a venv and pip.
 **After:**
 
 ```bash
-bundleup scripts/make_deck.py --target macos-arm64,linux-x86_64
+bundleup build scripts/make_deck.py --target claude-api -o scripts/make_deck.pyz
 ```
 
-You ship `make_deck.pyz` inside the skill. On the user's machine, `python make_deck.pyz` just works: no install, no network.
+You ship `make_deck.pyz` inside the skill. In the sandbox, `python make_deck.pyz` just works: no
+install, no network.
 
 If something can't work, you find out at **build** time, not from a user:
-- "this needs Python 3.12 but you're targeting 3.9";
-- "lxml has no wheel for linux-aarch64";
-- "flask reads templates from disk, so I'll extract it".
+- "make_deck needs Python >=3.12, but the target is Python 3.11";
+- "pillow 12.3.0: wheels only for manylinux_2_27_x86_64, manylinux_2_28_x86_64, ...;
+  x86_64-manylinux_2_28 would work";
+- "deck.py:12 doesn't compile on Python 3.11".
 
 ## What we solve
 
-1. **One command from the files you already have.** It reads your `pyproject.toml`, `uv.lock` or
-   PEP 723 script and produces one `.pyz` per platform. There's nothing new to configure.
+1. **One command from the files you already have.** It reads your `pyproject.toml` with `uv.lock`
+   or `pylock.toml`, or a PEP 723 script, and produces one `.pyz` per platform. There's nothing
+   new to configure, and nothing is written into your project.
 2. **It runs on the user's Python without installing anything.** That includes compiled packages:
-   NumPy, cryptography, lxml. Those get unpacked to a cache on first run, because compiled code
-   can't run from inside a zip. Pure-Python code runs straight from the zip.
-3. **It tells you what will break before you ship.** It flags code that reads files relative to
-   its own location, plugins and versions found through package metadata, modules imported by
-   name at runtime, missing platform builds, and code that needs a newer Python. This check is
-   what sets us apart from the existing tools.
-4. **A clear message instead of a stack trace.** The bundle checks the Python version and platform
-   first and explains the problem if they don't match.
+   NumPy, cryptography, lxml. The payload unpacks once to a cache on first run (compiled code
+   can't run from inside a zip, and plenty of pure-Python code expects real files), so later runs
+   start as fast as an installed venv.
+3. **It tells you what will break before you ship.** Because everything is unpacked, `__file__`
+   paths, package metadata, plugins and imports by name simply work (the gauntlet proves each), so
+   the check looks for what's left: packages with no wheel for a target (from the lock alone, for
+   any number of platforms), code that doesn't compile on the Python you target, data files a
+   package expects under `sys.prefix`, and size limits for Lambda.
+4. **A clear message instead of a stack trace.** The bundle checks the Python version, platform,
+   CPU, C library and macOS version first and explains the problem if they don't match.
 
 ## What people use it for
 
@@ -100,9 +110,9 @@ Examples, not the definition (from [round 4 research](research/round-4-synthesis
   scripts, HPC jobs on offline compute nodes, air-gapped servers, Raspberry Pi, course tools and
   graders, agent sandboxes and skills (e.g. Claude API Skills, which have no network), and Docker
   images built by copying one `app.pyz`.
-- **Coming:** mixed fleets and customers' machines (cross-platform builds), AWS Lambda (a native
-  Lambda zip), plugins for apps with Python built in such as Splunk and QGIS (`--format dir`).
-  See [ADR-0014](adr/0014-output-formats-and-target-presets.md).
+- **Also built (2026-10):** builds for other platforms from one machine, AWS Lambda zips
+  (`--target lambda`), plain directories for apps with Python built in such as Splunk and QGIS
+  (`--format dir`). See [ADR-0025](adr/0025-dir-and-lambda-formats-and-presets.md).
 - **Not for:** desktop apps for people who don't have Python, Cloudflare Workers/Pyodide, Python in
   Excel, projects that depend on system libraries or CUDA.
 
