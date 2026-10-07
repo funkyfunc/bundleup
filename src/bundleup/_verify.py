@@ -21,7 +21,6 @@ import hashlib
 import io
 import json
 import os
-import sys
 import tempfile
 import zipfile
 from collections.abc import Collection, Iterable
@@ -34,12 +33,8 @@ from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
 from . import _loader
+from . import _toml as tomllib
 from ._errors import NotABundleError
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
 
 # Paths bundleup removes from the install on purpose (see build.SKIP_TOP); console-script
 # launchers are removed too, and passed to check_records.

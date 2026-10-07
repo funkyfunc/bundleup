@@ -9,21 +9,17 @@ environment variables win over it; it wins over defaults.
 
 from __future__ import annotations
 
-import sys
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from . import _toml as tomllib
 from ._errors import ProjectError, UsageError
 from ._targets import FORMATS
 
 if TYPE_CHECKING:
     from ._build import BuildOptions
 
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
 
 # Key in [tool.bundleup] -> BuildOptions field. Strings unless listed in BOOLEANS.
 KEYS = {

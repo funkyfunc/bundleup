@@ -11,7 +11,7 @@ from pathlib import Path
 
 import pytest
 
-from bundleup import BuildOptions, UsageError, build
+from bundleup import BuildOptions, CheckFailedError, UsageError, build
 from bundleup import _targets as t
 
 SCRIPT = """\
@@ -94,3 +94,20 @@ def test_dir_output_notices_edited_sources(tmp_path: Path) -> None:
     env = {**os.environ, "PYTHONPATH": str(out), "PYTHONDONTWRITEBYTECODE": "1"}
     done = subprocess.run([sys.executable, "-c", code], env=env, capture_output=True, text=True)
     assert done.stdout.strip() == "{'ok': 101}", done.stderr
+
+
+def test_a_presets_size_limit_warns_and_strict_writes_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """claude-api carries the Skills upload limit (30 MB); a tiny made-up preset shows how."""
+    python = f"{sys.version_info[0]}.{sys.version_info[1]}"
+    tiny = t.Preset("tiny", "test", "pyz", python, lambda _: "x86_64-unknown-linux-gnu", (10, "x"))
+    monkeypatch.setitem(t.PRESETS, "tiny", tiny)
+    (tmp_path / "fn.py").write_text(SCRIPT)
+    out = tmp_path / "fn.pyz"
+    result = build(BuildOptions(path=tmp_path / "fn.py", target="tiny", output=out))
+    assert [d.code for d in result.diagnostics] == ["size-limit"]
+    out.unlink()
+    with pytest.raises(CheckFailedError):
+        build(BuildOptions(path=tmp_path / "fn.py", target="tiny", output=out, strict=True))
+    assert not out.exists()

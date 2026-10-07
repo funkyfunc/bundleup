@@ -47,6 +47,9 @@ class Preset:
     format: Format
     python: str  # the default; --python overrides it
     platform_for: Callable[[str], str]  # the Python version -> uv platform name
+    # The most the destination accepts, in bytes, and what it is (Lambda's limits are checked by
+    # the lambda format itself).
+    size_limit: tuple[int, str] | None = None
 
     def expansion(self, python: str | None = None) -> list[str]:
         """The flags this preset stands for (with `python` instead of the default, if given)."""
@@ -68,6 +71,7 @@ class Preset:
             "python": self.python,
             "python_platform": self.platform_for(self.python),
             "expansion": self.expansion(),
+            "size_limit_bytes": self.size_limit[0] if self.size_limit else None,
         }
 
 
@@ -99,6 +103,8 @@ PRESETS = {
             "pyz",
             "3.11",
             lambda _python: "x86_64-manylinux_2_28",
+            # "Total upload size must be under 30 MB (uncompressed)" (Skills guide, 2026-10-07).
+            (30 * 1000 * 1000, "a Claude API Skill's 30 MB upload limit"),
         ),
     )
 }

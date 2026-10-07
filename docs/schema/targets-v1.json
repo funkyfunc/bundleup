@@ -76,6 +76,13 @@
                 "items": {
                   "type": "string"
                 }
+              },
+              "size_limit_bytes": {
+                "type": [
+                  "integer",
+                  "null"
+                ],
+                "description": "The destination's size limit, warned about by every build (added within version 1)"
               }
             }
           }

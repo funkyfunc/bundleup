@@ -5,12 +5,12 @@ from __future__ import annotations
 import contextlib
 import shutil
 import subprocess
-import sys
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from packaging.utils import canonicalize_name
 
+from . import _toml as tomllib
 from . import _verify
 from ._errors import (
     LockfileOutdatedError,
@@ -19,11 +19,6 @@ from ._errors import (
     UvError,
     UvNotFoundError,
 )
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
 from ._python import Target
 from ._source import Source, find_uv_lock
 from ._steps import Progress, run

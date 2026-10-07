@@ -3,6 +3,7 @@ the output. Each step lives in its own module: _source, _python, _uv, _payload, 
 
 from __future__ import annotations
 
+import os
 import shutil
 import tempfile
 import time
@@ -132,6 +133,7 @@ def build(
     and commands through `progress` if given.
     """
     options, _config_used = _config.apply(options)  # [tool.bundleup] (ADR-0032)
+    preset = _targets.find(options.target) if options.target else None
     options, _flags = _targets.apply(options)
     fmt = _format(options)
     report = progress or ignore
@@ -151,7 +153,16 @@ def build(
         output = (options.output or p.source.workdir / "dist" / default).absolute()
         diagnostics = list(p.diagnostics)
         if fmt == "pyz":
-            write_pyz(p, output, stage=stage, steps=steps, progress=report)
+            limit = preset.size_limit if preset else None
+            diagnostics += write_pyz(
+                p,
+                output,
+                stage=stage,
+                steps=steps,
+                progress=report,
+                size_limit=limit,
+                strict=options.strict,
+            )
         elif fmt == "dir":
             write_dir(p, output, steps=steps)
         else:
@@ -164,8 +175,11 @@ def build(
                         diagnostics=diagnostics,
                         hint=_STRICT_HINT,
                     )
+            # Next to the output, then renamed over it: never a half-written zip at `output`.
             output.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(staged), output)
+            partial = output.with_name(f".{output.name}.tmp-{os.getpid()}")
+            shutil.copyfile(staged, partial)
+            partial.replace(output)
         steps.finish()
     size = output.stat().st_size if output.is_file() else sum(x.size_bytes for x in p.sizes)
     return BuildResult(

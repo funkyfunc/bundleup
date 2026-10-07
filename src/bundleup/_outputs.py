@@ -20,6 +20,7 @@ from pathlib import Path
 from . import __version__, _bytecode, _verify
 from ._errors import (
     BundleupError,
+    CheckFailedError,
     Diagnostic,
     UsageError,
 )
@@ -153,12 +154,41 @@ def lambda_upload_warning(output: Path) -> Diagnostic:
     )
 
 
-def write_pyz(p: Prepared, output: Path, *, stage: Path, steps: Steps, progress: Progress) -> None:
-    """The default: shebang + outer zip with the loader, the manifest and the payload."""
+def write_pyz(
+    p: Prepared,
+    output: Path,
+    *,
+    stage: Path,
+    steps: Steps,
+    progress: Progress,
+    size_limit: tuple[int, str] | None = None,
+    strict: bool = False,
+) -> list[Diagnostic]:
+    """The default: shebang + outer zip with the loader, the manifest and the payload. With a
+    destination's `size_limit` (a preset's), warns when the bundle is over it, and refuses before
+    writing under `strict`."""
     assert p.entry is not None  # resolved for every .pyz
     steps.start("zip")
     payload = stage / "payload.zip"
     digest, written = write_payload(p.site, payload)
+    diags = []
+    if size_limit and payload.stat().st_size > size_limit[0]:
+        limit, what = size_limit
+        diags.append(
+            Diagnostic(
+                "size-limit",
+                "warning",
+                f"the bundle is {payload.stat().st_size / 1e6:.0f} MB, over {what} "
+                f"({limit / 1e6:.0f} MB)",
+                hint="`bundleup check -v` lists the largest packages",
+            )
+        )
+        if strict:
+            raise CheckFailedError(
+                "found 1 warning, so nothing was written",
+                diagnostics=diags,
+                hint="--strict makes warnings fail too; build without it to allow them",
+            )
     steps.start("verify")
     locked = verify_payload(
         p.site, pylock=p.pylock, target=p.target, written=written, script=p.script
@@ -217,6 +247,7 @@ def write_pyz(p: Prepared, output: Path, *, stage: Path, steps: Steps, progress:
         manifest_json=manifest_json,
         pythons=p.pythons,
     )
+    return diags
 
 
 def _plain_manifest(p: Prepared, fmt: Format, written: dict[str, str]) -> bytes:

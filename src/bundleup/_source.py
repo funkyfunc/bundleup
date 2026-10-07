@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import re
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from packaging.utils import canonicalize_name
 
+from . import _toml as tomllib
 from . import _verify
 from ._errors import (
     NoLockfileError,
@@ -17,10 +17,6 @@ from ._errors import (
 )
 from ._targets import Format
 
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
 PEP723 = re.compile(r"(?m)^# /// (?P<type>[a-zA-Z0-9-]+)$\s(?P<content>(^#(| .*)$\s)+)^# ///$")
 
 

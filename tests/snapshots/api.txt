@@ -11,7 +11,7 @@ ProgressEvent: kind: Literal['step', 'command'], text: str
 Diagnostic: code: str, level: Literal['error', 'warning'], message: str, hint: str | None, detail: str | None, package: str | None, file: str | None, line: int | None
 CheckReport: name: str, version: str | None, target: Target, native: bool, packages: list[PackageSize], diagnostics: list[Diagnostic], duration_s: float, pythons: PythonRange | None, reach: Portability | None
 PackageSize: name: str, version: str | None, size_bytes: int, native: bool
-Preset: name: str, description: str, format: Format, python: str, platform_for: Callable[[str], str]
+Preset: name: str, description: str, format: Format, python: str, platform_for: Callable[[str], str], size_limit: tuple[int, str] | None
 VerifyReport: bundle: Path, name: str, files: int, problems: list[str], cache: Path | None, cache_problems: list[str]
 CachedBundle: path: Path, name: str, size_bytes: int, last_used: float
 CleanReport: removed: list[Path], freed_bytes: int, dry_run: bool

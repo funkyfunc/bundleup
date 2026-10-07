@@ -8,7 +8,6 @@ compatible"), and by `bundleup check --also-platform`, which checks other target
 
 from __future__ import annotations
 
-import sys
 from dataclasses import dataclass
 from typing import Any
 
@@ -16,13 +15,9 @@ from packaging.markers import Marker
 from packaging.tags import Tag
 from packaging.utils import InvalidWheelFilename, canonicalize_name, parse_wheel_filename
 
+from . import _toml as tomllib
 from ._errors import Diagnostic
 from ._platforms import TAG_OS, Platform, parse
-
-if sys.version_info >= (3, 11):
-    import tomllib
-else:
-    import tomli as tomllib
 
 Package = dict[str, Any]  # one [[packages]] entry of a pylock.toml; Any: TOML values
 
