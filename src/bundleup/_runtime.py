@@ -28,6 +28,29 @@ def identity() -> str:
     return repr((sys.prefix, tuple(sys.version_info[:2]), getattr(sys, "abiflags", "")))
 
 
+def runs_bundle_code(site: str) -> bool:
+    """For a child process of the bundle's own interpreter: whether it runs the bundle's code
+    (then it sees the bundle) or something else installed with that Python, such as a console
+    script (then it's left alone: activating would hide that tool's own packages; third review,
+    2026-10-07). sys.argv is already set when sitecustomize runs."""
+    argv = getattr(sys, "argv", None) or [""]
+    first = argv[0]
+    if first == "-c":
+        return True  # sys.executable -c ..., and multiprocessing's spawn and forkserver children
+    if first == "-m":
+        original = getattr(sys, "orig_argv", None)  # 3.10+: the full command line
+        if original and "-m" in original[:-1]:
+            top = original[original.index("-m") + 1].split(".")[0]
+            return os.path.isdir(os.path.join(site, top)) or os.path.isfile(
+                os.path.join(site, top + ".py")
+            )
+        return True  # 3.9 can't tell which module: assume the bundle's own (the common case)
+    if not first:
+        return False  # an interactive interpreter
+    script = os.path.normcase(os.path.abspath(first))
+    return script.startswith(os.path.normcase(os.path.abspath(site)) + os.sep)
+
+
 def site_packages_index() -> int:
     """Where a venv's site-packages would sit: after the standard library, before other packages."""
     for i, p in enumerate(sys.path):

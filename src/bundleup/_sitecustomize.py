@@ -2,9 +2,11 @@
 #
 # Copied into every .pyz payload as __bundleup__/sitecustomize.py. The bundle puts that directory
 # (and only it) on PYTHONPATH, so every Python its program starts imports this file at start-up:
-# - the bundle's own interpreter (same sys.prefix, version and ABI: `sys.executable -c ...`,
-#   multiprocessing) activates the bundle, as the loader did in the parent;
-# - any other Python (another venv, version or build) is left alone.
+# - the bundle's own interpreter (same sys.prefix, version and ABI) running the bundle's code
+#   (`sys.executable -c ...`, multiprocessing, `-m` of a bundled module) activates the bundle, as
+#   the loader did in the parent;
+# - anything else is left alone: another venv, version or build of Python, and also a tool
+#   installed with the same Python (a console script), whose own packages activation would hide.
 # Either way, the sitecustomize that Python would otherwise have imported still runs.
 # Imported by arbitrary Python 3 versions, so it uses the loader's syntax rules (no f-strings).
 import os
@@ -16,16 +18,15 @@ def _bundleup_child() -> None:
     norm = os.path.normcase(here)
     sys.path[:] = [p for p in sys.path if os.path.normcase(os.path.abspath(p or ".")) != norm]
     site = os.path.dirname(here)
-    expected = os.environ.get("BUNDLEUP_RUNTIME_PYTHON")
     active = os.environ.get("BUNDLEUP_RUNTIME_SITE", "")
-    if expected and os.path.normcase(os.path.abspath(active)) == os.path.normcase(site):
-        actual = repr((sys.prefix, tuple(sys.version_info[:2]), getattr(sys, "abiflags", "")))
-        if actual == expected:
-            sys.path.insert(0, here)
-            try:
-                import _bundleup_runtime  # type: ignore[import-not-found]  # payload module
-            finally:
-                del sys.path[0]
+    if active and os.path.normcase(os.path.abspath(active)) == os.path.normcase(site):
+        sys.path.insert(0, here)
+        try:
+            import _bundleup_runtime  # type: ignore[import-not-found]  # payload module
+        finally:
+            del sys.path[0]
+        same_python = _bundleup_runtime.identity() == os.environ.get(_bundleup_runtime.ENV_PYTHON)
+        if same_python and _bundleup_runtime.runs_bundle_code(site):
             _bundleup_runtime.activate(site)
     _chain(here)
 

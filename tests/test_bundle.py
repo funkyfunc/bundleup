@@ -35,10 +35,15 @@ if os.environ.get("PROBE_CHILD"):  # "self" (the bundle's interpreter) or anothe
     code += "print(json.dumps([sys.path, getattr(m, '__file__', None)]))"
     done = subprocess.run([python, "-c", code], capture_output=True, text=True)
     child = json.loads(done.stdout) if done.returncode == 0 else done.stderr
+tool = None
+if os.environ.get("PROBE_TOOL"):  # a script installed with this same Python, not bundle code
+    cmd = [sys.executable, os.environ["PROBE_TOOL"]]
+    done = subprocess.run(cmd, capture_output=True, text=True)
+    tool = done.stdout.strip() or done.stderr.strip()[-200:]
 env = sorted(k for k in os.environ if k.startswith("BUNDLEUP_"))
 print(json.dumps({"path": sys.path, "file": __file__, "pythonpath": os.environ.get("PYTHONPATH"),
                   "site": os.environ.get("BUNDLEUP_RUNTIME_SITE"), "argv": sys.argv[1:],
-                  "child": child, "env": env}))
+                  "child": child, "env": env, "tool": tool}))
 """
 SYSTEM_PYTHON = "/usr/bin/python3"
 WINDOWS = sys.platform == "win32"
@@ -164,6 +169,32 @@ def test_other_pythons_are_left_alone(bundle: Path, tmp_path: Path) -> None:
     child_path, imported = out["child"]
     assert not any(p.startswith(out["site"]) for p in child_path)
     assert str(imported) == expected
+
+
+def test_tools_installed_with_the_same_python_keep_their_packages(
+    bundle: Path, tmp_path: Path
+) -> None:
+    """Third review: a bundle run by an environment's Python that starts a tool installed in that
+    environment (a Docker image with `pip install awscli`) hid the tool's packages. Children
+    activate the bundle only when they run its code."""
+    venv = tmp_path / "env"
+    subprocess.run([base_python(), "-m", "venv", "--without-pip", str(venv)], check=True)
+    python = venv / ("Scripts/python.exe" if WINDOWS else "bin/python")
+    purelib = subprocess.run(
+        [str(python), "-c", "import sysconfig; print(sysconfig.get_paths()['purelib'])"],
+        capture_output=True,
+        text=True,
+        check=True,
+    ).stdout.strip()
+    (Path(purelib) / "toolpkg.py").write_text("NAME = 'toolpkg'\n")
+    tool = tmp_path / "mytool.py"
+    tool.write_text("import toolpkg\nprint(toolpkg.NAME)\n")
+    env = env_for(tmp_path, PROBE_TOOL=str(tool), PROBE_CHILD="self")
+    r = run(bundle, env, python=str(python))
+    assert r.returncode == 0, r.stderr
+    out = json.loads(r.stdout)
+    assert out["tool"] == "toolpkg"  # the tool sees its environment
+    assert out["site"] in out["child"][0]  # a `-c` child still sees the bundle
 
 
 def test_a_bundle_sets_no_variable_the_cli_reads(bundle: Path, tmp_path: Path) -> None:
