@@ -101,8 +101,8 @@ def test_sizes_count_bytecode_towards_its_package_largest_first(tmp_path: Path) 
 
 def test_the_range_starts_at_the_oldest_python_the_code_compiles_on(tmp_path: Path) -> None:
     """requires-python may promise more than the code delivers (ADR-0030): the project's code is
-    compiled with the installed Pythons below the target, oldest first; versions nobody could
-    check are a warning (second review)."""
+    compiled with the Pythons below the target, oldest first: installed ones, or the target's
+    interpreter checking the older syntax (second review; ADR-0035)."""
     from dataclasses import replace
 
     from bundleup._python import PythonRange
@@ -131,8 +131,21 @@ def test_the_range_starts_at_the_oldest_python_the_code_compiles_on(tmp_path: Pa
         return found, [d.code for d in diags]
 
     some = {(3, 9): "py39", (3, 10): None, (3, 11): "py311", (3, 12): None, (3, 13): None}
-    assert oldest(some) == (PythonRange((3, 11), None), ["python-range"])
+    # 3.9 fails; 3.10 isn't installed, so the target's interpreter checks its syntax: it passes.
+    assert oldest(some) == (PythonRange((3, 10), None), ["python-range"])
     assert oldest({(3, 9): "py39"}) == (PythonRange((3, 14), None), ["python-range"])
     assert oldest({(3, 9): "py311"}) == (wide, [])
-    nothing: dict[tuple[int, int], str | None] = {(3, 9): None, (3, 10): None}
-    assert oldest(nothing) == (wide, ["python-range-unchecked"])
+    # Not installed: the target's interpreter checks the syntax for that version (ast.parse with
+    # feature_version), for real here: a match statement isn't Python 3.9.
+    missing: dict[tuple[int, int], str | None] = {(3, 9): None}
+    narrowed, diags = c.oldest_python(
+        site,
+        project="app",
+        script=None,
+        pythons=wide,
+        target=target,
+        interpreters=missing,
+        run=run,
+    )
+    assert narrowed == PythonRange((3, 14), None)
+    assert [d.message.split(" doesn't compile on ")[1][:10] for d in diags] == ["Python 3.9"]

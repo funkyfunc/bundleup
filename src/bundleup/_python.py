@@ -230,22 +230,6 @@ def find_interpreter(uv: str, version: str, *, cwd: Path, progress: Progress) ->
     return found.strip() or None
 
 
-def fetch_interpreter(uv: str, version: str, *, cwd: Path, progress: Progress) -> str | None:
-    """An interpreter of `version`, installing a uv-managed one if none is installed (as `uv run`
-    does by default; cached afterwards). None if that's impossible: offline, or downloads turned
-    off with UV_PYTHON_DOWNLOADS=never."""
-    found = find_interpreter(uv, version, cwd=cwd, progress=progress)
-    if found:
-        return found
-    try:
-        run(
-            [uv, "python", "install", version], cwd=cwd, what="uv python install", progress=progress
-        )
-    except UvError:
-        return None
-    return find_interpreter(uv, version, cwd=cwd, progress=progress)
-
-
 def check_requires_python(source: Source, target: Target) -> None:
     if not source.requires_python:
         return

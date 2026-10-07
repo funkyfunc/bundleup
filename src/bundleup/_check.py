@@ -34,14 +34,21 @@ if TYPE_CHECKING:
     from ._python import Target
 
 # Runs on the target interpreter: why each listed file doesn't compile (paths relative to argv[1]).
+# argv[3], if given, is an older minor version ("9") to check against with this interpreter:
+# ast.parse(feature_version=) rejects syntax newer than it (best effort, documented as such).
 COMPILE_ERRORS = """
-import json, os, sys
+import ast, json, os, sys
 site, listing = sys.argv[1], sys.argv[2]
+older = (3, int(sys.argv[3])) if len(sys.argv) > 3 else None
 found = []
 for path in open(listing, encoding="utf-8").read().splitlines():
     try:
         with open(os.path.join(site, path), "rb") as f:
-            compile(f.read(), path, "exec", dont_inherit=True)
+            source = f.read()
+        if older:
+            ast.parse(source, path, feature_version=older)
+        else:
+            compile(source, path, "exec", dont_inherit=True)
     except SyntaxError as e:
         found.append([path, e.lineno, e.msg])
     except Exception as e:
@@ -159,12 +166,19 @@ def package_sizes(site: Path, owner: dict[str, _Owner]) -> list[PackageSize]:
 
 
 def compile_errors(
-    site: Path, files: list[str], *, python: str, run: Callable[[list[str]], str]
+    site: Path,
+    files: list[str],
+    *,
+    python: str,
+    run: Callable[[list[str]], str],
+    as_version: tuple[int, int] | None = None,
 ) -> list[list[str | int | None]]:
-    """[path, line, message] for each of `files` that `python` can't compile."""
+    """[path, line, message] for each of `files` that `python` can't compile, or, with
+    `as_version`, whose syntax is newer than that version (checked by `python`, best effort)."""
     to_check = site.parent / "check-list.txt"
     to_check.write_text("\n".join(files), encoding="utf-8")
-    return json.loads(run([python, "-I", "-c", COMPILE_ERRORS, str(site), str(to_check)]))
+    older = [str(as_version[1])] if as_version else []
+    return json.loads(run([python, "-I", "-c", COMPILE_ERRORS, str(site), str(to_check), *older]))
 
 
 def oldest_python(
@@ -180,8 +194,9 @@ def oldest_python(
     """A pure-Python bundle claims every version its requires-python allows (ADR-0030). Check
     that the project's own code compiles on the versions below the target, using whichever of
     them are installed here (`interpreters`: version -> interpreter or None): the range starts at
-    the oldest one that compiles. Versions nobody could check are a warning, not a silent claim
-    (second review, 2026-10-07)."""
+    the oldest one that compiles. A version that isn't installed is checked by the target's
+    interpreter with `ast.parse(feature_version=)`, so no claim goes unchecked (second review,
+    2026-10-07; ADR-0035)."""
     below = sorted(v for v in interpreters if pythons.min <= v < target.version)
     if not below:
         return pythons, []
@@ -201,45 +216,33 @@ def oldest_python(
     failed_on: tuple[int, int] | None = None
     for version in below:
         python = interpreters[version]
-        if python is None:
-            continue
-        found = compile_errors(site, files, python=python, run=run)
+        if python is None:  # not installed: the target's interpreter checks the syntax for it
+            found = compile_errors(
+                site, files, python=target.executable, run=run, as_version=version
+            )
+        else:
+            found = compile_errors(site, files, python=python, run=run)
         if not found:
             verified = version
             break
         if failure is None:
             failure, failed_on = found[0], version
-    if failure is not None and failed_on is not None:
-        # Claim only from the oldest version that compiled (versions between it and the failure
-        # weren't checked), or the target's.
-        start = verified or target.version
-        narrowed = PythonRange(start, pythons.max)
-        path, line, message = failure
-        where = f"{str(path).removeprefix(_verify.SCRIPT_DIR + '/')}{f':{line}' if line else ''}"
-        return narrowed, [
-            Diagnostic(
-                "python-range",
-                "warning",
-                f"{where} doesn't compile on Python {_v(failed_on)} ({message}), which "
-                f"requires-python allows, so the bundle runs on Python {narrowed} only",
-                hint="raise requires-python to the oldest Python the code works on",
-                package=project,
-                file=str(path),
-                line=line if isinstance(line, int) else None,
-            )
-        ]
-    unchecked = [v for v in below if interpreters[v] is None and (verified is None or v < verified)]
-    if not unchecked:
+    if failure is None or failed_on is None:
         return pythons, []
-    span = _v(unchecked[0]) if len(unchecked) == 1 else f"{_v(unchecked[0])}-{_v(unchecked[-1])}"
-    return pythons, [
+    # Claim only from the oldest version that compiled, or the target's.
+    narrowed = PythonRange(verified or target.version, pythons.max)
+    path, line, message = failure
+    where = f"{str(path).removeprefix(_verify.SCRIPT_DIR + '/')}{f':{line}' if line else ''}"
+    return narrowed, [
         Diagnostic(
-            "python-range-unchecked",
+            "python-range",
             "warning",
-            f"the bundle claims Python {pythons} from requires-python, but no Python {span} is "
-            "installed here to check that the code compiles on it",
-            hint=f"install one to check: uv python install {_v(unchecked[0])}",
+            f"{where} doesn't compile on Python {_v(failed_on)} ({message}), which "
+            f"requires-python allows, so the bundle runs on Python {narrowed} only",
+            hint="raise requires-python to the oldest Python the code works on",
             package=project,
+            file=str(path),
+            line=line if isinstance(line, int) else None,
         )
     ]
 
