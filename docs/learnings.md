@@ -6,6 +6,14 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-07** · security · bundleup exported the lock as bare `name==version` lines and let
+  `uv pip install` find them on the default index: a package locked from a private index wasn't
+  found, a same-named one on PyPI would have been bundled (dependency confusion), and hashes were
+  dropped. Installing from uv's `pylock.toml` export uses the locked URLs and checks hashes. Two
+  uv quirks: uv 0.12.23 writes local paths relative to the export file as spelled but reads them
+  from its real path (macOS's temp folder is behind `/var -> /private/var`), and joins absolute
+  paths onto the file's folder; uv 0.12.7 writes them relative to the workspace root. uv never
+  reads `pip.conf`. Evidence: `tests/test_index.py`, `src/bundleup/_uv.py` `relocate_paths`.
 - **2026-10-07** · build · A multi-platform `.pyz` of the founding example (python-pptx, lxml,
   Pillow) for macOS, Linux and Windows on Python 3.11 and 3.12 is 84 MiB and builds in 7.7 s from
   warm caches; each payload repeats the pure-Python packages. `BUNDLEUP_CACHE` is only the first

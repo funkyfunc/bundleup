@@ -77,6 +77,37 @@ Known limits: Lambda doesn't run `.pth` files from `/var/task` (bundleup warns,
 `pth-not-run`), and has no `/dev/shm`, so `multiprocessing.Pool` and `Queue` don't work there
 (an AWS limitation; the emulator CI uses has it, so this isn't tested).
 
+## Behind a company index or proxy
+
+bundleup installs exactly the files the lock names, from the index they were locked from, and
+checks their hashes; a same-named package on PyPI is never used. So the index matters when you
+lock (`uv lock`, your command), not when you build. The bundle itself never uses the network.
+
+uv reads **uv's configuration, not pip's**: a `pip.conf` that points pip at an Artifactory is
+ignored. Set the same URL once for uv, in `~/.config/uv/uv.toml` (Windows:
+`%APPDATA%\uv\uv.toml`) or a project's `pyproject.toml` as `[[tool.uv.index]]`:
+
+```toml
+[[index]]
+url = "https://artifactory.example.com/api/pypi/pypi/simple"  # pip.conf's index-url
+default = true
+```
+
+or `UV_DEFAULT_INDEX=<url>` in the environment. bundleup passes its environment to uv, so these
+work too:
+
+- **Proxy:** `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`.
+- **A proxy that inspects TLS** (a company certificate): `UV_NATIVE_TLS=1` uses the system's
+  certificate store, or `SSL_CERT_FILE=<bundle.pem>`.
+- **Credentials:** `~/.netrc`, keyring, or `UV_INDEX_<NAME>_USERNAME` / `_PASSWORD` for a named
+  index. A lock never stores them. (Not yet tested against an index that needs a login.)
+- **Python downloads:** to check the oldest Python a pure-Python bundle supports, bundleup may
+  download that Python (into its own cache, from GitHub); `UV_PYTHON_INSTALL_MIRROR` points it
+  at a mirror. If the download fails, the build still works and says the range is approximate.
+
+Tested: a script locked against a private index (a flat folder) builds and runs from it
+(`tests/test_index.py`).
+
 ## Will it build for other platforms?
 
 `bundleup check --also-platform windows --also-platform linux --also-platform macos` reads the

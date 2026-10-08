@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import contextlib
+import json
+import os
+import re
 import shutil
 import subprocess
-from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 from packaging.utils import canonicalize_name
@@ -102,11 +104,15 @@ def export(
     uv: str, source: Source, *, lock_mode: str | None, stage: Path, progress: Progress
 ) -> tuple[list[list[str]], Path]:
     """What to install, as `uv pip install` arguments, and the pylock.toml (PEP 751) the
-    lock-vs-bundle check reads. From uv.lock: exported twice in parallel, as requirements and as
-    pylock.toml. From a project's own pylock.toml: that file (ADR-0026)."""
+    lock-vs-bundle check reads. From uv.lock: exported as a pylock.toml, which names each
+    package's index and files with their hashes, and installed from that, so a bundle gets
+    exactly the locked files from wherever they were locked (a company index too), never a
+    same-named package from PyPI. From a project's own pylock.toml: that file (ADR-0026)."""
     if source.pylock:
         return from_pylock(source, stage)
-    reqs, pylock = stage / "requirements.txt", stage / "pylock.toml"
+    # The real path: uv writes local paths relative to the file as spelled, but reads them from
+    # its real location, and macOS's temporary folder is behind a symlink (/var -> /private/var).
+    pylock = stage.resolve() / "pylock.toml"
     selection = (
         ["--script", str(source.path)] if source.is_script else ["--no-dev", "--no-editable"]
     )
@@ -116,17 +122,9 @@ def export(
     mode = lock_mode or ("locked" if has_lock(source) else None)
     if mode:
         selection.append(f"--{mode}")
-    as_requirements = ["--no-hashes", "--no-header", "--no-annotate", "-o", str(reqs)]
-    as_pylock = ["--format", "pylock.toml", "-o", str(pylock)]
-    commands = [[uv, "export", "--quiet", *selection, *fmt] for fmt in (as_requirements, as_pylock)]
+    command = [uv, "export", "--quiet", *selection, "--format", "pylock.toml", "-o", str(pylock)]
     try:
-        with ThreadPoolExecutor(2) as pool:  # independent reads of the same lock
-            futures = [
-                pool.submit(run, c, cwd=source.workdir, what="uv export", progress=progress)
-                for c in commands
-            ]
-            for future in futures:
-                future.result()
+        run(command, cwd=source.workdir, what="uv export", progress=progress)
     except UvError as e:
         if mode == "locked" and "needs to be updated" in (e.detail or ""):
             what = f"{source.path.name}.lock" if source.is_script else "uv.lock"
@@ -138,7 +136,39 @@ def export(
                 detail=e.detail,
             ) from None
         raise
-    return [["-r", str(reqs)]], pylock
+    lock = None if source.is_script else find_uv_lock(source.path)
+    relocate_paths(pylock, lock.parent if lock else source.workdir)
+    return [["-r", str(pylock)]], pylock
+
+
+# A local path in uv's pylock.toml export: `directory = { path = "." }`, `path = "dist/x.whl"`.
+LOCAL_PATH = re.compile(r'(?P<key>\bpath = )"(?P<value>(?:[^"\\]|\\.)*)"')
+
+
+def relocate_paths(pylock: Path, root: Path) -> None:
+    """Make the export's local paths relative to the pylock.toml, as PEP 751 says and uv reads
+    them. uv 0.12.23 writes them so; older ones write them relative to the lock's directory (the
+    workspace root), which is wrong once the file is in the stage."""
+    here = os.path.abspath(pylock.parent)
+
+    def relocated(m: re.Match[str]) -> str:
+        value = tomllib.loads('v = "' + m["value"] + '"')["v"]  # the TOML string, unescaped
+        if Path(value).is_absolute() or _is_local(Path(here, value)):
+            return m[0]
+        target = os.path.abspath(root / value)
+        try:
+            value = os.path.relpath(target, here)
+        except ValueError:  # another drive on Windows: absolute is all there is
+            value = target
+        return m["key"] + json.dumps(Path(value).as_posix())
+
+    text = pylock.read_text(encoding="utf-8")
+    pylock.write_text(LOCAL_PATH.sub(relocated, text), encoding="utf-8")
+
+
+def _is_local(path: Path) -> bool:
+    """A project directory or a file uv can install from a pylock path."""
+    return path.is_file() or (path / "pyproject.toml").is_file() or (path / "setup.py").is_file()
 
 
 def add_runtime(site: Path) -> None:
