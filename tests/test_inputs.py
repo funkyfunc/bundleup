@@ -165,3 +165,26 @@ def test_a_setuptools_project_without_pyproject(tmp_path: Path) -> None:
     assert sorted(p.name for p in project.iterdir()) == ["lapp", "setup.py"]
     with pytest.raises(NoLockfileError):
         build(BuildOptions(path=project, output=tmp_path / "b.pyz", lock_mode="locked"))
+
+
+def test_a_lock_higher_up_counts_only_for_a_workspace_member(tmp_path: Path) -> None:
+    """A repository root with its own uv.lock isn't the lock of an unrelated project below it
+    (fourth review: the build failed with uv's "--locked was provided"); a member's is."""
+    root = tmp_path / "repo"
+    (root / ".git").mkdir(parents=True)
+    (root / "pyproject.toml").write_text('[project]\nname = "root"\nversion = "1"\n')
+    (root / "uv.lock").write_text("version = 1\n")
+    sub = root / "tools" / "sub"
+    sub.mkdir(parents=True)
+    from bundleup._source import find_uv_lock
+
+    assert find_uv_lock(sub) is None
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "root"\nversion = "1"\n[tool.uv.workspace]\nmembers = ["tools/*"]\n'
+    )
+    assert find_uv_lock(sub) == root / "uv.lock"
+    (root / "pyproject.toml").write_text(
+        '[project]\nname = "root"\nversion = "1"\n'
+        '[tool.uv.workspace]\nmembers = ["tools/*"]\nexclude = ["tools/sub"]\n'
+    )
+    assert find_uv_lock(sub) is None

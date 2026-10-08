@@ -254,13 +254,33 @@ def app_files(source: Source) -> list[tuple[str, Path]]:
 
 
 def find_uv_lock(project: Path) -> Path | None:
-    """The project's uv.lock, or its workspace's (uv keeps one lock at the workspace root)."""
-    for directory in (project, *project.parents):
-        if (directory / "uv.lock").is_file():
+    """The project's uv.lock, or its workspace's: uv keeps one lock at the workspace root. A lock
+    further up counts only if that root's [tool.uv.workspace] lists this project as a member;
+    another project's lock higher in the repository isn't this one's (fourth review)."""
+    if (project / "uv.lock").is_file():
+        return project / "uv.lock"
+    for directory in project.parents:
+        if (directory / "uv.lock").is_file() and _is_member(project, directory):
             return directory / "uv.lock"
         if (directory / ".git").exists():
             break  # don't wander out of the repository
     return None
+
+
+def _is_member(project: Path, root: Path) -> bool:
+    """Whether `root`'s uv workspace includes `project` (its `members` globs, minus `exclude`)."""
+    try:
+        data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError):
+        return False
+    workspace = data.get("tool", {}).get("uv", {}).get("workspace")
+    if not isinstance(workspace, dict):
+        return False
+
+    def matched(key: str) -> bool:
+        return any(project.resolve() in root.glob(g) for g in workspace.get(key, []))
+
+    return matched("members") and not matched("exclude")
 
 
 def script_metadata(text: str) -> dict[str, Any]:  # Any: TOML values have no fixed type
