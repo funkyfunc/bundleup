@@ -215,7 +215,7 @@
     },
     "diagnostics": {
       "type": "array",
-      "description": "Codes: syntax-error (error in the project's code, warning in a dependency), data-files, pth-not-run, unlocked, python-range, python-range-approximate, source-only (warnings), no-wheel, lambda-too-big (errors), or any build error code",
+      "description": "Codes: syntax-error (error in the project's code, warning in a dependency), data-files, pth-not-run, unlocked, python-range, python-range-approximate, source-only (warnings), no-wheel, lambda-too-big, lambda-not-linux (errors), or any build error code",
       "items": {
         "type": "object",
         "required": [

@@ -16,7 +16,7 @@ from typing import Callable, Literal
 from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
 
-from . import _check, _config, _coverage, _platforms, _targets
+from . import _check, _config, _coverage, _platforms
 from ._check import CheckReport
 from ._errors import (
     BundleupError,
@@ -25,9 +25,11 @@ from ._errors import (
     NoCompatibleWheelError,
     UsageError,
 )
+from ._formats import FORMATS, Format
 from ._outputs import (
     LAMBDA_UNZIPPED,
     LAMBDA_UPLOAD,
+    check_size,
     lambda_upload_warning,
     stage_lambda,
     write_dir,
@@ -54,7 +56,6 @@ from ._python import (
 )
 from ._source import Source, load_source, project_version, safe_name, script_metadata, script_path
 from ._steps import Progress, ProgressEvent, Steps, ignore, run
-from ._targets import FORMATS, Format
 from ._text import findings, plural
 from ._uv import add_runtime, export, find_uv, install
 
@@ -73,7 +74,8 @@ class BuildOptions:
     strict: bool = False  # warnings fail the build too (errors always do)
     # What to write (ADR-0025): "pyz" (the default), "dir" or "lambda".
     format: Format | None = None
-    target: str | None = None  # a preset such as "lambda" (`bundleup targets`); flags win
+    # The most the output may be, in bytes: over it is an error, before writing (ADR-0039).
+    max_size: int | None = None
     # More Python versions and platforms: a .pyz gets a payload for every combination of
     # [python, *more_pythons] and [python_platform, *more_python_platforms] (ADR-0038).
     more_pythons: tuple[str, ...] = ()
@@ -142,7 +144,7 @@ def build(
     Raises a BundleupError subclass for every expected failure. Never prints; reports steps
     and commands through `progress` if given.
     """
-    options, fmt, preset = _settle(options)
+    options, fmt = _settle(options)
     report = progress or ignore
     steps = Steps(report)
     combinations = _combinations(options)
@@ -176,20 +178,20 @@ def build(
         output = (options.output or p.source.workdir / "dist" / default).absolute()
         diagnostics = list(p_diagnostics)
         if fmt == "pyz":
-            limit = preset.size_limit if preset else None
             diagnostics += write_pyz(
                 prepared,
                 output,
                 stage=stage,
                 steps=steps,
                 progress=report,
-                size_limit=limit,
-                strict=options.strict,
+                max_size=options.max_size,
             )
         elif fmt == "dir":
+            check_size(sum(x.size_bytes for x in p.sizes), options.max_size, diagnostics)
             write_dir(p, output, steps=steps)
         else:
             staged = stage_lambda(p, stage=stage, steps=steps)
+            check_size(staged.stat().st_size, options.max_size, diagnostics)
             if staged.stat().st_size > LAMBDA_UPLOAD:
                 diagnostics.append(lambda_upload_warning(output))
                 if options.strict:  # checked before writing: an earlier zip stays untouched
@@ -276,13 +278,13 @@ def _merged_diagnostics(prepared: list[Prepared]) -> list[Diagnostic]:
 _STRICT_HINT = "--strict makes warnings fail too; build without it to allow them"
 
 
-def _settle(options: BuildOptions) -> tuple[BuildOptions, Format, _targets.Preset | None]:
-    """What `build` and `check` start from: [tool.bundleup] filled in (ADR-0032), the preset
-    expanded (ADR-0025), the format checked."""
+def _settle(options: BuildOptions) -> tuple[BuildOptions, Format]:
+    """What `build` and `check` start from: [tool.bundleup] filled in (ADR-0032), the format
+    checked."""
     options, _configured = _config.apply(options)
-    preset = _targets.find(options.target) if options.target else None
-    options, _flags = _targets.apply(options)
-    return options, _format(options), preset
+    if options.max_size is not None and options.max_size <= 0:
+        raise UsageError("--max-size must be more than 0", hint="for example: --max-size 30MB")
+    return options, _format(options)
 
 
 def _format(options: BuildOptions) -> Format:
@@ -448,6 +450,17 @@ def _prepare(
     )
     diagnostics += narrowed
     reach = portability(pylock, target=target, pythons=pythons, native=native)
+    if fmt == "lambda" and target.platform != "linux" and not reach.any_os:
+        diagnostics.append(
+            Diagnostic(
+                "lambda-not-linux",
+                "error",
+                "AWS Lambda runs Linux, but this was built for "
+                + target.describe(native, pythons, reach),
+                hint="add --python-platform x86_64-manylinux_2_34 or aarch64-manylinux_2_34 "
+                "(Lambda's Python 3.12+); docs/recipes.md lists the others",
+            )
+        )
     diagnostics.sort(key=lambda d: d.level != "error")
     return Prepared(
         source=source,
@@ -479,7 +492,7 @@ def check(
     itself fails. `options.output` and `options.strict` are ignored. `also_platforms`: more uv
     platform names to check from the lock alone (ADR-0031), for the same Python version.
     `matrix`: wheel coverage for every platform and Python version (`report.matrix`)."""
-    options, fmt, _preset = _settle(options)
+    options, fmt = _settle(options)
     if options.more_pythons or options.more_python_platforms:
         raise UsageError(
             "check looks at one Python version and platform at a time",

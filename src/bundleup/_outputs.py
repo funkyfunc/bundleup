@@ -24,6 +24,7 @@ from ._errors import (
     Diagnostic,
     UsageError,
 )
+from ._formats import Format, describe_size
 from ._payload import (
     COMPILE_ENV,
     Entry,
@@ -36,7 +37,7 @@ from ._payload import (
 from ._python import Portability, PythonRange, Target
 from ._source import Source, safe_name
 from ._steps import Progress, Steps, run
-from ._targets import Format
+from ._text import findings
 
 LOADER = Path(__file__).with_name("_loader.py")
 MANIFEST = "manifest.json"  # in the outer zip, next to __main__.py
@@ -178,13 +179,11 @@ def write_pyz(
     stage: Path,
     steps: Steps,
     progress: Progress,
-    size_limit: tuple[int, str] | None = None,
-    strict: bool = False,
+    max_size: int | None = None,
 ) -> list[Diagnostic]:
     """The default: shebang + outer zip with the loader, the manifest and the payload, or one
-    payload per platform and Python version when there are several (ADR-0038). With a
-    destination's `size_limit` (a preset's), warns when the bundle is over it, and refuses before
-    writing under `strict`."""
+    payload per platform and Python version when there are several (ADR-0038). Refuses, before
+    writing, a bundle over `max_size` bytes (ADR-0039)."""
     first = ps[0]
     assert first.entry is not None  # resolved for every .pyz
     name = safe_name(first.source.name)
@@ -199,23 +198,8 @@ def write_pyz(
         member = "payload.zip" if len(ps) == 1 else f"payload-{digest[:16]}.zip"
         members.setdefault(member, staged)
     total = sum(path.stat().st_size for path in members.values())
-    diags = []
-    if size_limit and total > size_limit[0]:
-        limit, what = size_limit
-        diags.append(
-            Diagnostic(
-                "size-limit",
-                "warning",
-                f"the bundle is {total / 1e6:.0f} MB, over {what} ({limit / 1e6:.0f} MB)",
-                hint="`bundleup check -v` lists the largest packages",
-            )
-        )
-        if strict:
-            raise CheckFailedError(
-                "found 1 warning, so nothing was written",
-                diagnostics=diags,
-                hint="--strict makes warnings fail too; build without it to allow them",
-            )
+    diags: list[Diagnostic] = []
+    check_size(total, max_size, diags)
     steps.start("verify")
     locked = [
         verify_payload(p.site, pylock=p.pylock, target=p.target, written=written, script=p.script)
@@ -389,3 +373,22 @@ def stage_lambda(p: Prepared, *, stage: Path, steps: Steps) -> Path:
         info.compress_type = zipfile.ZIP_DEFLATED
         zf.writestr(info, manifest_json)
     return staged
+
+
+def check_size(size: int, max_size: int | None, diagnostics: list[Diagnostic]) -> None:
+    """Refuse, before anything is written, an output bigger than --max-size (ADR-0039)."""
+    if max_size is None or size <= max_size:
+        return
+    diagnostics.append(
+        Diagnostic(
+            "max-size",
+            "error",
+            f"the output would be {describe_size(size)}, over --max-size {describe_size(max_size)}",
+            hint="`bundleup check -v` lists the largest packages",
+        )
+    )
+    errors = sum(d.level == "error" for d in diagnostics)
+    raise CheckFailedError(
+        f"found {findings(errors, len(diagnostics) - errors)}, so nothing was written",
+        diagnostics=diagnostics,
+    )

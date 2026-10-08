@@ -24,7 +24,7 @@ bundleup build --json           # the result as JSON on stdout, for scripts and 
 bundleup check                  # what won't survive bundling, and each package's size
 bundleup check --also-platform windows   # which packages lack a wheel for another OS
 bundleup check --matrix         # which OS, CPU and Python versions the lock's wheels cover
-bundleup build --target lambda  # an AWS Lambda .zip (Python 3.13, x86_64; `bundleup targets` lists presets)
+bundleup build --max-size 30MB # fail, writing nothing, if the bundle is bigger
 bundleup build --format dir     # a plain directory, for apps that load packages from one
 bundleup verify dist/app.pyz    # check a bundle (and its unpacked copy) against its manifest
 bundleup cache clean            # remove unpacked bundles not used for 30 days

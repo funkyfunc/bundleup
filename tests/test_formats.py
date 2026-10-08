@@ -1,4 +1,4 @@
-"""Output formats and target presets (ADR-0025)."""
+"""Output formats (ADR-0025) and --max-size (ADR-0039)."""
 
 from __future__ import annotations
 
@@ -12,7 +12,7 @@ from pathlib import Path
 import pytest
 
 from bundleup import BuildOptions, CheckFailedError, UsageError, build
-from bundleup import _targets as t
+from bundleup import _formats as f
 
 SCRIPT = """\
 # /// script
@@ -24,33 +24,28 @@ def handler(event, context):
 """
 
 
-def test_presets_expand_and_explicit_flags_win() -> None:
-    options, flags = t.apply(BuildOptions(target="lambda"))
-    assert flags == [
-        "--format",
-        "lambda",
-        "--python",
-        "3.13",
-        "--python-platform",
-        "x86_64-manylinux_2_34",
-    ]
-    assert (options.format, options.python, options.target) == ("lambda", "3.13", None)
-    # Python 3.10 and 3.11 run on Amazon Linux 2, whose glibc is older.
-    options, _ = t.apply(BuildOptions(target="lambda-arm64", python="3.11"))
-    assert options.python_platform == "aarch64-manylinux_2_17"
-    options, _ = t.apply(BuildOptions(target="lambda", format="dir", python_platform="x"))
-    assert (options.format, options.python_platform) == ("dir", "x")
-    assert t.apply(BuildOptions()) == (BuildOptions(), [])
+def test_sizes_read_as_people_write_limits() -> None:
+    assert f.parse_size("30MB") == 30_000_000
+    assert f.parse_size("250 MiB") == 250 * 2**20
+    assert f.parse_size("1.5mb") == 1_500_000
+    assert f.parse_size("1000") == 1000
+    with pytest.raises(UsageError, match="can't read the size `30 MBs`"):
+        f.parse_size("30 MBs")
+    assert (f.describe_size(30_000_000), f.describe_size(1_500_000)) == ("30 MB", "1.5 MB")
 
 
-def test_preset_errors() -> None:
-    with pytest.raises(UsageError, match=r"no Python 3\.9 runtime"):
-        t.apply(BuildOptions(target="lambda", python="3.9"))
-    with pytest.raises(UsageError, match="unknown target `lamda`") as e:
-        t.apply(BuildOptions(target="lamda"))
-    assert e.value.hint == "did you mean `--target lambda`?"
-    with pytest.raises(UsageError, match="needs a Python version"):
-        t.apply(BuildOptions(target="lambda", python="/usr/bin/python3"))
+def test_a_lambda_zip_must_be_for_linux(tmp_path: Path) -> None:
+    """Lambda runs Linux: a zip of macOS or Windows wheels would fail there, so it's an error
+    (unless everything is pure Python, which runs anywhere)."""
+    (tmp_path / "fn.py").write_text(
+        SCRIPT.replace("dependencies = []", 'dependencies = ["pyyaml"]')
+    )
+    lock = subprocess.run(["uv", "lock", "--script", "fn.py"], cwd=tmp_path, capture_output=True)
+    assert lock.returncode == 0, lock.stderr
+    windows = BuildOptions(path=tmp_path / "fn.py", format="lambda", python_platform="windows")
+    with pytest.raises(CheckFailedError) as e:
+        build(windows)
+    assert [d.code for d in e.value.diagnostics] == ["lambda-not-linux"]
 
 
 def test_dir_output_is_importable_and_replaced_only_if_ours(tmp_path: Path) -> None:
@@ -96,18 +91,15 @@ def test_dir_output_notices_edited_sources(tmp_path: Path) -> None:
     assert done.stdout.strip() == "{'ok': 101}", done.stderr
 
 
-def test_a_presets_size_limit_warns_and_strict_writes_nothing(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """claude-api carries the Skills upload limit (30 MB); a tiny made-up preset shows how."""
-    python = f"{sys.version_info[0]}.{sys.version_info[1]}"
-    tiny = t.Preset("tiny", "test", "pyz", python, lambda _: "x86_64-unknown-linux-gnu", (10, "x"))
-    monkeypatch.setitem(t.PRESETS, "tiny", tiny)
+def test_max_size_refuses_every_format_before_writing(tmp_path: Path) -> None:
     (tmp_path / "fn.py").write_text(SCRIPT)
-    out = tmp_path / "fn.pyz"
-    result = build(BuildOptions(path=tmp_path / "fn.py", target="tiny", output=out))
-    assert [d.code for d in result.diagnostics] == ["size-limit"]
-    out.unlink()
-    with pytest.raises(CheckFailedError):
-        build(BuildOptions(path=tmp_path / "fn.py", target="tiny", output=out, strict=True))
-    assert not out.exists()
+    outputs: list[tuple[f.Format, str]] = [("pyz", "fn.pyz"), ("dir", "out"), ("lambda", "fn.zip")]
+    for fmt, name in outputs:
+        out = tmp_path / name
+        options = BuildOptions(path=tmp_path / "fn.py", format=fmt, output=out, max_size=10)
+        with pytest.raises(CheckFailedError) as e:
+            build(options)
+        assert [d.code for d in e.value.diagnostics] == ["max-size"]
+        assert not out.exists()
+    result = build(BuildOptions(path=tmp_path / "fn.py", max_size=10**9))
+    assert result.output.is_file()

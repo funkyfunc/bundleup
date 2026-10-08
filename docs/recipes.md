@@ -1,9 +1,12 @@
 # Recipes
 
-Short, tested-where-noted ways to use bundleup for a destination. Each uses only ordinary
-commands; `bundleup targets` shows what a preset stands for.
+How to build for a destination with ordinary flags. bundleup has no named targets
+([ADR-0039](adr/0039-recipes-instead-of-target-presets.md)): each recipe says which Python,
+platform, format and size limit the destination needs, so you can see and change every choice.
+CI builds gauntlet 14 (python-pptx, lxml, Pillow) with each recipe marked *CI*, from a Mac and
+from Linux.
 
-## A Claude Skill script with dependencies
+## A Claude API Skill or code execution script *(CI)*
 
 Claude API Skills and code execution run in a sandbox with Python 3.11 on Linux x86_64, **no
 network and no package installs** (Anthropic's code execution docs). A skill script that imports
@@ -11,14 +14,16 @@ anything outside the standard library and the preinstalled libraries can't run t
 `uv run` the Agent Skills guide recommends needs the network. A bundle carries its dependencies:
 
 ```bash
-bundleup build tool.py --target claude-api -o my-skill/scripts/tool.pyz
+bundleup build tool.py --python 3.11 --python-platform x86_64-manylinux_2_28 --max-size 30MB \
+  -o my-skill/scripts/tool.pyz
 ```
 
-`--target claude-api` builds for CPython 3.11 on `x86_64-manylinux_2_28` (glibc 2.28 or newer;
-the sandbox's exact glibc isn't documented), so compiled packages such as pydantic, numpy or
-Pillow get Linux wheels even when you build on a Mac. CI builds gauntlet 14 (python-pptx, lxml,
-Pillow) with every preset. Then in `my-skill/SKILL.md`
-([format](https://agentskills.io/specification)):
+- `--python 3.11 --python-platform x86_64-manylinux_2_28`: the sandbox's Python and platform.
+  Its exact glibc isn't documented; 2.28 (2018) is the oldest level that many packages, Pillow 12
+  among them, still publish wheels for.
+- `--max-size 30MB`: a Skill must stay under 30 MB uncompressed; over it, nothing is written.
+
+Then in `my-skill/SKILL.md` ([format](https://agentskills.io/specification)):
 
 ```markdown
 ---
@@ -32,30 +37,41 @@ Run `python scripts/tool.pyz --help` to see the options, then ...
 
 The sandbox already has many libraries installed (pandas, numpy, pillow, python-pptx and more,
 per Anthropic's docs). If your script only needs those, you don't need bundleup there; a bundle
-always carries its own locked versions, which costs space. A Skill must stay under 30 MB
-uncompressed, and the preset warns when the bundle is bigger.
+always carries its own locked versions, which costs space.
 
-Check it before shipping: `bundleup check tool.py --target claude-api --strict`. If a package has
-no wheel for the sandbox, the error names the platforms it does have wheels for. Not yet tested in
-the real sandbox (it needs an API account); the target's Python and platform are the documented
-ones, and CI runs the same kind of cross build (macOS → Linux) on every push.
+Check it before shipping: `bundleup check tool.py --python 3.11 --python-platform
+x86_64-manylinux_2_28 --strict`. If a package has no wheel for the sandbox, the error names the
+platforms it does have wheels for. Not yet tested in the real sandbox (it needs an API account).
 
-## An AWS Lambda function
+## An AWS Lambda function *(CI)*
 
 ```bash
-bundleup build --target lambda --entry app:handler       # dist/<name>-lambda.zip, x86_64
-bundleup build --target lambda-arm64 --python 3.12         # Graviton, Python 3.12
-bundleup build handler.py --target lambda                  # a single PEP 723 script
+bundleup build --format lambda --python 3.13 --python-platform x86_64-manylinux_2_34 --entry app:handler
+bundleup build --format lambda --python 3.13 --python-platform aarch64-manylinux_2_34  # Graviton
+bundleup build handler.py --format lambda --python 3.13 --python-platform x86_64-manylinux_2_34
 ```
+
+Pick the platform from the function's runtime
+([AWS's table](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html), checked
+2026-10-06):
+
+| Runtime | OS | `--python-platform` |
+|---|---|---|
+| `python3.12` and newer | Amazon Linux 2023 (glibc 2.34) | `x86_64-manylinux_2_34` or `aarch64-manylinux_2_34` |
+| `python3.10`, `python3.11` | Amazon Linux 2 (glibc 2.26) | `x86_64-manylinux_2_17` or `aarch64-manylinux_2_17` |
+
+uv has no `manylinux_2_26`, so the older runtimes use 2_17, and packages that stopped publishing
+2_17 wheels (Pillow 12) can't be built for them; `bundleup check` says so. A `--format lambda`
+build of compiled packages for macOS or Windows is an error (`lambda-not-linux`).
 
 The zip has your code and its dependencies at the top, as Lambda expects, with bytecode
 precompiled for the runtime (Lambda's `/var/task` is read-only). Set the function's runtime to
-the Python shown (`python3.13` by default) and its handler to `module.function`: bundleup prints
-it when you pass `--entry app:handler` (`handler app.handler`); for a script `handler.py`, it's
-`handler.<function>`. Bytecode is hash-checked, so edits made in Lambda's console editor apply. bundleup refuses a
-function over Lambda's 250 MB unzipped limit and warns over the 50 MB direct-upload limit.
-Tested in CI: every gauntlet project except the `.pth` one (below) runs inside AWS's own Lambda
-image on x86_64 and arm64.
+the Python you built for and its handler to `module.function`: bundleup prints it when you pass
+`--entry app:handler` (`handler app.handler`); for a script `handler.py`, it's
+`handler.<function>`. Bytecode is hash-checked, so edits made in Lambda's console editor apply.
+bundleup refuses a function over Lambda's 250 MB unzipped limit and warns over the 50 MB
+direct-upload limit. Tested in CI: every gauntlet project except the `.pth` one (below) runs
+inside AWS's own Lambda image on x86_64 and arm64.
 
 Known limits: Lambda doesn't run `.pth` files from `/var/task` (bundleup warns,
 `pth-not-run`), and has no `/dev/shm`, so `multiprocessing.Pool` and `Queue` don't work there

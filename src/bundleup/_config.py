@@ -3,8 +3,9 @@ project, in `pyproject.toml` or a PEP 723 script's `[tool.bundleup]` table. Flag
 environment variables win over it; it wins over defaults.
 
     [tool.bundleup]
-    target = "lambda"
+    format = "lambda"
     entry = "app:handler"
+    max-size = "30MB"
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from typing import TYPE_CHECKING, Any
 
 from . import _toml as tomllib
 from ._errors import ProjectError, UsageError
-from ._targets import FORMATS
+from ._formats import FORMATS, parse_size
 
 if TYPE_CHECKING:
     from ._build import BuildOptions
@@ -23,13 +24,13 @@ if TYPE_CHECKING:
 
 # Key in [tool.bundleup] -> BuildOptions field. Strings unless listed in BOOLEANS or LISTS.
 KEYS = {
-    "target": "target",
     "format": "format",
     "python": "python",
     "python-platform": "python_platform",
     "entry": "entry",
     "output": "output",
     "strict": "strict",
+    "max-size": "max_size",
 }
 BOOLEANS = {"strict"}
 # Keys that also take a list: a .pyz for several Pythons or platforms (ADR-0038).
@@ -98,6 +99,14 @@ def apply(options: BuildOptions) -> tuple[BuildOptions, list[str]]:
             raise _invalid(
                 where, f"`{key}` must be {kind}", f"for example: {key} = {_example(key)}"
             )
+        if key == "max-size":  # "30MB", as on the command line
+            if options.max_size is None:
+                try:
+                    changes[field] = parse_size(str(value))
+                except UsageError as e:
+                    raise _invalid(where, str(e), e.hint or "") from None
+                used.append(f'{key} = "{value}"')
+            continue
         if key == "format" and value not in FORMATS:
             raise _invalid(where, f"unknown format `{value}`", f"use one of {', '.join(FORMATS)}")
         current = getattr(options, field)
@@ -113,4 +122,4 @@ def apply(options: BuildOptions) -> tuple[BuildOptions, list[str]]:
 
 
 def _example(key: str) -> str:
-    return {"strict": "true", "format": '"lambda"', "target": '"lambda"'}.get(key, '"..."')
+    return {"strict": "true", "format": '"lambda"', "max-size": '"30MB"'}.get(key, '"..."')

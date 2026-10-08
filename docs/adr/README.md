@@ -22,7 +22,7 @@ and change only the old one's status line.
 | [0011](0011-cli-and-build-pipeline.md) | CLI shape and build pipeline | Accepted (pipeline); CLI superseded by 0016 |
 | [0012](0012-lead-with-what-it-does.md) | Describe bundleup by what it does, with use cases as examples | Accepted |
 | [0013](0013-agent-sandboxes-as-headline-use-case.md) | Agent sandboxes as the headline use case, served by target profiles and skill output | Accepted (positioning); features Proposed |
-| [0014](0014-output-formats-and-target-presets.md) | `.pyz` stays the product; add `dir` and Lambda outputs and printable target presets | Accepted |
+| [0014](0014-output-formats-and-target-presets.md) | `.pyz` stays the product; add `dir` and Lambda outputs and printable target presets | Accepted; presets superseded by 0039 |
 | [0015](0015-engineering-tooling.md) | Enforce code quality with Ruff, a type checker, git hooks and CI | Accepted |
 | [0016](0016-cli-and-api-conventions.md) | CLI and Python API follow the style guide | Accepted (verbs) |
 | [0017](0017-platform-matrix-and-corpus-testing.md) | Free platform matrix on GitHub Actions, plus nightly corpus testing with AI triage | Accepted (agent triage deferred) |
@@ -33,7 +33,7 @@ and change only the old one's status line.
 | [0022](0022-cache-command.md) | Unpacked bundles are cleaned up by a command, never by bundles themselves | Accepted |
 | [0023](0023-payload-behaves-like-site-packages.md) | The payload behaves like a venv's site-packages: wheel executables stay, `.pth` files run | Proposed |
 | [0024](0024-check-command-and-build-analysis.md) | `bundleup check` reports what won't survive bundling, and every build runs it | Proposed |
-| [0025](0025-dir-and-lambda-formats-and-presets.md) | How `--format dir`, `--format lambda` and target presets work | Proposed |
+| [0025](0025-dir-and-lambda-formats-and-presets.md) | How `--format dir`, `--format lambda` and target presets work | Proposed; presets superseded by 0039 |
 | [0026](0026-pylock-toml-input.md) | A project's `pylock.toml` is used when it has no `uv.lock` | Proposed |
 | [0027](0027-children-see-the-bundle-only-from-its-own-python.md) | Child processes see the bundle only when they run the bundle's own Python | Accepted (amended by 0037) |
 | [0028](0028-a-project-needs-a-lockfile.md) | A project needs a lockfile; bundleup never writes one into it | Accepted |
@@ -47,3 +47,4 @@ and change only the old one's status line.
 | [0036](0036-wrong-python-reruns-and-a-platform-matrix.md) | A plain `python3` shebang and a re-run with a matching Python; `check --matrix`; in-use copies are kept | Proposed |
 | [0037](0037-children-activate-only-for-bundle-code.md) | A child process activates the bundle only when it runs the bundle's code | Proposed |
 | [0038](0038-one-pyz-for-several-platforms.md) | One `.pyz` can carry a payload per platform and Python version | Proposed |
+| [0039](0039-recipes-instead-of-target-presets.md) | Recipes and capabilities (`--max-size`) instead of named target presets | Accepted |

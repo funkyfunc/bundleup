@@ -33,16 +33,18 @@ def test_a_scripts_table_applies_and_paths_are_relative_to_it(tmp_path: Path) ->
 
 
 def test_flags_and_environment_win(tmp_path: Path) -> None:
-    path = project(tmp_path, 'format = "dir"\npython = "3.11"\nstrict = true\n')
-    options, used = apply(BuildOptions(path=path, format="lambda"))
+    table = 'format = "dir"\npython = "3.11"\nstrict = true\nmax-size = "30MB"\n'
+    options, used = apply(BuildOptions(path=project(tmp_path, table), format="lambda"))
     assert (options.format, options.python, options.strict) == ("lambda", "3.11", True)
-    assert used == ['python = "3.11"', "strict = true"]
+    assert options.max_size == 30_000_000
+    assert used == ['python = "3.11"', "strict = true", 'max-size = "30MB"']
 
 
 @pytest.mark.parametrize(
     ("table", "message", "hint"),
     [
-        ('targt = "lambda"\n', "unknown key `targt`", "did you mean `target`?"),
+        ('formt = "dir"\n', "unknown key `formt`", "did you mean `format`?"),
+        ('max-size = "big"\n', "can't read the size `big`", "a number with an optional unit"),
         ("json = true\n", "`json` is a per-run setting", "pass --json on the command line"),
         ("strict = 1\n", "`strict` must be true or false", "for example: strict = true"),
         ('format = "exe"\n', "unknown format `exe`", "use one of pyz, dir, lambda"),
@@ -51,4 +53,4 @@ def test_flags_and_environment_win(tmp_path: Path) -> None:
 def test_mistakes_are_usage_errors(tmp_path: Path, table: str, message: str, hint: str) -> None:
     with pytest.raises(UsageError, match=message) as e:
         apply(BuildOptions(path=project(tmp_path, table)))
-    assert e.value.hint == hint
+    assert e.value.hint is not None and e.value.hint.startswith(hint)

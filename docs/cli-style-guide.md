@@ -9,7 +9,7 @@ decides during the ADR-0011 review.
 ## Command shape (decided 2026-10-05)
 
 **Verbs (option A).** `bundleup build [PATH]` builds, where PATH is a project directory or a
-script; later `bundleup check`, `bundleup targets`, `bundleup cache …`. Bare `bundleup` prints
+script; later `bundleup check`, `bundleup cache …`. Bare `bundleup` prints
 help. Chosen by the owner ([ADR-0016](adr/0016-cli-and-api-conventions.md)) because new commands
 can never collide with a project path, and it matches uv and cargo.
 
@@ -31,9 +31,10 @@ can never collide with a project path, and it matches uv and cargo.
 4. **No abbreviations:** `ArgumentParser(allow_abbrev=False)`.
 5. **Booleans come in pairs** (`--compile/--no-compile`, argparse `BooleanOptionalAction`).
 6. **List options repeat** (`--python-platform a --python-platform b`); no comma lists.
-7. **Presets expand to ordinary flags and print the expansion** (`Using target lambda: --python
-   3.14 --python-platform …`). Explicit flags override preset values. A `targets` listing shows
-   every expansion.
+7. **No named targets** ([ADR-0039](adr/0039-recipes-instead-of-target-presets.md)): a
+   destination's needs are ordinary flags (`--python-platform`, `--format`, `--max-size`), and
+   destinations are documented as [recipes](recipes.md). (Until 2026-10-07: presets that printed
+   their expansion.)
 8. **`--dry-run` / `-n`** resolves everything, prints the plan and where each setting came from,
    and writes nothing.
 9. **In CI (`CI` set), behave as `--locked`**: a stale lockfile is an error, not a silent bundle
@@ -72,7 +73,7 @@ can never collide with a project path, and it matches uv and cargo.
 23. **Expected failures never show a traceback.** Every expected failure is a `BundleupError`
     subclass the CLI renders. Unexpected exceptions are bugs: exit 3, "this is a bug" line, issue
     link, full traceback with `-v`.
-24. **Suggest fixes for typos** in subcommands, choices and preset names, but never auto-run them
+24. **Suggest fixes for typos** in subcommands, choices and config keys, but never auto-run them
     (argparse `suggest_on_error` on 3.14+, `difflib` before).
 25. **When uv fails, quote its stderr verbatim**, indented under bundleup's one-line explanation.
 
@@ -82,7 +83,7 @@ can never collide with a project path, and it matches uv and cargo.
 |---|---|---|
 | 0 | `OK` | Success (warnings allowed unless `--strict`) |
 | 1 | `BUILD_FAILED` | Expected failure: stale or missing lock, no compatible wheel, uv failure, `check` found problems, `--strict` warnings |
-| 2 | `USAGE_ERROR` | Invalid flags, unknown command or target, invalid `[tool.bundleup]` |
+| 2 | `USAGE_ERROR` | Invalid flags, unknown command or format, invalid `[tool.bundleup]` |
 | 3 | `INTERNAL_ERROR` | A bug in bundleup |
 | 130 | `INTERRUPTED` | Ctrl-C |
 
@@ -93,9 +94,9 @@ can never collide with a project path, and it matches uv and cargo.
 
 | Rank | Source | Example |
 |---|---|---|
-| 1 | Flags | `--target lambda --python 3.13` |
+| 1 | Flags | `--format lambda --python 3.13` |
 | 2 | Environment | `BUNDLEUP_PYTHON=3.12`, `UV_LOCKED`, `NO_COLOR`, `CI` |
-| 3 | `[tool.bundleup]` in `pyproject.toml` | `target = "lambda"` |
+| 3 | `[tool.bundleup]` in `pyproject.toml` | `format = "lambda"` |
 | 4 | Defaults | host platform, `dist/<name>.pyz` |
 
 28. **Env vars are `BUNDLEUP_` + the long flag in SCREAMING_SNAKE.** Show them in `--help`.
@@ -139,7 +140,7 @@ fits a build tool. Everything here applies to TTY output only; rules 10–15 sti
 ### Python library API
 38. **The public API is exactly `bundleup.__all__`.** Everything else lives in `_underscore`
     modules. Ship `py.typed`.
-39. **Entry points:** `build()`, `check()`, `list_targets()`, with keyword-only typed options (a
+39. **Entry points:** `build()`, `check()`, `verify()`, with keyword-only typed options (a
     frozen `BuildOptions` dataclass mirroring the CLI).
 40. **Results are frozen dataclasses** whose `to_json_dict()` *is* the `--json` schema.
 41. **One exception root, `BundleupError`**, with `.code`, `.hint`, `.exit_code`; subclasses such as
@@ -183,8 +184,8 @@ and the generated [CLI reference](cli-reference.md):
   lockfile exists (9);
 - help under ~30 lines with examples and `[env: ...]` (32-33), generated reference checked by a
   test (34), startup budget checked by a test (35);
-- presets (`--target`, printed expansion, `bundleup targets`, `list_targets()`) (7, 39;
-  [ADR-0025](adr/0025-dir-and-lambda-formats-and-presets.md));
+- no named targets; `--max-size` (7;
+  [ADR-0039](adr/0039-recipes-instead-of-target-presets.md));
 - `[tool.bundleup]` in `pyproject.toml` or a PEP 723 script, below flags and environment (29-31,
   [ADR-0032](adr/0032-tool-bundleup-configuration.md));
 - `--strict` (27) on `build` and `check`; diagnostics carry `package`, `file` and `line` (18);

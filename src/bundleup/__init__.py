@@ -35,7 +35,6 @@ if TYPE_CHECKING:
     from ._check import CheckReport, PackageSize
     from ._python import Target
     from ._steps import ProgressEvent
-    from ._targets import Preset, list_targets
     from ._verify import VerifyReport, verify
 
 __version__ = "0.0.1"
@@ -57,7 +56,6 @@ __all__ = [
     "NoLockfileError",
     "NotABundleError",
     "PackageSize",
-    "Preset",
     "ProgressEvent",
     "ProjectError",
     "PythonMismatchError",
@@ -72,7 +70,6 @@ __all__ = [
     "check",
     "clean_cache",
     "list_cache",
-    "list_targets",
     "verify",
 ]
 
@@ -82,7 +79,6 @@ _LAZY = {
     "ProgressEvent": "._steps",
     "Target": "._python",
     **{name: "._check" for name in ("CheckReport", "PackageSize")},
-    **{name: "._targets" for name in ("Preset", "list_targets")},
     **{name: "._verify" for name in ("VerifyReport", "verify")},
     **{name: "._cache" for name in ("CachedBundle", "CleanReport", "clean_cache", "list_cache")},
 }

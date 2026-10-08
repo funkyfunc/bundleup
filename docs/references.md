@@ -37,7 +37,7 @@ licenses checked 2026-10-04.
 
 | Source | Why |
 |---|---|
-| [AWS Lambda quotas](https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html), [runtimes](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html) | Size limits, Python runtimes, architectures for `--target lambda` |
+| [AWS Lambda quotas](https://docs.aws.amazon.com/lambda/latest/dg/gettingstarted-limits.html), [runtimes](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html) | Size limits, Python runtimes, architectures for the Lambda [recipe](recipes.md) |
 | [splunk/splunk-sdk-python](https://github.com/splunk/splunk-sdk-python) README | The `bin/lib` + `--platform` pattern `--format dir` should replace |
 | [Blender: Python wheels in extensions](https://docs.blender.org/manual/en/latest/advanced/extensions/python_wheels.html) | How a host app expects per-platform wheels |
 | [Agent Skills: using scripts](https://agentskills.io/skill-creation/using-scripts) | Script conventions for agents (no prompts, `--help`, structured output, exit codes) |

@@ -1,6 +1,6 @@
 # ADR-0014: `.pyz` stays the product; add `dir` and Lambda outputs and printable target presets
 
-- **Status:** Accepted (2026-10-05)
+- **Status:** Accepted (2026-10-05); decision 4 (presets) superseded by [ADR-0039](0039-recipes-instead-of-target-presets.md)
 - **Date:** 2026-10-04
 - **Deciders:** proposed by an agent from round 4 research; accepted by the user
 

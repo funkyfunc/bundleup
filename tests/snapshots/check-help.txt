@@ -1,4 +1,4 @@
-usage: bundleup check [-h] [--format FORMAT] [--target NAME] [--python VERSION] [--entry NAME]
+usage: bundleup check [-h] [--format FORMAT] [--python VERSION] [--entry NAME]
                       [--python-platform OS] [--locked | --frozen] [--strict] [--also-platform OS]
                       [--matrix] [--json] [-q] [-v] [--color WHEN]
                       [path]
@@ -11,7 +11,6 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --format FORMAT       pyz (default), dir (a directory) or lambda (an AWS Lambda .zip)
-  --target NAME         a preset: lambda, lambda-arm64, claude-api [env: BUNDLEUP_TARGET]
   --python VERSION      a version (3.12) or a path; repeatable; default: uv's [env: BUNDLEUP_PYTHON]
   --entry NAME          a script name, module:function or module [env: BUNDLEUP_ENTRY]
   --python-platform OS  an OS/CPU, uv's names (linux); repeatable [env: BUNDLEUP_PYTHON_PLATFORM]

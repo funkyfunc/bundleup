@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, NoReturn, TextIO
 
 from . import __version__
-from ._errors import ISSUES_URL, BundleupError, CheckFailedError, Diagnostic, ExitCode
+from ._errors import ISSUES_URL, BundleupError, CheckFailedError, Diagnostic, ExitCode, UsageError
 from ._term import Style
 from ._text import findings, listing, plural
 
@@ -28,7 +28,7 @@ if TYPE_CHECKING:
     from ._verify import VerifyReport
 
 SCHEMA_VERSION = 1  # of the --json document; additive changes only within a version
-COMMANDS = ["build", "check", "targets", "verify", "cache"]
+COMMANDS = ["build", "check", "verify", "cache"]
 DOCS_URL = "https://github.com/funkyfunc/bundleup"
 
 DESCRIPTION = (
@@ -51,7 +51,8 @@ BUILD_EXAMPLES = """\
 examples:
   bundleup build                    bundle the project here into dist/<name>.pyz
   bundleup build --python 3.11 --python-platform linux   build for Linux x86_64
-  bundleup build --target lambda    an AWS Lambda .zip (`bundleup targets` lists presets)"""
+  bundleup build --python-platform linux --python-platform windows   one .pyz for both
+  bundleup build --max-size 30MB    fail, writing nothing, if the output is bigger"""
 
 CHECK_EXAMPLES = f"""\
 examples:
@@ -131,15 +132,6 @@ def parsers() -> dict[str, argparse.ArgumentParser]:
         help="show which OS, CPU and Python versions the lock's wheels cover",
     )
     _add_output_options(check, verbose="-v: every package's size; -vv: commands run")
-    targets = commands.add_parser(
-        "targets",
-        help="list the target presets and the flags each stands for",
-        description="Presets are shorthands for --format, --python and --python-platform. "
-        "Flags given explicitly win over a preset's.",
-        formatter_class=_HelpFormatter,
-        allow_abbrev=False,
-    )
-    _add_output_options(targets, verbose="-v: show the traceback if bundleup crashes")
     verify = commands.add_parser(
         "verify",
         help="check a bundle against its manifest",
@@ -191,7 +183,6 @@ def parsers() -> dict[str, argparse.ArgumentParser]:
         "bundleup": top,
         "build": build,
         "check": check,
-        "targets": targets,
         "verify": verify,
         "cache": cache,
         "cache list": listing,
@@ -219,12 +210,6 @@ def _add_build_options(command: argparse.ArgumentParser, *, output: bool) -> Non
         metavar="FORMAT",
         default=None,
         help="pyz (default), dir (a directory) or lambda (an AWS Lambda .zip)",
-    )
-    command.add_argument(
-        "--target",
-        metavar="NAME",
-        default=os.environ.get("BUNDLEUP_TARGET"),
-        help=_env_help("a preset: lambda, lambda-arm64, claude-api", "BUNDLEUP_TARGET"),
     )
     command.add_argument(
         "--python",
@@ -270,6 +255,14 @@ def _add_build_options(command: argparse.ArgumentParser, *, output: bool) -> Non
         action="store_true",
         help="warnings fail too (errors always do)",
     )
+    if output:
+        command.add_argument(
+            "--max-size",
+            type=_max_size,
+            metavar="SIZE",
+            default=os.environ.get("BUNDLEUP_MAX_SIZE"),
+            help=_env_help("fail if the output is bigger (30MB)", "BUNDLEUP_MAX_SIZE"),
+        )
 
 
 def _add_output_options(command: argparse.ArgumentParser, *, verbose: str) -> None:
@@ -286,6 +279,15 @@ def _add_output_options(command: argparse.ArgumentParser, *, verbose: str) -> No
         default="auto",
         help="auto, always or never (default: auto; also NO_COLOR, FORCE_COLOR)",
     )
+
+
+def _max_size(text: str) -> int:
+    from ._formats import parse_size
+
+    try:
+        return parse_size(text)
+    except UsageError as e:
+        raise argparse.ArgumentTypeError(f"{e} ({e.hint})") from None
 
 
 def _env_list(name: str) -> list[str]:
@@ -379,39 +381,18 @@ def _options(opts: argparse.Namespace) -> BuildOptions:
         more_python_platforms=tuple(platforms[1:]),
         strict=opts.strict,
         format=opts.format,
-        target=opts.target,
+        max_size=getattr(opts, "max_size", None),
     )
 
 
 def _expanded(opts: argparse.Namespace, style: Style) -> BuildOptions:
-    """The options with a --target preset filled in; says what it expanded to (rule 7)."""
+    """The options with [tool.bundleup] filled in; -v says what it set (rule 7)."""
     from ._config import apply as apply_config
-    from ._targets import apply
 
     options, configured = apply_config(_options(opts))
     if configured and not opts.json and opts.verbose >= 1:
         print(style.dim(f"Using [tool.bundleup]: {', '.join(configured)}"), file=sys.stderr)
-    preset = options.target  # from a flag, the environment or [tool.bundleup]
-    options, flags = apply(options)
-    if flags and not opts.json and opts.quiet == 0:
-        print(style.dim(f"Using target {preset}: {' '.join(flags)}"), file=sys.stderr)
     return options
-
-
-def _run_targets(opts: argparse.Namespace) -> ExitCode:
-    from ._targets import list_targets
-
-    presets = list_targets()
-    if opts.json:
-        result: dict[str, object] = {"targets": [t.to_json_dict() for t in presets]}
-        _emit_json("targets", ExitCode.OK, result, [])
-        return ExitCode.OK
-    style = Style(sys.stdout, opts.color)  # a listing: stdout, so it can be piped (rule 10)
-    width = max(len(t.name) for t in presets)
-    for t in presets:
-        print(f"{style.bold(t.name.ljust(width))}  {t.description}")
-        print(style.dim(f"{' ' * width}  {' '.join(t.expansion())}"))
-    return ExitCode.OK
 
 
 def _progress(opts: argparse.Namespace, style: Style) -> tuple[StatusLine, Progress]:
@@ -706,8 +687,6 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if opts.command == "check":
             return _run_check(opts)
-        if opts.command == "targets":
-            return _run_targets(opts)
         if opts.command == "verify":
             return _run_verify(opts)
         if opts.command == "cache":

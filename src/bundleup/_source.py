@@ -15,7 +15,7 @@ from ._errors import (
     NoLockfileError,
     ProjectError,
 )
-from ._targets import Format
+from ._formats import Format
 
 PEP723 = re.compile(r"(?m)^# /// (?P<type>[a-zA-Z0-9-]+)$\s(?P<content>(^#(| .*)$\s)+)^# ///$")
 

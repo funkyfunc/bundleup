@@ -14,7 +14,6 @@ positional arguments:
   <command>
     build        bundle a project or script into one .pyz
     check        report what won't survive bundling, without writing a bundle
-    targets      list the target presets and the flags each stands for
     verify       check a bundle against its manifest
     cache        list or clean up unpacked bundles
 
@@ -36,8 +35,8 @@ bugs: https://github.com/funkyfunc/bundleup/issues
 ## `bundleup build`
 
 ```
-usage: bundleup build [-h] [-o FILE] [--format FORMAT] [--target NAME] [--python VERSION]
-                      [--entry NAME] [--python-platform OS] [--locked | --frozen] [--strict]
+usage: bundleup build [-h] [-o FILE] [--format FORMAT] [--python VERSION] [--entry NAME]
+                      [--python-platform OS] [--locked | --frozen] [--strict] [--max-size SIZE]
                       [--json] [-q] [-v] [--color WHEN]
                       [path]
 
@@ -51,13 +50,13 @@ options:
   -o FILE, --output FILE
                         output file (default: dist/<name>.pyz) [env: BUNDLEUP_OUTPUT]
   --format FORMAT       pyz (default), dir (a directory) or lambda (an AWS Lambda .zip)
-  --target NAME         a preset: lambda, lambda-arm64, claude-api [env: BUNDLEUP_TARGET]
   --python VERSION      a version (3.12) or a path; repeatable; default: uv's [env: BUNDLEUP_PYTHON]
   --entry NAME          a script name, module:function or module [env: BUNDLEUP_ENTRY]
   --python-platform OS  an OS/CPU, uv's names (linux); repeatable [env: BUNDLEUP_PYTHON_PLATFORM]
   --locked              fail if the lock is out of date (as in uv; the default when there is one)
   --frozen              bundle the lock as it is, without checking it (as in uv)
   --strict              warnings fail too (errors always do)
+  --max-size SIZE       fail if the output is bigger (30MB) [env: BUNDLEUP_MAX_SIZE]
   --json                print one JSON document on stdout
   -q, --quiet           -q: warnings and errors only; -qq: errors
   -v, --verbose         -v: step timings; -vv: commands run
@@ -66,13 +65,14 @@ options:
 examples:
   bundleup build                    bundle the project here into dist/<name>.pyz
   bundleup build --python 3.11 --python-platform linux   build for Linux x86_64
-  bundleup build --target lambda    an AWS Lambda .zip (`bundleup targets` lists presets)
+  bundleup build --python-platform linux --python-platform windows   one .pyz for both
+  bundleup build --max-size 30MB    fail, writing nothing, if the output is bigger
 ```
 
 ## `bundleup check`
 
 ```
-usage: bundleup check [-h] [--format FORMAT] [--target NAME] [--python VERSION] [--entry NAME]
+usage: bundleup check [-h] [--format FORMAT] [--python VERSION] [--entry NAME]
                       [--python-platform OS] [--locked | --frozen] [--strict] [--also-platform OS]
                       [--matrix] [--json] [-q] [-v] [--color WHEN]
                       [path]
@@ -85,7 +85,6 @@ positional arguments:
 options:
   -h, --help            show this help message and exit
   --format FORMAT       pyz (default), dir (a directory) or lambda (an AWS Lambda .zip)
-  --target NAME         a preset: lambda, lambda-arm64, claude-api [env: BUNDLEUP_TARGET]
   --python VERSION      a version (3.12) or a path; repeatable; default: uv's [env: BUNDLEUP_PYTHON]
   --entry NAME          a script name, module:function or module [env: BUNDLEUP_ENTRY]
   --python-platform OS  an OS/CPU, uv's names (linux); repeatable [env: BUNDLEUP_PYTHON_PLATFORM]
@@ -104,21 +103,6 @@ examples:
   bundleup check --also-platform windows --also-platform linux   wheels for other platforms too
 
 docs: https://github.com/funkyfunc/bundleup
-```
-
-## `bundleup targets`
-
-```
-usage: bundleup targets [-h] [--json] [-q] [-v] [--color WHEN]
-
-Presets are shorthands for --format, --python and --python-platform. Flags given explicitly win over a preset's.
-
-options:
-  -h, --help     show this help message and exit
-  --json         print one JSON document on stdout
-  -q, --quiet    -q: warnings and errors only; -qq: errors
-  -v, --verbose  -v: show the traceback if bundleup crashes
-  --color WHEN   auto, always or never (default: auto; also NO_COLOR, FORCE_COLOR)
 ```
 
 ## `bundleup verify`

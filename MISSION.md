@@ -40,8 +40,9 @@ A bundler in the spirit of esbuild: **one fast command, sensible defaults, one a
   with compiled code, one `.pyz` can carry a payload per platform and Python version
   ([ADR-0038](docs/adr/0038-one-pyz-for-several-platforms.md)). No install, no network. Thin variants from the same resolved
   files: a plain directory for host apps and an AWS Lambda zip
-  ([ADR-0025](docs/adr/0025-dir-and-lambda-formats-and-presets.md)). Not built: one bundle for
-  several platforms.
+  ([ADR-0025](docs/adr/0025-dir-and-lambda-formats-and-presets.md)). Destinations are tested
+  recipes of ordinary flags, not named targets
+  ([ADR-0039](docs/adr/0039-recipes-instead-of-target-presets.md)).
 - **Check:** a report of what will break once packed, *before* you ship: targets with no matching
   wheel (from the lock, for any number of platforms), code that doesn't compile on the Python you
   target, data files a package expects under `sys.prefix`, Lambda size limits. `__file__` reads,

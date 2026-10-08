@@ -50,8 +50,9 @@ and git.
 
 - **What works (2026-10-07):** `bundleup build|check|targets|verify|cache` from a project
   (`uv.lock` or `pylock.toml`; a lockfile is required, ADR-0028) or a PEP 723 script. Outputs: a
-  `.pyz` (default), `--format dir`, `--format lambda`; presets `lambda`, `lambda-arm64`,
-  `claude-api`. Builds for this machine or another platform. Pure-Python bundles run on every
+  `.pyz` (default), `--format dir`, `--format lambda`; `--max-size`. No named targets: each
+  destination is a tested recipe in docs/recipes.md (ADR-0039). Builds for this machine or another
+  platform. Pure-Python bundles run on every
   Python version their lock allows (ADR-0030) and on any OS when the lock agrees (ADR-0034);
   compiled ones on one version and platform, and one `.pyz` can carry a payload per platform and
   version (ADR-0038). A stale lock is an error (ADR-0033). Every build checks the code
@@ -66,8 +67,8 @@ and git.
 - **Speed** ([findings](docs/findings/2026-10-07-speed-vs-pex-best.md)): against pex's fastest
   configuration, builds 1.1-2.4× faster; warm start equals a venv; first runs 2.3-15× faster.
 - **Not yet:** a PyPI release (0.0.1 is a placeholder; [docs/releasing.md](docs/releasing.md)).
-- **ADR status:** 0023-0026 and 0033-0038 are **Proposed** (written while the owner was away);
-  0027-0032 are accepted fixes the owner asked for, with designs the owner hasn't reviewed.
+- **ADR status:** 0023-0026 and 0033-0038 are **Proposed** (written while the owner was
+  away); 0039 is accepted; 0027-0032 are accepted fixes the owner asked for, with designs the owner hasn't reviewed.
   Three independent reviews: [first](docs/findings/2026-10-07-independent-review.md),
   [second](docs/findings/2026-10-07-second-review.md), [third](docs/findings/2026-10-07-third-review.md).
 - bundleup depends on the `uv` package (bundled binary) but prefers a uv ≥ 0.9 on `PATH`
@@ -84,8 +85,8 @@ pyproject.toml, src/bundleup/  the package (ADR-0018): __init__.py (public API),
                         _outputs.py (pyz/dir/lambda writers), _steps.py (progress, run);
                         _check.py (the analysis), _verify.py (lock/RECORD checks, `verify`),
                         _loader.py (the bundle's __main__), _runtime.py + _sitecustomize.py
-                        (copied into each payload, ADR-0027), _platforms.py, _targets.py
-                        (presets, Format), _zipwriter.py, _bytecode.py, _cache.py, _errors.py,
+                        (copied into each payload, ADR-0027), _platforms.py, _formats.py
+                        (Format, sizes), _zipwriter.py, _bytecode.py, _cache.py, _errors.py,
                         _term.py, _text.py
 tests/snapshots/        CLI output and API snapshots; docs/cli-reference.md is generated too
 docs/schema/            JSON Schemas of each command's `--json` (build, check, targets, verify, cache)
@@ -135,7 +136,7 @@ UPDATE_SNAPSHOTS=1 uv run pytest -q tests/test_cli.py                       # af
 
 ## Working rules
 
-- **Scope is frozen until 0.1 has users** (third review): no new formats, presets or nightly
+- **Scope is frozen until 0.1 has users** (third review): no new formats, named targets or nightly
   automation. Write an ADR only for public behaviour; the owner reviews the Proposed ones.
 - **Measure, don't claim.** Speed, size and correctness claims come from gauntlet runs compared
   with pex.

@@ -50,8 +50,8 @@ What that means concretely:
 - Errors that name the cause and the fix, not stack traces.
 
 **Powerful**
-- Other platforms from one machine (`--python-platform`, presets such as `--target lambda`), one
-  bundle per target.
+- Other platforms from one machine (`--python-platform`), one bundle per target or one for
+  several; a destination's settings are a [recipe](recipes.md), not a name to remember.
 - Native dependencies handled correctly: the whole payload unpacks once to a cache, so compiled
   code, `__file__` paths and package metadata work as in a venv.
 - A pre-ship check that finds what will break (`bundleup check`).
@@ -82,7 +82,7 @@ Add `--python-platform macos --python-platform linux --python-platform windows` 
 user's machine, `python make_deck.pyz` picks the right one and just works: no install, no network.
 `bundleup check --matrix` shows which platforms the lock's wheels can serve. Pure-Python scripts
 need no extra payloads: one runs on every OS. (In the Claude API sandbox python-pptx is
-preinstalled; `--target claude-api` is for scripts that need packages it doesn't have.)
+preinstalled; the [recipe](recipes.md) is for scripts that need packages it doesn't have.)
 
 If something can't work, you find out at **build** time, not from a user:
 - "make_deck needs Python >=3.12, but the target is Python 3.11";
@@ -115,7 +115,7 @@ Examples, not the definition (from [round 4 research](research/round-4-synthesis
   graders, agent sandboxes and skills (e.g. Claude API Skills, which have no network), and Docker
   images built by copying one `app.pyz`.
 - **Also built (2026-10):** builds for other platforms from one machine, AWS Lambda zips
-  (`--target lambda`), plain directories for apps with Python built in such as Splunk and QGIS
+  (`--format lambda`), plain directories for apps with Python built in such as Splunk and QGIS
   (`--format dir`). See [ADR-0025](adr/0025-dir-and-lambda-formats-and-presets.md).
 - **Not for:** desktop apps for people who don't have Python, Cloudflare Workers/Pyodide, Python in
   Excel, projects that depend on system libraries or CUDA.

@@ -147,8 +147,8 @@ jobs:
           - { format: dir, os: ubuntu-24.04, args: "" }
           - { format: dir, os: windows-2025, args: "" }
           - { format: dir, os: macos-15, args: "" }
-          - { format: lambda, os: ubuntu-24.04, args: "--target lambda" }
-          - { format: lambda, os: ubuntu-24.04-arm, args: "--target lambda-arm64" }
+          - { format: lambda, os: ubuntu-24.04, args: "" }
+          - { format: lambda, os: ubuntu-24.04-arm, args: "--platform aarch64-manylinux_2_34" }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:
@@ -165,11 +165,11 @@ jobs:
           path: gauntlet/results/formats.json
           if-no-files-found: ignore
 
-  presets:
-    # Every target preset must build the founding example (python-pptx, lxml, Pillow: compiled
-    # wheels) from a Mac and from Linux. The independent review of 2026-10-07 found claude-api
-    # couldn't.
-    name: Presets (${{ matrix.os }})
+  recipes:
+    # Each recipe in docs/recipes.md must build the founding example (python-pptx, lxml, Pillow:
+    # compiled wheels) from a Mac and from Linux (ADR-0039). The independent review of 2026-10-07
+    # found the Claude API settings couldn't.
+    name: Recipes (${{ matrix.os }})
     needs: checks
     strategy:
       fail-fast: false
@@ -181,10 +181,10 @@ jobs:
       - uses: astral-sh/setup-uv@v10.2.0
       - run: uv sync --locked --python 3.12
       - run: uv python install 3.11 3.13
-      - name: Build gauntlet 14 with every preset
+      - name: Build gauntlet 14 with every recipe
         shell: bash
         run: |
-          for target in $(uv run bundleup targets --json | jq -r '.result.targets[].name'); do
-            uv run bundleup build gauntlet/projects/14-real-world-pptx --target "$target" \
-              --entry g14_pptx:main -o "presets/g14-$target" || exit 1
-          done
+          build() { uv run bundleup build gauntlet/projects/14-real-world-pptx --entry g14_pptx:main "$@"; }
+          build --python 3.11 --python-platform x86_64-manylinux_2_28 --max-size 30MB -o recipes/claude-api.pyz
+          build --format lambda --python 3.13 --python-platform x86_64-manylinux_2_34 -o recipes/lambda.zip
+          build --format lambda --python 3.13 --python-platform aarch64-manylinux_2_34 -o recipes/lambda-arm64.zip

@@ -4,7 +4,7 @@ and invoked in AWS's own Lambda container image through its runtime interface em
 
     uv run gauntlet/formats.py dir --check                  # any OS
     uv run gauntlet/formats.py lambda --check               # Linux with Docker (CI)
-    uv run gauntlet/formats.py lambda --target lambda-arm64 # on an arm64 Linux machine
+    uv run gauntlet/formats.py lambda --platform aarch64-manylinux_2_34  # on arm64 Linux
 
 A small handler (HANDLER below) is added to each output before it runs: it calls the project's
 entry point and returns what it printed. Results go to gauntlet/results/<--out>.json.
@@ -140,9 +140,10 @@ def invoke(port: str, event: dict[str, object]) -> dict[str, object]:
             time.sleep(0.5)
 
 
-def run_lambda(project: Path, meta: rb.Meta, work: Path, target: str, python: str) -> Record:
+def run_lambda(project: Path, meta: rb.Meta, work: Path, platform: str, python: str) -> Record:
     archive = work / f"{meta['id']}.zip"
-    rec = build(project, meta, "lambda", archive, ["--target", target])
+    flags = ["--format", "lambda", "--python", python, "--python-platform", platform]
+    rec = build(project, meta, "lambda", archive, flags)
     if rec.outcome:
         return rec
     task = work / meta["id"]
@@ -179,11 +180,12 @@ def main() -> int:
     parser.add_argument("format", choices=["dir", "lambda"])
     parser.add_argument("only", nargs="*", help="project id prefixes")
     parser.add_argument("--python", default="3.12", help="dir: the Python to build for and run")
-    parser.add_argument("--target", default="lambda", help="lambda: the preset to build with")
+    # Python 3.12+ on Lambda is Amazon Linux 2023: glibc 2.34 (docs/recipes.md).
+    parser.add_argument("--platform", default="x86_64-manylinux_2_34", help="lambda: uv's name")
     parser.add_argument("--check", action="store_true", help="exit 1 on unexpected failures")
     parser.add_argument("--out", default=None)
     opts = parser.parse_args()
-    lambda_python = "3.13"  # the presets' default; the image tag must match
+    lambda_python = "3.13"  # the image tag must match
     python = lambda_python if opts.format == "lambda" else opts.python
     work = rb.WORK / f"formats-{opts.format}"
     work.mkdir(parents=True, exist_ok=True)
@@ -200,7 +202,7 @@ def main() -> int:
         if opts.format == "dir":
             rec = run_dir(project, meta, work, rb.python_path(python))
         else:
-            rec = run_lambda(project, meta, work, opts.target, lambda_python)
+            rec = run_lambda(project, meta, work, opts.platform, lambda_python)
         records.append(rec)
         print(
             f"{rec.outcome:<11} {rec.format:<7} {rec.project:<32} {rec.detail[:90]!r}", flush=True
