@@ -60,10 +60,31 @@ def test_a_payload_per_os_when_the_lock_differs_and_verify_checks_each(tmp_path:
     assert [p["platform"] for p in result.payloads] == ["linux", "win32"]
     report = verify(out)
     assert report.ok, report.problems
+    # Each file is stored once: a layer both payloads unpack, and colorama for Windows only.
+    linux, windows = (p["members"] for p in payloads)
+    assert len(linux) == 1 and windows[0] == linux[0] and len(windows) == 2
     with zipfile.ZipFile(out) as zf:
-        members = sorted(n for n in zf.namelist() if n.startswith("payload"))
-    assert len(members) == 2
+        assert sorted(n for n in zf.namelist() if n.startswith("layer-")) == sorted(windows)
     if sys.platform == "darwin":  # nothing for this machine: one sentence naming both targets
         r = subprocess.run([sys.executable, str(out)], capture_output=True, text=True)
         assert r.returncode == 1
         assert "on Linux" in r.stderr and "on Windows" in r.stderr and "Traceback" not in r.stderr
+
+
+def test_a_layered_bundle_runs_here(tmp_path: Path) -> None:
+    """This machine's payload is unpacked from its layers, and the program runs."""
+    (tmp_path / "app.py").write_text(PER_OS)
+    python = f"{sys.version_info[0]}.{sys.version_info[1]}"
+    out = tmp_path / "app.pyz"
+    other = "linux" if sys.platform == "win32" else "windows"
+    build(
+        BuildOptions(
+            path=tmp_path / "app.py", output=out, python=python, more_python_platforms=(other,)
+        )
+    )
+    payloads = manifest(out)["payloads"]
+    assert isinstance(payloads, list) and len(payloads) == 2
+    env = {"BUNDLEUP_CACHE": str(tmp_path / "cache"), "PATH": ""}
+    r = subprocess.run([sys.executable, str(out)], capture_output=True, text=True, env=env)
+    assert (r.returncode, r.stdout.strip()) == (0, "hello"), r.stderr
+    assert verify(out).ok

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import os
 from dataclasses import dataclass
 from pathlib import Path
@@ -144,6 +145,50 @@ def write_payload(site: Path, payload: Path) -> tuple[str, dict[str, str]]:
     return _zipwriter.write_zip(
         payload, members, level=6, workers=workers, hasher=_verify.record_hash
     )
+
+
+@dataclass(frozen=True)
+class Layer:
+    """A zip inside a .pyz: the whole payload, or, in a bundle for several platforms, the files
+    shared by exactly the payloads in `owners`, each stored once (ADR-0038)."""
+
+    member: str  # its name in the bundle
+    path: Path  # the staged zip
+    digest: str  # its sha256
+    files: dict[str, str]  # each file's RECORD-style hash
+    owners: tuple[int, ...]  # the payloads that unpack it
+
+
+def write_layers(sites: list[Path], stage: Path) -> list[Layer]:
+    """Zip several payloads so that each distinct file (same path, contents and executable bit)
+    is stored once: in the layer of the payloads that have it. Pure-Python packages land in a
+    layer every payload shares, a stable-ABI extension (abi3) in one per platform."""
+    owners: dict[tuple[str, str, int], list[int]] = {}
+    sources: dict[tuple[str, str, int], str] = {}
+    for i, site in enumerate(sites):
+        for rel, path in _bytecode.walk_files(site):
+            with open(path, "rb") as f:
+                digest = hashlib.sha256(f.read()).hexdigest()
+            key = (rel, digest, os.stat(path).st_mode & 0o111)
+            owners.setdefault(key, []).append(i)
+            sources.setdefault(key, path)
+    groups: dict[tuple[int, ...], list[tuple[str, str, int]]] = {}
+    for key, who in owners.items():
+        groups.setdefault(tuple(who), []).append(key)
+    layers = []
+    workers = min(8, os.cpu_count() or 1)
+    for n, (who, keys) in enumerate(sorted(groups.items())):
+        staged = stage / f"layer-{n}.zip"
+        paths = {key[0]: sources[key] for key in keys}  # a payload has each path once
+        members = [
+            _zipwriter.Member(rel, Path(path).read_bytes, os.stat(path).st_mode)
+            for rel, path in sorted(paths.items())
+        ]
+        digest, written = _zipwriter.write_zip(
+            staged, members, level=6, workers=workers, hasher=_verify.record_hash
+        )
+        layers.append(Layer(f"layer-{digest[:16]}.zip", staged, digest, written, who))
+    return layers
 
 
 def verify_payload(

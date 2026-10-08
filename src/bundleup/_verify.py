@@ -277,7 +277,10 @@ def _find_cache(bundle: Path, cache_dir: str) -> Path | None:
 
 
 MANIFEST_KEYS = ("name", "loader")
-PAYLOAD_KEYS = ("files", "payload", "cache_dir")  # at the top, or in each of "payloads" (ADR-0038)
+PAYLOAD_KEYS = ("files", "payload", "cache_dir")  # a bundle for one platform: at the top
+# A bundle for several (ADR-0038): "layers" (member -> sha256, size, files), and "payloads", each
+# with its "members" (layers, unpacked in order) and "cache_dir".
+LAYERED_KEYS = ("members", "cache_dir")
 
 
 def _read_manifest(bundle: Path) -> dict[str, Any]:  # Any: JSON
@@ -289,9 +292,16 @@ def _read_manifest(bundle: Path) -> dict[str, Any]:  # Any: JSON
             f"{bundle} isn't a bundleup bundle with a manifest ({type(e).__name__}: {e})",
             hint="bundles carry manifest.json since bundleup's `build` command; rebuild it",
         ) from None
-    payloads = manifest.get("payloads") or [manifest]
     missing = [key for key in MANIFEST_KEYS if key not in manifest]
-    missing += sorted({key for p in payloads for key in PAYLOAD_KEYS if key not in p})
+    if "payloads" in manifest:
+        layers = manifest.get("layers", {})
+        missing += [] if layers else ["layers"]
+        missing += sorted({k for p in manifest["payloads"] for k in LAYERED_KEYS if k not in p})
+        missing += sorted(
+            {m for p in manifest["payloads"] for m in p.get("members", [])} - set(layers)
+        )
+    else:
+        missing += [key for key in PAYLOAD_KEYS if key not in manifest]
     if missing:
         raise NotABundleError(f"{bundle}'s manifest is incomplete (no {', '.join(missing)})")
     return manifest
@@ -311,14 +321,31 @@ def _check_loader(outer: zipfile.ZipFile, expected: dict[str, str]) -> list[str]
     return problems
 
 
+def _layers(manifest: dict[str, Any]) -> dict[str, dict[str, Any]]:  # Any: JSON
+    """Each zip in the bundle: member -> its sha256 and files."""
+    if "payloads" in manifest:
+        return manifest["layers"]
+    return {"payload.zip": {"sha256": manifest["payload"]["sha256"], "files": manifest["files"]}}
+
+
 def _payloads(manifest: dict[str, Any]) -> list[dict[str, Any]]:  # Any: JSON
-    """Each payload's entry: the manifest itself for a single payload, else its "payloads"."""
-    return manifest.get("payloads") or [{**manifest, "member": "payload.zip"}]
+    """Each payload: its cache directory and every file it unpacks (from all its layers)."""
+    if "payloads" not in manifest:
+        return [{"cache_dir": manifest["cache_dir"], "files": manifest["files"]}]
+    layers = manifest["layers"]
+    return [
+        {
+            "cache_dir": p["cache_dir"],
+            "files": {rel: h for m in p["members"] for rel, h in layers[m]["files"].items()},
+        }
+        for p in manifest["payloads"]
+    ]
 
 
-def _check_payload_zip(outer: zipfile.ZipFile, manifest: dict[str, Any]) -> list[str]:  # Any: JSON
-    """A payload's hash, then every file inside it, against its manifest entry."""
-    member = manifest["member"]
+def _check_layer(
+    outer: zipfile.ZipFile, member: str, layer: dict[str, Any]
+) -> list[str]:  # Any: JSON
+    """A zip's hash, then every file inside it, against the manifest."""
     try:
         with tempfile.TemporaryFile() as spool:
             digest = hashlib.sha256()
@@ -326,11 +353,11 @@ def _check_payload_zip(outer: zipfile.ZipFile, manifest: dict[str, Any]) -> list
                 for chunk in iter(lambda: source.read(1 << 20), b""):
                     digest.update(chunk)
                     spool.write(chunk)
-            if digest.hexdigest() != manifest["payload"]["sha256"]:
+            if digest.hexdigest() != layer["sha256"]:
                 return [f"changed file: {member} doesn't match its recorded hash"]
             spool.seek(0)
             with zipfile.ZipFile(spool) as payload:
-                return _check_payload(payload, manifest["files"])
+                return _check_payload(payload, layer["files"])
     except (OSError, KeyError, zipfile.BadZipFile) as e:
         return [f"corrupted: {member} can't be read ({type(e).__name__}: {e})"]
 
@@ -340,11 +367,8 @@ def _check_bundle(bundle: Path, manifest: dict[str, Any]) -> list[str]:  # Any: 
     try:
         with zipfile.ZipFile(bundle) as outer:
             problems = _check_loader(outer, manifest["loader"])
-            checked: set[str] = set()
-            for payload in _payloads(manifest):
-                if payload["member"] not in checked:  # identical payloads are stored once
-                    checked.add(payload["member"])
-                    problems += _check_payload_zip(outer, payload)
+            for member, layer in sorted(_layers(manifest).items()):
+                problems += _check_layer(outer, member, layer)
             return problems
     except (OSError, zipfile.BadZipFile) as e:
         return [f"corrupted: {bundle.name} can't be read ({type(e).__name__}: {e})"]
@@ -366,7 +390,5 @@ def verify(bundle: Path) -> VerifyReport:
         if cache:
             cache_problems = _check_cache(cache, payload["files"])
             break
-    unique = {p["member"]: len(p["files"]) for p in payloads}
-    return VerifyReport(
-        bundle, manifest["name"], sum(unique.values()), problems, cache, cache_problems
-    )
+    files = sum(len(layer["files"]) for layer in _layers(manifest).values())
+    return VerifyReport(bundle, manifest["name"], files, problems, cache, cache_problems)

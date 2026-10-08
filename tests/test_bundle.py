@@ -329,9 +329,9 @@ def test_the_loader_picks_the_payload_that_fits(bundle: Path, tmp_path: Path) ->
         dirname = json.loads(zf.read("manifest.json"))["cache_dir"]
     here = sys.version_info[:2]
     common = {"python": here, "python_max": here, "abiflags": None, "pth": [], "libc": None}
-    elsewhere = {**common, "dirname": "x-0", "member": "nothing.zip", "platform": "sunos5",
+    elsewhere = {**common, "dirname": "x-0", "members": ["nothing.zip"], "platform": "sunos5",
                  "machine": None, "target": "Python on Solaris", "macos": None}  # fmt: skip
-    fits = {**common, "dirname": dirname, "member": "payload.zip", "platform": None,
+    fits = {**common, "dirname": dirname, "members": ["payload.zip"], "platform": None,
             "machine": None, "target": "Python here", "macos": None}  # fmt: skip
     multi = relabel(bundle, tmp_path / "multi.pyz", PAYLOADS=[elsewhere, fits])
     assert probe(multi, env_for(tmp_path))["argv"] == []

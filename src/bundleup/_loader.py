@@ -35,9 +35,12 @@ PTH = []  # type: list[str]  # .pth files at the payload's top level, in the ord
 # What the native wheels need (ADR-0029): ("glibc", (2, 28)) or ("musl", (1, 2)); macOS (11, 0).
 LIBC = None  # type: tuple[str, tuple[int, int]] | None
 MACOS = None  # type: tuple[int, int] | None
-MEMBER = "payload.zip"  # the payload inside the bundle
+# The payload's zips inside the bundle, unpacked in order into one directory. Several when the
+# bundle is for several platforms: each file is stored once, in a layer shared by the payloads
+# that have it (ADR-0038).
+MEMBERS = ["payload.zip"]
 # A bundle for several platforms (ADR-0038): one dict per payload with the settings above in
-# lower case ("member", "dirname", "python", ...); the first that fits this machine is used.
+# lower case ("members", "dirname", "python", ...); the first that fits this machine is used.
 PAYLOADS = []  # type: list[dict[str, Any]]
 # --- end config ---
 
@@ -237,7 +240,7 @@ def _select() -> None:
     this platform but another Python version still gets picked, so _check explains (or re-runs
     with a matching Python); nothing for this platform at all is reported here."""
     global DIRNAME, PYTHON, PYTHON_MAX, PLATFORM, MACHINE, ABIFLAGS, TARGET, PTH, LIBC, MACOS
-    global MEMBER
+    global MEMBERS
     if not PAYLOADS:
         return
     here = sys.version_info[:2]
@@ -256,9 +259,9 @@ def _select() -> None:
     for p in fitting:
         top = p["python_max"][1] if p["python_max"] else NEWEST_KNOWN
         VERSIONS.extend((3, m) for m in range(p["python"][1], top + 1))
-    DIRNAME, MEMBER, TARGET, PTH = (
+    DIRNAME, MEMBERS, TARGET, PTH = (
         chosen["dirname"],
-        chosen["member"],
+        chosen["members"],
         chosen["target"],
         chosen["pth"],
     )
@@ -410,34 +413,39 @@ def _unpack(dest: str, final: str) -> None:
     import zipfile
 
     with open(_ARCHIVE, "rb") as f:
-        info = zipfile.ZipFile(f).getinfo(MEMBER)
-        f.seek(info.header_offset)
-        header = f.read(30)
-        if header[:4] != b"PK\x03\x04":
-            raise OSError("corrupt bundle: bad payload header")
-        start = (
-            info.header_offset
-            + 30
-            + int.from_bytes(header[26:28], "little")
-            + int.from_bytes(header[28:30], "little")
-        )
-        payload = zipfile.ZipFile(_Window(f, start, info.file_size))
+        outer = zipfile.ZipFile(f)
+        infos = [outer.getinfo(name) for name in MEMBERS]
         made = set()  # type: set[str]
-        for member in payload.infolist():
-            path = os.path.join(dest, member.filename)
-            elsewhere = _pyc_path(member.filename, final)
-            if elsewhere:
-                # Shared with other processes, unlike our private temp tree: write, then replace.
-                part = "%s.%d.tmp" % (elsewhere, os.getpid())
-                try:
-                    _write(payload, member, part, made)
-                    os.replace(part, elsewhere)
-                    continue
-                except OSError:
-                    pass  # prefix not writable: keep it in __pycache__, where it's harmless
-            _write(payload, member, path, made)
-            if (member.external_attr >> 16) & 0o111:
-                os.chmod(path, 0o755)
+        for info in infos:
+            f.seek(info.header_offset)
+            header = f.read(30)
+            if header[:4] != b"PK\x03\x04":
+                raise OSError("corrupt bundle: bad payload header")
+            start = (
+                info.header_offset
+                + 30
+                + int.from_bytes(header[26:28], "little")
+                + int.from_bytes(header[28:30], "little")
+            )
+            _unpack_zip(zipfile.ZipFile(_Window(f, start, info.file_size)), dest, final, made)
+
+
+def _unpack_zip(payload: "zipfile.ZipFile", dest: str, final: str, made: "set[str]") -> None:
+    for member in payload.infolist():
+        path = os.path.join(dest, member.filename)
+        elsewhere = _pyc_path(member.filename, final)
+        if elsewhere:
+            # Shared with other processes, unlike our private temp tree: write, then replace.
+            part = "%s.%d.tmp" % (elsewhere, os.getpid())
+            try:
+                _write(payload, member, part, made)
+                os.replace(part, elsewhere)
+                continue
+            except OSError:
+                pass  # prefix not writable: keep it in __pycache__, where it's harmless
+        _write(payload, member, path, made)
+        if (member.external_attr >> 16) & 0o111:
+            os.chmod(path, 0o755)
 
 
 def _write(

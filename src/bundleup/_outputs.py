@@ -7,14 +7,21 @@ Layout of the output (see docs/adr/0010-bundle-format-and-loader.md):
       payload.zip    stored, not compressed: the installed packages (itself a deflated zip)
       __main__.py    the loader (_loader.py with its config filled in)
       __main__.pyc   the loader compiled for the target Python, so it isn't recompiled on each run
+      manifest.json  what's inside, with hashes (`bundleup verify`)
+
+For several platforms or Python versions (ADR-0038), `layer-<hash>.zip` members replace
+payload.zip: each file is stored once, in the layer of the payloads that have it, and each
+payload unpacks its layers in order.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import shutil
 import zipfile
+from collections.abc import Iterable
 from pathlib import Path
 
 from . import __version__, _bytecode, _verify
@@ -28,10 +35,12 @@ from ._formats import Format, describe_size
 from ._payload import (
     COMPILE_ENV,
     Entry,
+    Layer,
     Prepared,
     pth_files,
     runtime_needs,
     verify_payload,
+    write_layers,
     write_payload,
 )
 from ._python import Portability, PythonRange, Target
@@ -153,13 +162,13 @@ def lambda_upload_warning(output: Path) -> Diagnostic:
     )
 
 
-def _loader_settings(p: Prepared, *, member: str, dirname: str) -> dict[str, object]:
+def _loader_settings(p: Prepared, *, members: list[str], dirname: str) -> dict[str, object]:
     """What the loader needs to know about one payload (its config, or one PAYLOADS entry)."""
     target, native = p.target, p.native
     needs = runtime_needs(p.site)
     return {
         "dirname": dirname,
-        "member": member,
+        "members": members,
         "python": p.pythons.min,
         "python_max": p.pythons.max,
         "platform": None if p.reach.any_os else target.platform,  # None: any OS (ADR-0034)
@@ -188,28 +197,29 @@ def write_pyz(
     assert first.entry is not None  # resolved for every .pyz
     name = safe_name(first.source.name)
     steps.start("zip")
-    zipped = []  # (prepared, staged zip, digest, written)
-    for i, p in enumerate(ps):
-        staged = stage / f"payload-{i}.zip"
-        digest, written = write_payload(p.site, staged)
-        zipped.append((p, staged, digest, written))
-    members: dict[str, Path] = {}  # identical payloads are stored once
-    for _p, staged, digest, _written in zipped:
-        member = "payload.zip" if len(ps) == 1 else f"payload-{digest[:16]}.zip"
-        members.setdefault(member, staged)
-    total = sum(path.stat().st_size for path in members.values())
+    if len(ps) == 1:
+        staged = stage / "payload.zip"
+        digest, written = write_payload(first.site, staged)
+        layers = [Layer("payload.zip", staged, digest, written, (0,))]
+    else:
+        layers = write_layers([p.site for p in ps], stage)
+    total = sum(layer.path.stat().st_size for layer in layers)
     diags: list[Diagnostic] = []
     check_size(total, max_size, diags)
     steps.start("verify")
+    mine = [[layer for layer in layers if i in layer.owners] for i in range(len(ps))]
+    files = [{rel: h for layer in own for rel, h in layer.files.items()} for own in mine]
     locked = [
         verify_payload(p.site, pylock=p.pylock, target=p.target, written=written, script=p.script)
-        for p, _staged, _digest, written in zipped
+        for p, written in zip(ps, files)
     ]
     steps.start("write")
     settings = []
-    for p, _staged, digest, _written in zipped:
-        member = "payload.zip" if len(ps) == 1 else f"payload-{digest[:16]}.zip"
-        settings.append(_loader_settings(p, member=member, dirname=f"{name}-{digest[:16]}"))
+    for p, own in zip(ps, mine):
+        # A payload's unpacked copy is named after its contents: its layers' hashes.
+        digest = own[0].digest if len(ps) == 1 else _combined(layer.digest for layer in own)
+        members = [layer.member for layer in own]
+        settings.append(_loader_settings(p, members=members, dirname=f"{name}-{digest[:16]}"))
     main = settings[0]
     config = {
         "NAME": first.source.name,
@@ -224,7 +234,7 @@ def write_pyz(
         "PTH": main["pth"],
         "LIBC": main["libc"],
         "MACOS": main["macos"],
-        "MEMBER": main["member"],
+        "MEMBERS": main["members"],
         "PAYLOADS": settings if len(ps) > 1 else [],
     }
     loader, loader_pyc = stage / "__main__.py", stage / "__main__.pyc"
@@ -241,7 +251,7 @@ def write_pyz(
         "__main__.pyc": _verify.record_hash(loader_pyc.read_bytes()),
     }
     if len(ps) == 1:
-        p, staged, digest, written = zipped[0]
+        p, (layer,) = first, layers
         manifest_json = manifest(
             source=p.source,
             version=p.version,
@@ -250,44 +260,48 @@ def write_pyz(
             entry=p.entry,
             cache_dir=str(main["dirname"]),
             fmt="pyz",
-            payload=staged,
-            payload_sha256=digest,
+            payload=layer.path,
+            payload_sha256=layer.digest,
             locked=locked[0],
-            files=written,
+            files=layer.files,
             loader=hashes,
             pythons=p.pythons,
             reach=p.reach,
         )
     else:
-        manifest_json = _multi_manifest(zipped, settings, locked, hashes)
+        manifest_json = _multi_manifest(ps, layers, settings, locked, hashes)
+    payloads = {layer.member: layer.path for layer in layers}
     write_bundle(
-        output, payloads=members, loader=loader, loader_pyc=loader_pyc, manifest_json=manifest_json
+        output, payloads=payloads, loader=loader, loader_pyc=loader_pyc, manifest_json=manifest_json
     )
     return diags
 
 
+def _combined(digests: Iterable[str]) -> str:
+    return hashlib.sha256("".join(digests).encode()).hexdigest()
+
+
 def _multi_manifest(
-    zipped: list[tuple[Prepared, Path, str, dict[str, str]]],
+    ps: list[Prepared],
+    layers: list[Layer],
     settings: list[dict[str, object]],
     locked: list[list[_verify.LockedPackage]],
     loader: dict[str, str],
 ) -> bytes:
-    """The manifest of a bundle for several platforms: the shared fields once, then each payload
-    with its own target, hashes, packages and files (ADR-0038)."""
-    first = zipped[0][0]
+    """The manifest of a bundle for several platforms: the shared fields once, each layer with
+    its hash and files, then each payload with its layers, target and packages (ADR-0038)."""
+    first = ps[0]
     payloads = []
-    for (p, staged, digest, written), entry, packages in zip(zipped, settings, locked):
+    for p, entry, packages in zip(ps, settings, locked):
         payloads.append(
             {
-                "member": entry["member"],
-                "payload": {"sha256": digest, "size": staged.stat().st_size},
+                "members": entry["members"],
                 "cache_dir": entry["dirname"],
                 "target": p.target.to_json_dict(native=p.native, pythons=p.pythons, reach=p.reach),
                 "packages": [
                     {"name": x.name, "version": x.version}
                     for x in sorted(packages, key=lambda x: x.name)
                 ],
-                "files": written,
             }
         )
     document = {
@@ -298,6 +312,14 @@ def _multi_manifest(
         "entry": list(first.entry) if first.entry else None,
         "format": "pyz",
         "loader": loader,
+        "layers": {
+            layer.member: {
+                "sha256": layer.digest,
+                "size": layer.path.stat().st_size,
+                "files": layer.files,
+            }
+            for layer in layers
+        },
         "payloads": payloads,
     }
     return json.dumps(document, indent=1, sort_keys=True).encode("utf-8") + b"\n"
