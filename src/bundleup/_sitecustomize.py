@@ -32,27 +32,30 @@ def _bundleup_child() -> None:
 
 
 def _chain(here: str) -> None:
-    """Import the sitecustomize this file shadows, as Python would have without the bundle."""
+    """Import the sitecustomize this file shadows, as Python would have without the bundle: with
+    a plain import (this directory is already off sys.path), so the child loads the same modules
+    as plain Python (Ubuntu's own sitecustomize, say), and importlib only if that one does."""
     norm = os.path.normcase(here)
     paths = [p for p in sys.path if os.path.normcase(os.path.abspath(p or ".")) != norm]
     if not any(_may_have_sitecustomize(p) for p in paths):
-        return  # the usual case: no importlib import, so a child loads what plain Python does
+        return  # the usual case: nothing to chain to
+    ours = sys.modules.pop("sitecustomize", None)
     try:
-        import importlib.util
-        from importlib.machinery import PathFinder
-    except ImportError:
-        return
-    spec = PathFinder.find_spec("sitecustomize", paths)
-    exec_module = getattr(spec.loader, "exec_module", None) if spec else None
-    if spec is None or exec_module is None:
-        return
-    module = importlib.util.module_from_spec(spec)
-    sys.modules["sitecustomize"] = module
-    try:
-        exec_module(module)
-    except Exception as e:  # what site.py does when sitecustomize fails
-        sys.stderr.write("Error in sitecustomize; set PYTHONVERBOSE for traceback:\n")
-        sys.stderr.write("%s: %s\n" % (type(e).__name__, e))
+        __import__("sitecustomize")
+    except ImportError as e:
+        if ours is not None:
+            sys.modules["sitecustomize"] = ours
+        if e.name != "sitecustomize":  # it exists but failed: report it as site.py does
+            _report(e)
+    except Exception as e:
+        if ours is not None:
+            sys.modules["sitecustomize"] = ours
+        _report(e)
+
+
+def _report(e: BaseException) -> None:
+    sys.stderr.write("Error in sitecustomize; set PYTHONVERBOSE for traceback:\n")
+    sys.stderr.write("%s: %s\n" % (type(e).__name__, e))
 
 
 def _may_have_sitecustomize(path: str) -> bool:
