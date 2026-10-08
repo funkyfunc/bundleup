@@ -304,23 +304,25 @@ def _select() -> None:
 
 def _check_system() -> None:
     """The C library and macOS version the native wheels were built for (ADR-0029)."""
-    if LIBC and sys.platform.startswith("linux"):
+    if not _libc_fits(LIBC):
+        assert LIBC is not None
         kind, need = LIBC
         have = _libc()
-        if have and (have[0] != kind or (have[1] and have[1] < need)):
-            version = "%s %d.%d" % (have[0], have[1][0], have[1][1]) if have[1] else have[0]
-            _fail(
-                "this app was bundled for Linux with %s %d.%d or newer, but this machine has %s.\n"
-                "Rebuild it for this machine's platform (bundleup build --python-platform ...)."
-                % (kind, need[0], need[1], version)
-            )
-    if MACOS and sys.platform == "darwin":
+        assert have is not None  # _libc_fits is False only when it's known
+        version = "%s %d.%d" % (have[0], have[1][0], have[1][1]) if have[1] else have[0]
+        _fail(
+            "this app was bundled for Linux with %s %d.%d or newer, but this machine has %s.\n"
+            "Rebuild it for this machine's platform (bundleup build --python-platform ...)."
+            % (kind, need[0], need[1], version)
+        )
+    if not _macos_fits(MACOS):
+        assert MACOS is not None
         have = _macos()
-        if have and have < MACOS:
-            _fail(
-                "this app needs macOS %d.%d or newer; this Mac runs macOS %d.%d."
-                % (MACOS[0], MACOS[1], have[0], have[1])
-            )
+        assert have is not None  # likewise
+        _fail(
+            "this app needs macOS %d.%d or newer; this Mac runs macOS %d.%d."
+            % (MACOS[0], MACOS[1], have[0], have[1])
+        )
 
 
 def _roots(archive: str) -> "list[tuple[str, bool]]":
