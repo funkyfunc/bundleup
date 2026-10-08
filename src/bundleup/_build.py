@@ -57,9 +57,9 @@ from ._python import (
     find_python,
 )
 from ._source import (
-    SECRET,
     Source,
     load_source,
+    looks_secret,
     project_version,
     python_files,
     safe_name,
@@ -549,7 +549,7 @@ def _prepare(
     diagnostics, sizes = _check.analyze(
         site, project=canonicalize_name(source.name), target=target, run=run_python, script=script
     )
-    secrets = [rel for rel in own if SECRET.search(rel)]
+    secrets = [rel for rel in own if looks_secret(rel)]
     if secrets:
         diagnostics.append(
             Diagnostic(

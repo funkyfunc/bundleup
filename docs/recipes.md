@@ -6,7 +6,7 @@ platform, format and size limit the destination needs, so you can see and change
 CI builds gauntlet 14 (python-pptx, lxml, Pillow) with each recipe marked *CI*, from a Mac and
 from Linux.
 
-## A skill installed on people's machines (Claude Code, agent package managers)
+## A skill installed on people's machines (Claude Code, agent package managers) *(CI)*
 
 A skill's scripts fail with `ModuleNotFoundError` on a machine that doesn't have their packages,
 and installing them on first use needs pip, a package index and the network. Instead, ship the
@@ -46,7 +46,8 @@ provide, so a missing dependency shows up before your users find it.
 - **Size:** each file is stored once across platforms and versions, but compiled packages differ
   per platform. Measured 2026-10-07 for python-pptx, lxml, Pillow, PyMuPDF, xlsxwriter and
   pywin32 on the four platforms above: 144 MiB for one Python, 230 MiB for three, 314 MiB for
-  five; PyMuPDF is about half. Over 100 MB, bundleup warns (`large-bundle`): GitHub refuses such
+  five; PyMuPDF is about half (without it, python-pptx and pywin32 for the same four platforms
+  make 55 MiB: the `skill` CI job builds that, then runs the scripts on Linux, Windows and macOS). Over 100 MB, bundleup warns (`large-bundle`): GitHub refuses such
   files, so the repository a skill is installed from needs Git LFS, or fewer platforms or Pythons.
   **Check that your skill's delivery channel fetches Git LFS files** before relying on it; that
   isn't verified for agent package managers.

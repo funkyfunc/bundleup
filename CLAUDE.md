@@ -73,8 +73,10 @@ and git.
 - **Not yet:** a PyPI release (0.0.1 is a placeholder; [docs/releasing.md](docs/releasing.md)).
 - **ADR status:** 0023-0026 and 0033-0038 are **Proposed** (written while the owner was
   away); 0040 is Proposed; 0039 is accepted; 0027-0032 are accepted fixes the owner asked for, with designs the owner hasn't reviewed.
-  Three independent reviews: [first](docs/findings/2026-10-07-independent-review.md),
-  [second](docs/findings/2026-10-07-second-review.md), [third](docs/findings/2026-10-07-third-review.md).
+  Five independent reviews: [first](docs/findings/2026-10-07-independent-review.md),
+  [second](docs/findings/2026-10-07-second-review.md), [third](docs/findings/2026-10-07-third-review.md),
+  [fourth](docs/findings/2026-10-08-fourth-review.md), [fifth](docs/findings/2026-10-08-fifth-review.md);
+  the brief is [review-brief.md](docs/findings/review-brief.md).
 - bundleup depends on the `uv` package (bundled binary) but prefers a uv ≥ 0.9 on `PATH`
   (ADR-0011). Rust stays reserved for a future scanner (ADR-0008).
 
@@ -113,6 +115,7 @@ gauntlet/corpus*.py, corpus.toml  nightly corpus: real CLIs run installed vs bun
 gauntlet/weekly_summary.py  weekly findings page from the nightly smoke + corpus results (weekly.yml)
 gauntlet/cross.py       cross-target gauntlet: build on one OS for another, run on the target
 gauntlet/formats.py     `dir` and Lambda outputs: run as a host app would, Lambda in AWS's image
+gauntlet/skill/         the founding use case: a skill's scripts sharing one --entry python bundle (CI `skill`)
 gauntlet/suites.py, suites.toml  real projects' test suites, venv vs bundle (CI only, suites.yml)
 .github/workflows/       ci.yml (every push: checks, tests, gauntlet matrix); nightly.yml (smoke
                         test); corpus.yml (corpus run + corpus-failure issues); suites.yml (test

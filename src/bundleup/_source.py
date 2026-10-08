@@ -244,10 +244,24 @@ def _git_files(folder: Path) -> set[str] | None:
 
 
 # Files that usually hold secrets: a folder app shouldn't ship them without the author noticing.
-SECRET = re.compile(
-    r"(?i)(^|/)(id_(rsa|ed25519|ecdsa)[^/]*|[^/]*\.(pem|key|p12|pfx|keystore)|[^/]*(credential|secret|"
-    r"password|token)[^/]*\.(json|ya?ml|txt|ini|cfg|toml|env))$"
-)
+SECRET_SUFFIXES = {".pem", ".key", ".p12", ".pfx", ".keystore", ".env"}
+SECRET_WORDS = {"credential", "credentials", "secret", "secrets", "password", "passwords",
+                "token", "tokens", "key", "keys"}  # fmt: skip
+DATA_SUFFIXES = {".json", ".yaml", ".yml", ".txt", ".ini", ".cfg", ".toml", ".env"}
+
+
+def looks_secret(rel: str) -> bool:
+    """A file name that usually holds secrets: a key or certificate, an .env file, id_rsa, or
+    data named for credentials (`service-account.json`, `api-token.txt`; not `tokenizer.json`)."""
+    name = rel.rsplit("/", 1)[-1].lower()
+    stem, dot, suffix = name.rpartition(".")
+    suffix = dot + suffix if dot else ""
+    if suffix in SECRET_SUFFIXES or name.startswith(("id_rsa", "id_ed25519", "id_ecdsa")):
+        return True
+    words = set(re.split(r"[-_.\s]+", stem))
+    return suffix in DATA_SUFFIXES and bool(
+        words & SECRET_WORDS or "service-account" in stem or "service_account" in stem
+    )
 
 
 def find_uv_lock(project: Path) -> Path | None:

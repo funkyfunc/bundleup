@@ -1,6 +1,6 @@
 # ADR-0004: The lockfile decides what goes in; import tracing is for diagnostics only
 
-- **Status:** Accepted
+- **Status:** Accepted; refined by [ADR-0041](0041-input-without-a-lock.md): without a lock, the versions resolved at build time decide, and the manifest records them
 - **Date:** 2026-10-03
 - **Deciders:** the user (via the vision), proposed by an agent
 

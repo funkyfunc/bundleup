@@ -1,0 +1,11 @@
+[project]
+# The founding use case, end to end (docs/recipes.md, "A skill installed on people's machines"):
+# a skill's scripts share one deps.pyz built with --entry python for four platforms. CI builds it
+# on macOS and runs the scripts on Linux, Windows and macOS (job `skill`).
+name = "skill-fixture"
+version = "0.1.0"
+requires-python = ">=3.10"
+dependencies = [
+    "python-pptx>=1.0",
+    "pywin32>=306; sys_platform == 'win32'",
+]

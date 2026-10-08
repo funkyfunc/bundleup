@@ -271,3 +271,17 @@ def test_a_folder_app_follows_gitignore_and_flags_secrets(tmp_path: Path) -> Non
         "data/big.bin",
         "requirements.txt",
     } & set(names)
+
+
+@pytest.mark.parametrize(
+    ("name", "secret"),
+    [
+        ("service-account.json", True), ("prod.env", True), ("gcp-key.json", True),
+        ("certs/server.pem", True), ("id_rsa", True), ("api-token.txt", True),
+        ("tokenizer.json", False), ("keyboard.py", False), ("monkey.json", False),
+    ],
+)  # fmt: skip
+def test_which_names_look_like_secrets(name: str, secret: bool) -> None:
+    from bundleup._source import looks_secret
+
+    assert looks_secret(name) is secret
