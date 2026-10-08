@@ -31,17 +31,22 @@ from ._uv import console_scripts, launchers
 class Entry(NamedTuple):
     """What a bundle runs. A plain tuple in the loader's config and the manifest."""
 
-    kind: Literal["call", "module", "script"]
+    kind: Literal["call", "module", "script", "python"]
     target: str  # the module, or the script's path inside the payload
     attr: str = ""  # the function, for "call"
 
     def __str__(self) -> str:
-        """ "module:function", "module", or the script's path."""
+        """ "module:function", "module", the script's path, or "python"."""
+        if self.kind == "python":
+            return "python"
         return f"{self.target}:{self.attr}" if self.kind == "call" else self.target
 
 
 def resolve_entry(source: Source, site: Path, *, entry: str | None, script: str | None) -> Entry:
-    """What the loader runs: --entry, the project's console script, or the script itself."""
+    """What the loader runs: --entry, the project's console script, or the script itself.
+    `--entry python` runs whatever script it's given, with the bundle's packages."""
+    if entry == "python":
+        return Entry("python", "")
     if script:
         if entry:
             raise UsageError(
@@ -58,7 +63,8 @@ def resolve_entry(source: Source, site: Path, *, entry: str | None, script: str 
         elif not scripts:
             raise EntryPointError(
                 f"{source.name} defines no [project.scripts], so bundleup doesn't know what to run",
-                hint="add one to pyproject.toml, or pass --entry module:function",
+                hint="add one to pyproject.toml, pass --entry module:function, or --entry "
+                "python to run any script with these packages",
             )
         else:
             raise EntryPointError(

@@ -225,7 +225,7 @@ def _add_build_options(command: argparse.ArgumentParser, *, output: bool) -> Non
         metavar="NAME",
         default=os.environ.get("BUNDLEUP_ENTRY"),
         help=_env_help(
-            "a script name, module:function or module",
+            "a script name, module:function, module or python",
             "BUNDLEUP_ENTRY",
         ),
     )

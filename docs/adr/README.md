@@ -48,3 +48,4 @@ and change only the old one's status line.
 | [0037](0037-children-activate-only-for-bundle-code.md) | A child process activates the bundle only when it runs the bundle's code | Proposed |
 | [0038](0038-one-pyz-for-several-platforms.md) | One `.pyz` can carry a payload per platform and Python version | Proposed |
 | [0039](0039-recipes-instead-of-target-presets.md) | Recipes and capabilities (`--max-size`) instead of named target presets | Accepted |
+| [0040](0040-entry-python-runs-any-script.md) | `--entry python`: a bundle that runs the scripts it's given | Proposed |

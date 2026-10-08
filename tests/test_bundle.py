@@ -18,6 +18,7 @@ from typing import Any
 import pytest
 
 import bundleup
+from bundleup import BuildOptions, UsageError, build
 from bundleup._cli import main, parsers
 from bundleup._payload import pth_files
 from bundleup._source import script_metadata
@@ -534,3 +535,52 @@ def test_pth_files_are_processed_like_site_py(
     del sys.modules["__g_sitedir__"]
     (tmp_path / ".hidden.pth").write_text("")
     assert pth_files(tmp_path) == ["a.pth"]
+
+
+TOOL = """\
+import sys
+
+import acme_private  # from the bundle
+import helper  # beside this script, as with plain python
+
+print(acme_private.WHO, helper.NAME, sys.argv[1:])
+"""
+
+
+def test_entry_python_runs_scripts_beside_it_with_the_bundles_packages(
+    tmp_path: Path, private_index: str
+) -> None:
+    """`--entry python` (a skill's dependencies for all its scripts): the bundle runs a script,
+    `-m module` or `-c code` the way python does, with the bundle's packages importable."""
+    (tmp_path / "deps.py").write_text(private_index)
+    locked = subprocess.run(
+        ["uv", "lock", "--script", "deps.py"], cwd=tmp_path, capture_output=True
+    )
+    assert locked.returncode == 0, locked.stderr
+    out = tmp_path / "deps.pyz"
+    result = build(BuildOptions(path=tmp_path / "deps.py", output=out, entry="python"))
+    assert result.entry == "python"
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "tool.py").write_text(TOOL)
+    (scripts / "helper.py").write_text('NAME = "helper"\n')
+    env = env_for(tmp_path)
+
+    def python(*args: str) -> subprocess.CompletedProcess[str]:
+        cmd = [sys.executable, str(out), *args]
+        return subprocess.run(cmd, capture_output=True, text=True, env=env, cwd=tmp_path)
+
+    r = python(str(scripts / "tool.py"), "--flag", "x")
+    assert r.stdout.strip() == "the company index helper ['--flag', 'x']", r.stderr
+    r = python("-c", "import acme_private, sys; print(acme_private.WHO, sys.argv)", "a")
+    assert r.stdout.strip() == "the company index ['-c', 'a']", r.stderr
+    r = python("-m", "acme_private", "b")
+    assert r.stdout.strip() == "the company index ['b']", r.stderr
+    r = python("--nope")
+    assert r.returncode == 1 and "usage: python" in r.stderr
+
+
+def test_entry_python_is_for_a_pyz(tmp_path: Path) -> None:
+    (tmp_path / "deps.py").write_text("# /// script\n# dependencies = []\n# ///\n")
+    with pytest.raises(UsageError, match=r"--entry python makes a \.pyz"):
+        build(BuildOptions(path=tmp_path / "deps.py", format="dir", entry="python"))

@@ -282,6 +282,11 @@ def _settle(options: BuildOptions) -> tuple[BuildOptions, Format]:
     """What `build` and `check` start from: [tool.bundleup] filled in (ADR-0032), the format
     checked."""
     options, _configured = _config.apply(options)
+    if options.entry == "python" and (options.format or "pyz") != "pyz":
+        raise UsageError(
+            "--entry python makes a .pyz that runs the scripts it's given",
+            hint=f"drop --entry: a {options.format} output's host decides what runs",
+        )
     if options.max_size is not None and options.max_size <= 0:
         raise UsageError("--max-size must be more than 0", hint="for example: --max-size 30MB")
     return options, _format(options)

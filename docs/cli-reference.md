@@ -51,7 +51,7 @@ options:
                         output file (default: dist/<name>.pyz) [env: BUNDLEUP_OUTPUT]
   --format FORMAT       pyz (default), dir (a directory) or lambda (an AWS Lambda .zip)
   --python VERSION      a version (3.12) or a path; repeatable; default: uv's [env: BUNDLEUP_PYTHON]
-  --entry NAME          a script name, module:function or module [env: BUNDLEUP_ENTRY]
+  --entry NAME          a script name, module:function, module or python [env: BUNDLEUP_ENTRY]
   --python-platform OS  an OS/CPU, uv's names (linux); repeatable [env: BUNDLEUP_PYTHON_PLATFORM]
   --locked              fail if the lock is out of date (as in uv; the default when there is one)
   --frozen              bundle the lock as it is, without checking it (as in uv)
@@ -86,7 +86,7 @@ options:
   -h, --help            show this help message and exit
   --format FORMAT       pyz (default), dir (a directory) or lambda (an AWS Lambda .zip)
   --python VERSION      a version (3.12) or a path; repeatable; default: uv's [env: BUNDLEUP_PYTHON]
-  --entry NAME          a script name, module:function or module [env: BUNDLEUP_ENTRY]
+  --entry NAME          a script name, module:function, module or python [env: BUNDLEUP_ENTRY]
   --python-platform OS  an OS/CPU, uv's names (linux); repeatable [env: BUNDLEUP_PYTHON_PLATFORM]
   --locked              fail if the lock is out of date (as in uv; the default when there is one)
   --frozen              bundle the lock as it is, without checking it (as in uv)

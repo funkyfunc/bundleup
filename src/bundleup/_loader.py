@@ -30,6 +30,7 @@ MACHINE = None  # type: str | None  # set when the bundle contains native code
 ABIFLAGS = None  # type: str | None  # set when the bundle contains native code (POSIX only)
 TARGET = "Python 3.12 on macOS"
 # ("call", module, attr) | ("module", module, "") | ("script", path inside the payload, "")
+# | ("python", "", ""): the bundle runs whatever it's given, as python does (`--entry python`)
 ENTRY = ("call", "app", "main")
 PTH = []  # type: list[str]  # .pth files at the payload's top level, in the order site.py reads them
 # What the native wheels need (ADR-0029): ("glibc", (2, 28)) or ("musl", (1, 2)); macOS (11, 0).
@@ -568,12 +569,49 @@ def _run(site: str) -> None:
         for part in attr.split("."):
             obj = getattr(obj, part)
         sys.exit(obj())
+    if kind == "python":
+        _run_python()
+        return
     import runpy
 
     if kind == "module":
         runpy.run_module(target, run_name="__main__", alter_sys=True)
     else:
         runpy.run_path(os.path.join(site, target), run_name="__main__")
+
+
+PYTHON_USAGE = "usage: python %s [SCRIPT.py | -m MODULE | -c CODE] [ARGS...]"
+
+
+def _run_python() -> None:
+    """`--entry python`: the bundle is a Python with its packages, so plain scripts beside it
+    (a skill's, say) run with them: `app.pyz tool.py ARGS`, `-m module`, `-c code`, or a
+    prompt."""
+    import runpy
+
+    args = sys.argv[1:]
+    if not args:
+        import code
+
+        code.interact(banner="Python %s with %s's packages" % (sys.version.split()[0], NAME))
+        return
+    if args[0] in ("-m", "-c"):
+        if len(args) < 2:
+            _fail("%s needs an argument\n%s" % (args[0], PYTHON_USAGE % NAME))
+        if args[0] == "-m":
+            sys.argv = args[1:]
+            runpy.run_module(args[1], run_name="__main__", alter_sys=True)
+            return
+        sys.argv = ["-c", *args[2:]]
+        sys.path.insert(0, "")  # as python -c does: the working directory
+        exec(compile(args[1], "<string>", "exec"), {"__name__": "__main__"})
+        return
+    if args[0].startswith("-"):
+        _fail("unknown option %s\n%s" % (args[0], PYTHON_USAGE % NAME))
+    sys.argv = args
+    # As python does for a script: its directory comes first, so its own modules import.
+    sys.path.insert(0, os.path.dirname(os.path.abspath(args[0])))
+    runpy.run_path(args[0], run_name="__main__")
 
 
 _IN_USE = []  # type: list[BinaryIO]  # held open for the process's life (see _hold)
