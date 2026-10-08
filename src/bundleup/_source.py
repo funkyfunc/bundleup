@@ -40,11 +40,26 @@ def load_source(path: Path) -> Source:
     """Read what's being bundled. Raises ProjectError if it isn't a project or a script."""
     path = path.resolve()
     if path.is_file() and path.suffix == ".py":
-        meta = script_metadata(path.read_text(encoding="utf-8"))
+        text = path.read_text(encoding="utf-8")
+        if not any(m.group("type") == "script" for m in PEP723.finditer(text)):
+            raise ProjectError(
+                f"{path.name} doesn't say what it depends on: it has no `# /// script` block "
+                "(PEP 723)",
+                hint=f"add one: `uv add --script {path.name} <packages>` (or `-r requirements.txt`"
+                f"), then `uv lock --script {path.name}`",
+            )
+        meta = script_metadata(text)
         return Source(path, path.stem, meta.get("requires-python"), is_script=True)
     if path.is_dir():
         pyproject = path / "pyproject.toml"
         if not pyproject.exists():
+            if (path / "requirements.txt").is_file():
+                raise ProjectError(
+                    f"{path.name} has a requirements.txt but no pyproject.toml; bundleup needs a "
+                    "lock: exact versions and hashes of everything it bundles",
+                    hint="for one script: `uv add --script main.py -r requirements.txt`, `uv lock "
+                    "--script main.py`, then bundle main.py; docs/recipes.md has the rest",
+                )
             raise ProjectError(
                 f"{path} has no pyproject.toml",
                 hint="point bundleup at a project directory or a .py script",

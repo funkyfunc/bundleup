@@ -117,6 +117,26 @@ Known limits: Lambda doesn't run `.pth` files from `/var/task` (bundleup warns,
 `pth-not-run`), and has no `/dev/shm`, so `multiprocessing.Pool` and `Queue` don't work there
 (an AWS limitation; the emulator CI uses has it, so this isn't tested).
 
+## Coming from pip or requirements.txt
+
+bundleup needs a **lock**: the exact version and file hash of everything it bundles, so the
+same input always makes the same bundle and `verify` can check it. A `requirements.txt` usually
+isn't one (it may say `requests>=2`, and it never lists what requests needs), so bundleup
+refuses it and says how to make one. You don't have to switch tools to do so: installing
+bundleup also installs `uv`, and pip can write a lock too.
+
+| You have | Run once | Then |
+|---|---|---|
+| A script and a `requirements.txt` | `uv add --script main.py -r requirements.txt` and `uv lock --script main.py` | `bundleup build main.py` |
+| A script with no dependency list | `uv add --script tool.py <packages>` and `uv lock --script tool.py` | `bundleup build tool.py` |
+| A `pyproject.toml` you install with `pip install .` | `uv lock`, or `pip lock .` (pip 25.1+, writes `pylock.toml`) | `bundleup build` |
+| Several scripts and a `requirements.txt` | `uv init --bare` and `uv add -r requirements.txt` (a `pyproject.toml` and `uv.lock`) | `bundleup build --entry python -o deps.pyz`, then `python deps.pyz main.py` |
+
+The first command adds a `# /// script` block (PEP 723) at the top of the script, listing its
+dependencies; pip and plain `python` ignore it, so nothing else changes. Commit the lock next to
+the script or project and rerun `uv lock` when the dependencies change: a stale lock is an
+error, not a silent rebuild (ADR-0033).
+
 ## Behind a company index or proxy
 
 bundleup installs exactly the files the lock names, from the index they were locked from, and

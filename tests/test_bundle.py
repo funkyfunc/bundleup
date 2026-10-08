@@ -598,3 +598,18 @@ def test_no_warnings_under_dev_mode(bundle: Path, tmp_path: Path) -> None:
             text=True,
         )
         assert r.returncode == 0 and "Warning" not in r.stderr, r.stderr
+
+
+def test_what_isnt_locked_is_refused_with_the_way_to_lock_it(tmp_path: Path) -> None:
+    """A script without a PEP 723 block, or a folder with only requirements.txt: each refusal
+    says how to get a lock (it used to blame the Python for the script)."""
+    (tmp_path / "tool.py").write_text("import six\n")
+    with pytest.raises(bundleup.ProjectError, match="no `# /// script` block") as e:
+        build(BuildOptions(path=tmp_path / "tool.py"))
+    assert e.value.hint is not None and "uv add --script tool.py" in e.value.hint
+    (tmp_path / "requirements.txt").write_text("six\n")
+    with pytest.raises(
+        bundleup.ProjectError, match=r"requirements\.txt but no pyproject\.toml"
+    ) as e:
+        build(BuildOptions(path=tmp_path))
+    assert e.value.hint is not None and "-r requirements.txt" in e.value.hint
