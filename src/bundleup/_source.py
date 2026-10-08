@@ -178,7 +178,7 @@ def third_party_imports(path: Path, *, local: Path) -> list[str]:
             tree = ast.parse(file.read_text(encoding="utf-8"))
         except (SyntaxError, UnicodeDecodeError, ValueError):
             continue  # the build's own check reports what doesn't compile
-        found |= _imports(tree)
+        found |= imports_in(tree)
     return sorted(found - set(stdlib) - neighbours - {"__future__", "__main__"})
 
 
@@ -186,7 +186,14 @@ def _which(names: list[str]) -> str:
     return f"{names[0]}, which isn't" if len(names) == 1 else f"{', '.join(names)}, which aren't"
 
 
-def _imports(tree: ast.AST) -> set[str]:
+# An `if` on these runs only somewhere (a platform, a Python version): its imports are optional.
+CONDITIONAL = ("TYPE_CHECKING", "platform", "os.name", "version_info")
+
+
+def imports_in(tree: ast.AST) -> set[str]:
+    """The top-level modules a module's code imports for sure: not relative imports, and not
+    those guarded by `try/except ImportError` or an `if` on TYPE_CHECKING, the platform or the
+    Python version."""
     names: set[str] = set()
 
     def visit(node: ast.AST, optional: bool) -> None:
@@ -198,7 +205,9 @@ def _imports(tree: ast.AST) -> set[str]:
             for child in [*node.handlers, *node.orelse, *node.finalbody]:
                 visit(child, optional)
             return
-        if isinstance(node, ast.If) and "TYPE_CHECKING" in ast.dump(node.test):
+        if isinstance(node, ast.If) and any(c in ast.unparse(node.test) for c in CONDITIONAL):
+            for child in [*node.body, *node.orelse]:
+                visit(child, True)
             return
         if not optional and isinstance(node, ast.Import):
             names.update(alias.name.split(".")[0] for alias in node.names)
@@ -246,6 +255,11 @@ def _app_files(folder: Path, *, suffix: str = "") -> list[Path]:
         elif item.is_file() and item.name.endswith(suffix) and not item.name.endswith(".pyc"):
             found.append(item)
     return found
+
+
+def python_files(folder: Path) -> list[tuple[str, Path]]:
+    """The .py files under a folder (as for a folder app) and their POSIX paths relative to it."""
+    return [(f.relative_to(folder).as_posix(), f) for f in _app_files(folder, suffix=".py")]
 
 
 def app_files(source: Source) -> list[tuple[str, Path]]:

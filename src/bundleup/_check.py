@@ -17,8 +17,10 @@ It also measures each package for the size report.
 
 from __future__ import annotations
 
+import ast
 import json
 import os
+import sys
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
@@ -372,3 +374,51 @@ def analyze(
     diags += data_files(site, owner)
     diags.sort(key=lambda d: d.level != "error")  # stable: errors first, then in found order
     return diags, package_sizes(site, owner)
+
+
+def undeclared_imports(site: Path, code: list[tuple[str, Path, bool]]) -> list[Diagnostic]:
+    """Modules the bundled code imports that neither the payload nor the standard library has:
+    the most common way a bundle fails at run time, since it can't see the machine's packages
+    (fourth review). `code`: (name shown, file, whether modules beside it import too, as for a
+    script run with `--entry python`). A warning: the check reads imports, it doesn't run code.
+    Skipped where this Python can't tell what the standard library is (3.9)."""
+    from ._source import imports_in
+
+    stdlib = getattr(sys, "stdlib_module_names", None)
+    if stdlib is None:
+        return []
+    provided = top_level_modules(site) | set(stdlib) | {"__future__", "__main__"}
+    diags = []
+    for shown, path, beside in code:
+        try:
+            tree = ast.parse(path.read_text(encoding="utf-8"))
+        except (OSError, SyntaxError, UnicodeDecodeError, ValueError):
+            continue  # syntax-error reports what doesn't compile
+        local = top_level_modules(path.parent) if beside else set()
+        missing = sorted(imports_in(tree) - provided - local)
+        if missing:
+            diags.append(
+                Diagnostic(
+                    "undeclared-import",
+                    "warning",
+                    f"{shown} imports {', '.join(missing)}: neither the bundle nor the standard "
+                    f"library has {'it' if len(missing) == 1 else 'them'}",
+                    hint="add the packages that provide them to the dependencies (an import in "
+                    "`try: ... except ImportError` counts as optional)",
+                    file=shown,
+                )
+            )
+    return diags
+
+
+def top_level_modules(folder: Path) -> set[str]:
+    """What `import x` finds in a folder on sys.path: packages (folders, namespace ones too),
+    modules and extension modules."""
+    names = set()
+    for item in folder.iterdir() if folder.is_dir() else []:
+        if item.is_dir():
+            if not item.name.endswith((".dist-info", ".data")) and item.name.isidentifier():
+                names.add(item.name)
+        elif item.suffix in (".py", ".so", ".pyd") or ".cpython-" in item.name:
+            names.add(item.name.split(".")[0])
+    return names

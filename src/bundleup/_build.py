@@ -37,6 +37,7 @@ from ._outputs import (
     write_pyz,
 )
 from ._payload import (
+    Entry,
     Prepared,
     check_wheel_platforms,
     inspect_site,
@@ -55,7 +56,15 @@ from ._python import (
     find_interpreter,
     find_python,
 )
-from ._source import Source, load_source, project_version, safe_name, script_metadata, script_path
+from ._source import (
+    Source,
+    load_source,
+    project_version,
+    python_files,
+    safe_name,
+    script_metadata,
+    script_path,
+)
 from ._steps import Progress, ProgressEvent, Steps, ignore, run
 from ._text import findings, plural
 from ._uv import add_runtime, export, find_uv, install
@@ -337,6 +346,38 @@ def _also_platforms(pylock: Path, target: Target, names: Sequence[str]) -> list[
     return found
 
 
+# Folders whose code doesn't run in the bundle: tests and docs import pytest, sphinx and the like.
+NOT_RUN = {"tests", "test", "docs", "doc", "examples", "src"}
+
+
+def _own_code(
+    source: Source, site: Path, *, script: str | None, own: list[str], entry: Entry | None
+) -> list[tuple[str, Path, bool]]:
+    """The code bundled from the input itself, whose imports the undeclared-import check reads:
+    the script, a folder app's modules, or the project's own installed files; with `--entry
+    python`, also the scripts in the input's folder that the bundle will be given (their
+    neighbours import too, as when python runs a script)."""
+    code = [(source.path.name, site / script, False)] if script else []
+    code += [(rel, site / rel, False) for rel in own if rel.endswith(".py")]
+    if not source.is_script and not source.app:
+        project = canonicalize_name(source.name)
+        owned = _check.owners(site, project=project)
+        code += [
+            (rel, site / rel, False)
+            for rel, owner in sorted(owned.items())
+            if owner.name == project and rel.endswith(".py") and (site / rel).is_file()
+        ]
+    if entry is not None and entry.kind == "python":
+        folder = source.path if source.path.is_dir() else source.path.parent
+        bundled = _check.top_level_modules(site)
+        for rel, file in python_files(folder):
+            top = rel.split("/")[0]
+            if file == source.path or top in NOT_RUN or top.removesuffix(".py") in bundled:
+                continue
+            code.append((rel, file, True))
+    return code
+
+
 def _unlocked(source: Source, *, pinned: bool) -> list[Diagnostic]:
     """Input without a lock builds (ADR-0041), but its versions were resolved just now, so a
     later build can bundle different ones: a warning, with the way to lock. `--strict` or
@@ -468,6 +509,8 @@ def _prepare(
     diagnostics, sizes = _check.analyze(
         site, project=canonicalize_name(source.name), target=target, run=run_python, script=script
     )
+    code = _own_code(source, site, script=script, own=own, entry=entry)
+    diagnostics += _check.undeclared_imports(site, code)
     diagnostics += _format_diagnostics(fmt, site, sizes)
     diagnostics += coverage
     diagnostics += _unlocked(source, pinned=exported.pinned)

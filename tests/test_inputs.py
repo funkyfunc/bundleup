@@ -188,3 +188,26 @@ def test_a_lock_higher_up_counts_only_for_a_workspace_member(tmp_path: Path) -> 
         '[tool.uv.workspace]\nmembers = ["tools/*"]\nexclude = ["tools/sub"]\n'
     )
     assert find_uv_lock(sub) is None
+
+
+@pytest.mark.skipif(sys.version_info < (3, 10), reason="3.9 has no sys.stdlib_module_names")
+def test_undeclared_imports_are_reported(tmp_path: Path, private_index: str) -> None:
+    """A bundle can't see the machine's packages, so an import the dependencies don't provide
+    fails at run time: a warning at build time (fourth review). With --entry python, the scripts
+    in the folder are read too, and their neighbours count."""
+    (tmp_path / "deps.py").write_text(private_index + "import acme_private, yaml\n")
+    scripts = tmp_path / "scripts"
+    scripts.mkdir()
+    (scripts / "edit.py").write_text("import acme_private, helper, json, requests\n")
+    (scripts / "helper.py").write_text("X = 1\n")
+    (tmp_path / "tests").mkdir()
+    (tmp_path / "tests" / "test_x.py").write_text("import pytest\n")  # not run by the bundle
+    result = build(
+        BuildOptions(path=tmp_path / "deps.py", entry="python", output=tmp_path / "d.pyz")
+    )
+    found = {d.file: d.message for d in result.diagnostics if d.code == "undeclared-import"}
+    assert found == {
+        "deps.py": "deps.py imports yaml: neither the bundle nor the standard library has it",
+        "scripts/edit.py": "scripts/edit.py imports requests: neither the bundle nor the "
+        "standard library has it",
+    }
