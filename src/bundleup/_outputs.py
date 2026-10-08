@@ -113,9 +113,11 @@ def write_bundle(
     loader: Path,
     loader_pyc: Path,
     manifest_json: bytes,
+    max_size: int | None = None,
 ) -> None:
     """Write shebang + outer zip to a temporary file, then rename it over `output`. `payloads`:
-    member name -> payload zip (one, `payload.zip`, unless the bundle is for several platforms)."""
+    member name -> payload zip (one, `payload.zip`, unless the bundle is for several platforms).
+    The finished file is checked against `max_size` before it replaces anything."""
     output.parent.mkdir(parents=True, exist_ok=True)
     tmp = output.with_name(f".{output.name}.tmp-{os.getpid()}")
     try:
@@ -139,6 +141,7 @@ def write_bundle(
                 info.compress_type = zipfile.ZIP_DEFLATED  # can be MBs for big bundles
                 zf.writestr(info, manifest_json)
         tmp.chmod(0o755)
+        check_size(tmp.stat().st_size, max_size, [])  # exact: loader and manifest included
         tmp.replace(output)
     finally:
         if tmp.exists():
@@ -206,7 +209,7 @@ def write_pyz(
     total = sum(layer.path.stat().st_size for layer in layers)
     diags: list[Diagnostic] = []
     check_size(total, max_size, diags)
-    if max_size is None and total > LARGE:
+    if max_size is None and total > LARGE and _in_git(output):
         diags.append(_large(total, ps))
     steps.start("verify")
     mine = [[layer for layer in layers if i in layer.owners] for i in range(len(ps))]
@@ -276,7 +279,12 @@ def write_pyz(
         manifest_json = _multi_manifest(ps, layers, settings, locked, hashes)
     payloads = {layer.member: layer.path for layer in layers}
     write_bundle(
-        output, payloads=payloads, loader=loader, loader_pyc=loader_pyc, manifest_json=manifest_json
+        output,
+        payloads=payloads,
+        loader=loader,
+        loader_pyc=loader_pyc,
+        manifest_json=manifest_json,
+        max_size=max_size,
     )
     return diags
 
@@ -309,7 +317,7 @@ def _multi_manifest(
             }
         )
     document = {
-        "manifest_version": 1,
+        "manifest_version": 2,  # layers and payloads (ADR-0038); 1 is one payload
         "bundleup_version": __version__,
         "name": first.source.name,
         "version": first.version,
@@ -406,16 +414,22 @@ def stage_lambda(p: Prepared, *, stage: Path, steps: Steps) -> Path:
 LARGE = 100 * 10**6
 
 
+def _in_git(output: Path) -> bool:
+    """Whether the bundle is written into a git work tree, where GitHub's limit matters (a fact
+    about one destination, so it only applies there; fourth review)."""
+    return any((d / ".git").exists() for d in output.absolute().parents)
+
+
 def _large(total: int, ps: list[Prepared]) -> Diagnostic:
     """A warning for a bundle too big for a git repository, saying where the size comes from."""
     largest = ", ".join(f"{x.name} {describe_size(x.size_bytes)}" for x in ps[0].sizes[:3])
-    each = f" in each of the {len(ps)} payloads" if len(ps) > 1 else ""
+    each = f" (of {len(ps)} payloads, the first)" if len(ps) > 1 else ""
     return Diagnostic(
         "large-bundle",
         "warning",
         f"the bundle is {describe_size(total)}: GitHub refuses files over 100 MB, so a "
         "repository (or a skill installed from one) can't hold it without Git LFS",
-        hint=f"the largest packages{each} (unpacked): {largest}; fewer --python or "
+        hint=f"the largest packages{each}, unpacked: {largest}; fewer --python or "
         "--python-platform values make it smaller, and --max-size makes a limit an error",
     )
 

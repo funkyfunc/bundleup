@@ -424,6 +424,8 @@ def _unlocked(source: Source, *, pinned: bool) -> list[Diagnostic]:
         name = source.declared.name
         message = f"{source.path.name} has no lockfile (uv.lock or pylock.toml)"
         hint = "lock it: `uv lock`, or `pip lock .` (pip 25.1+, writes pylock.toml)"
+        if source.declared.name != "pyproject.toml":  # uv lock needs a pyproject.toml
+            hint = "lock it: `pip lock .` (pip 25.1+, writes pylock.toml)"
     else:
         return []
     return [
