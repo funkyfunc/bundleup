@@ -148,8 +148,8 @@ UPDATE_SNAPSHOTS=1 uv run pytest -q tests/test_cli.py                       # af
 - **Use uv** for all Python tooling. Standalone scripts use PEP 723 headers and run with `uv run`.
 - **Mind the target Pythons:** the runtime bootstrap must work on macOS's system Python 3.9.
 - **Git:** stage explicit paths, never `git add -A`: other sessions may be editing the repo at the
-  same time. Work on a branch and merge to `main` when CI is green; commit each fix as soon as it
-  passes (never `git checkout -- .` over uncommitted work). Commit only when asked. Commit messages describe the change only. No AI attribution
+  same time. Work on `main` (the owner's choice, 2026-10-07) and check CI after pushing; commit
+  each fix as soon as it passes (never `git checkout -- .` over uncommitted work). Commit only when asked. Commit messages describe the change only. No AI attribution
   (no `Co-Authored-By`, no "Generated with" lines).
 
 ## Working with the user
