@@ -6,6 +6,12 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-08** · runtime · `python -` (a program on stdin) has `sys.argv == ["-"]`, piped
+  input with no arguments `[""]`, like a prompt. ADR-0037's child check treated neither as the
+  bundle's code, so click's `test_light_imports` (which runs `python -`) couldn't import click in
+  a bundle; the nightly suites caught it on every OS, but kept only pytest's last 15 lines, so
+  the failing test's name took a re-run with full failure lists. Evidence:
+  `tests/test_bundle.py::test_a_child_reading_its_program_from_stdin_sees_the_bundle`.
 - **2026-10-07** · security · bundleup exported the lock as bare `name==version` lines and let
   `uv pip install` find them on the default index: a package locked from a private index wasn't
   found, a same-named one on PyPI would have been bundled (dependency confusion), and hashes were

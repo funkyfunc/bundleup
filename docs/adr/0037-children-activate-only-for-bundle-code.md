@@ -22,7 +22,14 @@ runs):
 - `-m module`: yes if the module is in the payload (from `sys.orig_argv`, 3.10+); on 3.9, which
   can't tell, yes;
 - a script inside the payload: yes; any other script (a console script installed with that
-  Python): no; an interactive interpreter: no.
+  Python): no;
+- a program on stdin (`python -`, or `python` with piped input) or a prompt: yes. (Changed
+  2026-10-08: first "no" for an interactive interpreter, which also left out stdin programs;
+  click's own test suite runs `python -` and failed in a bundle. Code the bundle's program hands
+  its own interpreter is its code, as with `-c`; a console script always has its path in
+  `sys.argv[0]`.)
+- When no other `sitecustomize` exists on `sys.path` (a few stat calls), the payload's imports
+  nothing beyond `os` and `sys`, so a child loads the same modules plain Python does.
 
 ## Consequences
 

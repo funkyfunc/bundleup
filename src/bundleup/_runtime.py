@@ -35,8 +35,12 @@ def runs_bundle_code(site: str) -> bool:
     2026-10-07). sys.argv is already set when sitecustomize runs."""
     argv = getattr(sys, "argv", None) or [""]
     first = argv[0]
-    if first == "-c":
-        return True  # sys.executable -c ..., and multiprocessing's spawn and forkserver children
+    if first in ("-c", "-", ""):
+        # sys.executable -c ... (also multiprocessing's spawn and forkserver children), a program
+        # on stdin (`python -`, or piped with no arguments) or a prompt: code the bundle's program
+        # hands its own interpreter. (click's test suite runs `python -`; a console script, which
+        # mustn't see the bundle, always has its path here.)
+        return True
     if first == "-m":
         original = getattr(sys, "orig_argv", None)  # 3.10+: the full command line
         if original and "-m" in original[:-1]:
@@ -45,8 +49,6 @@ def runs_bundle_code(site: str) -> bool:
                 os.path.join(site, top + ".py")
             )
         return True  # 3.9 can't tell which module: assume the bundle's own (the common case)
-    if not first:
-        return False  # an interactive interpreter
     script = os.path.normcase(os.path.abspath(first))
     return script.startswith(os.path.normcase(os.path.abspath(site)) + os.sep)
 

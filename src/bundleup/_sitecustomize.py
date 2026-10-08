@@ -33,13 +33,15 @@ def _bundleup_child() -> None:
 
 def _chain(here: str) -> None:
     """Import the sitecustomize this file shadows, as Python would have without the bundle."""
+    norm = os.path.normcase(here)
+    paths = [p for p in sys.path if os.path.normcase(os.path.abspath(p or ".")) != norm]
+    if not any(_may_have_sitecustomize(p) for p in paths):
+        return  # the usual case: no importlib import, so a child loads what plain Python does
     try:
         import importlib.util
         from importlib.machinery import PathFinder
     except ImportError:
         return
-    norm = os.path.normcase(here)
-    paths = [p for p in sys.path if os.path.normcase(os.path.abspath(p or ".")) != norm]
     spec = PathFinder.find_spec("sitecustomize", paths)
     exec_module = getattr(spec.loader, "exec_module", None) if spec else None
     if spec is None or exec_module is None:
@@ -51,6 +53,19 @@ def _chain(here: str) -> None:
     except Exception as e:  # what site.py does when sitecustomize fails
         sys.stderr.write("Error in sitecustomize; set PYTHONVERBOSE for traceback:\n")
         sys.stderr.write("%s: %s\n" % (type(e).__name__, e))
+
+
+def _may_have_sitecustomize(path: str) -> bool:
+    """A few stat calls: a sitecustomize module or package in this sys.path entry, or a zip
+    (python3X.zip), which only importlib can look inside."""
+    path = path or "."
+    if os.path.isfile(path):
+        return True
+    import _imp  # built in, and already loaded: the import system uses it
+
+    names = ["sitecustomize.py", "sitecustomize.pyc", "sitecustomize"]
+    names += ["sitecustomize" + suffix for suffix in _imp.extension_suffixes()]
+    return any(os.path.exists(os.path.join(path, name)) for name in names)
 
 
 _bundleup_child()

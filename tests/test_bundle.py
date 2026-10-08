@@ -613,3 +613,29 @@ def test_what_isnt_locked_is_refused_with_the_way_to_lock_it(tmp_path: Path) -> 
     ) as e:
         build(BuildOptions(path=tmp_path))
     assert e.value.hint is not None and "-r requirements.txt" in e.value.hint
+
+
+CHILD_ON_STDIN = """\
+import subprocess, sys
+code = "import sys, acme_private; print(acme_private.WHO, 'importlib' in sys.modules)"
+for args in ([sys.executable, "-"], [sys.executable]):
+    done = subprocess.run(args, input=code, capture_output=True, text=True)
+    print(done.stdout.strip() or done.stderr.strip().splitlines()[-1])
+"""
+
+
+def test_a_child_reading_its_program_from_stdin_sees_the_bundle(
+    tmp_path: Path, private_index: str
+) -> None:
+    """`python -` (click's test suite) or python with piped input, started by the bundle's
+    program: the program's own code, so it sees the bundle, like `-c` (nightly suites,
+    2026-10-08). Nothing extra is imported for it, importlib included."""
+    (tmp_path / "deps.py").write_text(private_index)
+    locked = subprocess.run(
+        ["uv", "lock", "--script", "deps.py"], cwd=tmp_path, capture_output=True
+    )
+    assert locked.returncode == 0, locked.stderr
+    out = tmp_path / "deps.pyz"
+    build(BuildOptions(path=tmp_path / "deps.py", output=out, entry="python"))
+    r = run(out, env_for(tmp_path), "-c", CHILD_ON_STDIN)
+    assert r.stdout.splitlines() == ["the company index False"] * 2, r.stderr + r.stdout
