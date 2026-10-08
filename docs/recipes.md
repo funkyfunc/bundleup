@@ -31,7 +31,18 @@ bundleup build my-skill --entry python -o my-skill/scripts/deps.pyz \
   --python-platform x86_64-pc-windows-msvc --python-platform x86_64-manylinux_2_28
 ```
 
-and in SKILL.md: `python3 scripts/deps.pyz scripts/deck_edit.py ...` (`python` on Windows). The
+(or keep the settings in the project, so `bundleup build my-skill -o my-skill/scripts/deps.pyz` is
+enough:
+
+```toml
+[tool.bundleup]
+entry = "python"
+python = "3.12"
+python-platform = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-pc-windows-msvc",
+                   "x86_64-manylinux_2_28"]
+```
+
+) and in SKILL.md: `python3 scripts/deps.pyz scripts/deck_edit.py ...` (`python` on Windows). The
 scripts' own helper modules import as usual (the script's folder comes first on `sys.path`), and
 a script that starts another one from that folder with `sys.executable` shares the bundle. Every
 build reads the scripts' imports and warns (`undeclared-import`) about any the bundle doesn't

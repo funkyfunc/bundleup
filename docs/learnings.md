@@ -6,6 +6,10 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-08** · process · A claim in a findings write-up ("no false warnings across the
+  gauntlet") came from a scan that grepped the text output for the diagnostic's *code*, which only
+  `--json` shows, so it couldn't have found anything. Check that a scan can find a known case
+  before reporting that it found none. Evidence: [fifth review](findings/2026-10-08-fifth-review.md).
 - **2026-10-08** · process · The fourth review found the founding case still failed on a
   typical Mac (Homebrew's newer `python3` first on PATH, Apple's 3.9 only as `python3`), that
   undeclared imports were the most common run-time failure yet unchecked, and that "work on main"
