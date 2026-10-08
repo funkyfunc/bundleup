@@ -6,8 +6,10 @@ into the input."""
 from __future__ import annotations
 
 import hashlib
+import io
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -211,3 +213,29 @@ def test_undeclared_imports_are_reported(tmp_path: Path, private_index: str) -> 
         "scripts/edit.py": "scripts/edit.py imports requests: neither the bundle nor the "
         "standard library has it",
     }
+
+
+def test_a_folder_app_follows_gitignore_and_flags_secrets(tmp_path: Path) -> None:
+    """Fourth review: everything not hidden went in, credentials and earlier bundles too."""
+    app = tmp_path / "app"
+    app.mkdir()
+    (app / "main.py").write_text("print('hi')\n")
+    (app / "requirements.txt").write_text("")
+    (app / "old.pyz").write_text("")
+    (app / "credentials.json").write_text("{}")
+    (app / "data").mkdir()
+    (app / "data" / "big.bin").write_text("x")
+    result = build(BuildOptions(path=app, output=tmp_path / "a.pyz"))
+    assert [d.code for d in result.diagnostics] == ["secret-file"]
+    subprocess.run(["git", "init", "-q"], cwd=app, check=True)
+    (app / ".gitignore").write_text("credentials.json\ndata/\n")
+    result = build(BuildOptions(path=app, output=tmp_path / "b.pyz"))
+    assert result.diagnostics == []
+    with zipfile.ZipFile(tmp_path / "b.pyz") as outer:
+        names = zipfile.ZipFile(io.BytesIO(outer.read("payload.zip"))).namelist()
+    assert "main.py" in names and not {
+        "old.pyz",
+        "credentials.json",
+        "data/big.bin",
+        "requirements.txt",
+    } & set(names)

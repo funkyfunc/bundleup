@@ -263,8 +263,47 @@ def python_files(folder: Path) -> list[tuple[str, Path]]:
 
 
 def app_files(source: Source) -> list[tuple[str, Path]]:
-    """A folder app's files and where each goes in the payload (POSIX, relative)."""
-    return [(f.relative_to(source.path).as_posix(), f) for f in _app_files(source.path)]
+    """A folder app's files and where each goes in the payload (POSIX, relative): in a git
+    repository only what git would track (.gitignore applies), never bundles (`*.pyz`) or the
+    requirements files themselves (fourth review: a credentials.json and an earlier output went
+    in)."""
+    tracked = _git_files(source.path)
+    found = []
+    for file in _app_files(source.path):
+        rel = file.relative_to(source.path).as_posix()
+        if file.suffix == ".pyz" or (
+            file.name.startswith("requirements") and file.suffix == ".txt"
+        ):
+            continue
+        if tracked is None or rel in tracked:
+            found.append((rel, file))
+    return found
+
+
+def _git_files(folder: Path) -> set[str] | None:
+    """The files under `folder` git tracks or would (not ignored), relative to it; None outside a
+    git work tree or without git."""
+    import subprocess
+
+    try:
+        done = subprocess.run(
+            ["git", "ls-files", "--cached", "--others", "--exclude-standard", "-z"],
+            cwd=folder,
+            capture_output=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if done.returncode:
+        return None
+    return {name for name in done.stdout.decode("utf-8", "replace").split("\0") if name}
+
+
+# Files that usually hold secrets: a folder app shouldn't ship them without the author noticing.
+SECRET = re.compile(
+    r"(?i)(^|/)(id_(rsa|ed25519|ecdsa)[^/]*|[^/]*\.(pem|key|p12|pfx|keystore)|[^/]*(credential|secret|"
+    r"password|token)[^/]*\.(json|ya?ml|txt|ini|cfg|toml|env))$"
+)
 
 
 def find_uv_lock(project: Path) -> Path | None:

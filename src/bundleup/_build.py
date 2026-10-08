@@ -57,6 +57,7 @@ from ._python import (
     find_python,
 )
 from ._source import (
+    SECRET,
     Source,
     load_source,
     project_version,
@@ -509,6 +510,19 @@ def _prepare(
     diagnostics, sizes = _check.analyze(
         site, project=canonicalize_name(source.name), target=target, run=run_python, script=script
     )
+    secrets = [rel for rel in own if SECRET.search(rel)]
+    if secrets:
+        diagnostics.append(
+            Diagnostic(
+                "secret-file",
+                "warning",
+                f"{', '.join(secrets[:5])}{' and more' if len(secrets) > 5 else ''} would go "
+                "into the bundle, and look like secrets",
+                hint="anyone with the bundle can read them: add them to .gitignore (bundleup "
+                "follows it in a git repository) or move them out of the folder",
+                file=secrets[0],
+            )
+        )
     code = _own_code(source, site, script=script, own=own, entry=entry)
     diagnostics += _check.undeclared_imports(site, code)
     diagnostics += _format_diagnostics(fmt, site, sizes)
