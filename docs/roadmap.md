@@ -129,8 +129,9 @@ What [MISSION.md](../MISSION.md) defines as done:
 | Destination | What we'd produce | Why it's a real gap |
 |---|---|---|
 | ~~**AWS Lambda**~~ done (`--format lambda`; layers not yet) | `--format lambda`: a native Lambda zip or layer (not a `.pyz`: Lambda already unzips, and only `/tmp` is writable), with a size report against the 250 MB limit | Most common serverless request; hand-built packages often ship Mac wheels ([ADR-0014](adr/0014-output-formats-and-target-presets.md), accepted) |
-| **Container images (docs only)** | Document the 3-line Dockerfile that copies `app.pyz` onto `python:3.x-slim` | Round 4 recommends against building images ourselves; Dockerfile + uv already works |
-| **Standalone executables** (high value, deferred) | An opt-in output that pairs the `.pyz` with a portable Python (python-build-standalone), like pex `--scie` or PyApp: one file per OS/CPU that needs **nothing** installed | Serves desktop users without Python, the one big audience a `.pyz` can't reach (round 4). Deferred, not rejected: excluded from the core by [ADR-0002](adr/0002-target-the-runtime-only-tier.md) because of code signing/notarization and size (~tens of MB per platform), so it needs its own ADR first. Build on cross-target builds; consider handing off to pex's scie tooling rather than writing a launcher |
+| **Container images (docs now; revisit)** | Document the 3-line Dockerfile that copies `app.pyz` onto `python:3.x-slim`; later perhaps a daemonless image writer (base image + one layer, as `ko` and `jib` do) | Round 4 recommends against building images ourselves; the owner wants it revisited ([2026-10-08 note](findings/2026-10-08-inputs-outputs-and-transforms.md)) |
+| **One literal `.py` file** (proposed 2026-10-08) | `--format py`: a readable header (contents, pinned versions as a PEP 723-style block) and the bundle as base64 with a ~30-line unpacker; `python tool.py` | Goes where only `.py` files go (gists, agent tools, uploads); +33% size, so for small tools. The owner's idea; [note](findings/2026-10-08-inputs-outputs-and-transforms.md) |
+| **Standalone executables** (high value, deferred; the owner wants a deep investigation, maybe our own format) | An opt-in output that pairs the `.pyz` with a portable Python (python-build-standalone), like pex `--scie` or PyApp: one file per OS/CPU that needs **nothing** installed | Serves desktop users without Python, the one big audience a `.pyz` can't reach (round 4). Deferred, not rejected: excluded from the core by [ADR-0002](adr/0002-target-the-runtime-only-tier.md) because of code signing/notarization and size (~tens of MB per platform), so it needs its own ADR first. Build on cross-target builds; consider handing off to pex's scie tooling rather than writing a launcher. Start with a research round on Node's single executable applications, Deno/Bun `compile`, scie, PyInstaller, PyOxidizer, Nuitka, Cosmopolitan Python and PEP 711 ([note](findings/2026-10-08-inputs-outputs-and-transforms.md)) |
 | **"No Python installed"** | A tiny launcher that downloads a Python on first run, then runs the bundle | The "user has no usable Python" problem ([primer](python-primer.md) §3) |
 | **MCP servers (deferred)** | A bundled MCP server that starts with `python server.pyz` | Only for offline or single-platform cases: MCPB already moved Python to a host-side `uv` server type, and compiled deps (pydantic) can't be bundled portably for unknown desktops |
 | **Agents as operators (hypothesis)** | A bundleup skill so an agent can bundle a script it wrote (build where there's network, run in an offline sandbox) | Plausible and unserved, but no evidence of demand found yet; validate with users first |
@@ -142,7 +143,11 @@ What [MISSION.md](../MISSION.md) defines as done:
   or `uvx` but for bundles.
 - **Bundles for the browser:** packaging Python for Pyodide/WebAssembly, which is painful today.
 - **Vendoring for libraries:** bundle a library's own dependencies under renamed imports (like
-  Java's Shade) so they can't conflict with the user's versions.
+  Java's Shade) so they can't conflict with the user's versions. Also for `--format dir`: two
+  plugins in one host application with different versions of a package
+  ([note](findings/2026-10-08-inputs-outputs-and-transforms.md)).
+- **`--strip` of known-dead files** (C headers, Cython sources, type stubs, test folders): ~1 MB
+  of a 40 MB payload measured; small, so only if users ask.
 - **Other languages:** skills ship Python *and* Node scripts. One tool that bundles either (driving
   esbuild for Node) is plausible; nothing in the name says Python.
 
