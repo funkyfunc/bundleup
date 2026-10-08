@@ -21,8 +21,14 @@ pex has the same idea: a `.pex` with no entry point behaves like the Python inte
   it's given, the way `python` does, with the bundle's packages importable:
   - `python deps.pyz tool.py ARGS`: the script, with `sys.argv = ["tool.py", ARGS...]` and the
     script's directory first on `sys.path` (so its own helper modules import);
-  - `python deps.pyz -m module ARGS`, `python deps.pyz -c CODE ARGS`;
-  - no arguments: an interactive prompt; an unknown option is a one-line usage error.
+  - `python deps.pyz -m module ARGS`, `python deps.pyz -c CODE ARGS`, a program on stdin
+    (`-`, or piped with no arguments); `-c` and stdin code run as the real `__main__` module, so
+    pickle and multiprocessing find its classes;
+  - no arguments at a terminal: an interactive prompt. An interpreter option (`-u`, `-X`, ...)
+    gets a one-line error saying to put it before the bundle.
+- Scripts under the folder of the script it was given are the bundle's code too: a skill script
+  that starts a sibling with `sys.executable` shares the bundle (`BUNDLEUP_RUNTIME_SCRIPTS`; added
+  2026-10-08 after the fourth review, which reproduced the sibling failing).
 - The dependencies come from a project (a `pyproject.toml` with only `dependencies` and a lock
   is enough) or a PEP 723 script, whose own code isn't run.
 - Only for a `.pyz`: `dir` and `lambda` outputs have no entry point to choose (a usage error).
@@ -33,9 +39,11 @@ pex has the same idea: a `.pex` with no entry point behaves like the Python inte
 - A skill ships one `scripts/deps.pyz` and keeps its scripts as plain `.py` files the agent can
   read; SKILL.md says `python3 scripts/deps.pyz scripts/deck_edit.py ...`. No install step, no
   network, no index.
-- A child process that runs another script outside the bundle with `sys.executable` doesn't get
-  the packages (ADR-0027 activates children only for the bundle's own code); running it through
-  the bundle again does.
+- A child that runs a script outside that folder with `sys.executable` doesn't get the packages
+  (ADR-0037 activates children only for the bundle's own code); running it through the bundle
+  again does.
+- Every build reads the scripts in the input's folder for imports the bundle doesn't provide
+  (`undeclared-import`), so a skill finds a missing dependency before its users do.
 - A module literally named `python` can't be an entry point (none is published).
 
 ## Alternatives considered

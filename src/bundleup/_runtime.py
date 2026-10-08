@@ -20,6 +20,9 @@ ENV_PATHS = (
     "BUNDLEUP_RUNTIME_PATHS"  # everything activate() added to sys.path, os.pathsep-separated
 )
 ENV_PYTHON = "BUNDLEUP_RUNTIME_PYTHON"  # identity() of the bundle's interpreter
+# `--entry python` (ADR-0040): the folder of the script it was given. Scripts under it are the
+# bundle's code too, so a skill script that runs a sibling with sys.executable shares the bundle.
+ENV_SCRIPTS = "BUNDLEUP_RUNTIME_SCRIPTS"
 
 
 def identity() -> str:
@@ -50,7 +53,8 @@ def runs_bundle_code(site: str) -> bool:
             )
         return True  # 3.9 can't tell which module: assume the bundle's own (the common case)
     script = os.path.normcase(os.path.abspath(first))
-    return script.startswith(os.path.normcase(os.path.abspath(site)) + os.sep)
+    homes = [site] + [p for p in os.environ.get(ENV_SCRIPTS, "").split(os.pathsep) if p]
+    return any(script.startswith(os.path.normcase(os.path.abspath(h)) + os.sep) for h in homes)
 
 
 def site_packages_index() -> int:

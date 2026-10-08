@@ -21,8 +21,8 @@ runs):
 - `-c ...`: yes (`sys.executable -c`, multiprocessing's spawn and forkserver children);
 - `-m module`: yes if the module is in the payload (from `sys.orig_argv`, 3.10+); on 3.9, which
   can't tell, yes;
-- a script inside the payload: yes; any other script (a console script installed with that
-  Python): no;
+- a script inside the payload, or under the folder of the script `--entry python` was given
+  (ADR-0040): yes; any other script (a console script installed with that Python): no;
 - a program on stdin (`python -`, or `python` with piped input) or a prompt: yes. (Changed
   2026-10-08: first "no" for an interactive interpreter, which also left out stdin programs;
   click's own test suite runs `python -` and failed in a bundle. Code the bundle's program hands

@@ -586,7 +586,30 @@ def test_entry_python_runs_scripts_beside_it_with_the_bundles_packages(
     r = python("-m", "acme_private", "b")
     assert r.stdout.strip() == "the company index ['b']", r.stderr
     r = python("--nope")
-    assert r.returncode == 1 and "usage: python" in r.stderr
+    assert r.returncode == 1 and "usage: python deps.pyz" in r.stderr
+    r = python("-u", "x.py")  # an interpreter option: say where it goes
+    assert r.returncode == 1 and "put it before the bundle, as in python -u deps.pyz" in r.stderr
+    # A program on stdin, piped or with `-`, as python runs it (fourth review: a prompt opened).
+    for args in ([], ["-", "z"]):
+        done = subprocess.run(
+            [sys.executable, str(out), *args],
+            input="import acme_private, sys; print(acme_private.WHO, sys.argv)",
+            capture_output=True, text=True, env=env, cwd=tmp_path,
+        )  # fmt: skip
+        assert done.stdout.strip() == f"the company index {['-', *args[1:]]}", done.stderr
+    # Code from -c runs as the real __main__: pickle finds its classes.
+    r = python(
+        "-c", "import pickle\nclass A: pass\nprint(type(pickle.loads(pickle.dumps(A()))).__name__)"
+    )
+    assert r.stdout.strip() == "A", r.stderr
+    # A script that starts a sibling with sys.executable: the sibling sees the bundle too.
+    (scripts / "parent.py").write_text(
+        "import os, subprocess, sys\n"
+        "here = os.path.dirname(os.path.abspath(__file__))\n"
+        "subprocess.run([sys.executable, os.path.join(here, 'tool.py'), 'child'], check=True)\n"
+    )
+    r = python(str(scripts / "parent.py"))
+    assert r.stdout.strip() == "the company index helper ['child']", r.stderr
 
 
 def test_entry_python_is_for_a_pyz(tmp_path: Path) -> None:

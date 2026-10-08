@@ -610,38 +610,65 @@ def _run(site: str) -> None:
         runpy.run_path(os.path.join(site, target), run_name="__main__")
 
 
-PYTHON_USAGE = "usage: python %s [SCRIPT.py | -m MODULE | -c CODE] [ARGS...]"
+PYTHON_USAGE = "usage: python %s [SCRIPT.py | -m MODULE | -c CODE | -] [ARGS...]"
 
 
 def _run_python() -> None:
     """`--entry python`: the bundle is a Python with its packages, so plain scripts beside it
-    (a skill's, say) run with them: `app.pyz tool.py ARGS`, `-m module`, `-c code`, or a
-    prompt."""
+    (a skill's, say) run with them, as python runs them: `app.pyz tool.py ARGS`, `-m module`,
+    `-c code`, a program on stdin (`-`, or piped), or a prompt."""
     import runpy
 
+    me = os.path.basename(_ARCHIVE)
     args = sys.argv[1:]
+    if not args and not sys.stdin.isatty():
+        args = ["-"]  # piped: run it, as python does
     if not args:
         import code
 
         code.interact(banner="Python %s with %s's packages" % (sys.version.split()[0], NAME))
         return
-    if args[0] in ("-m", "-c"):
-        if len(args) < 2:
-            _fail("%s needs an argument\n%s" % (args[0], PYTHON_USAGE % NAME))
-        if args[0] == "-m":
-            sys.argv = args[1:]
-            runpy.run_module(args[1], run_name="__main__", alter_sys=True)
-            return
-        sys.argv = ["-c", *args[2:]]
+    first = args[0]
+    if first in ("-m", "-c") and len(args) < 2:
+        _fail("%s needs an argument\n%s" % (first, PYTHON_USAGE % me))
+    if first == "-m":
+        sys.argv = args[1:]
+        runpy.run_module(args[1], run_name="__main__", alter_sys=True)
+    elif first in ("-c", "-"):
+        source = args[1] if first == "-c" else sys.stdin.read()
+        sys.argv = [first, *args[2 if first == "-c" else 1 :]]
         sys.path.insert(0, "")  # as python -c does: the working directory
-        exec(compile(args[1], "<string>", "exec"), {"__name__": "__main__"})
-        return
-    if args[0].startswith("-"):
-        _fail("unknown option %s\n%s" % (args[0], PYTHON_USAGE % NAME))
-    sys.argv = args
-    # As python does for a script: its directory comes first, so its own modules import.
-    sys.path.insert(0, os.path.dirname(os.path.abspath(args[0])))
-    runpy.run_path(args[0], run_name="__main__")
+        _exec_main(source, "<string>" if first == "-c" else "<stdin>")
+    elif first.startswith("-"):
+        _fail(
+            "%s is an option for Python itself: put it before the bundle, as in python %s %s ..."
+            "\n%s" % (first, first, me, PYTHON_USAGE % me)
+        )
+    else:
+        sys.argv = args
+        # As python does for a script: its folder comes first, so its own modules import; and
+        # scripts under it that it starts with sys.executable see the bundle too (ADR-0040).
+        folder = os.path.dirname(os.path.abspath(first))
+        sys.path.insert(0, folder)
+        _add_env_path("BUNDLEUP_RUNTIME_SCRIPTS", folder)
+        runpy.run_path(first, run_name="__main__")
+
+
+def _exec_main(source: str, filename: str) -> None:
+    """Run code as the __main__ module, as python does, not inside the loader's: pickle and
+    multiprocessing find the classes it defines in sys.modules['__main__']."""
+    import types
+
+    module = types.ModuleType("__main__")
+    module.__dict__["__builtins__"] = __builtins__
+    sys.modules["__main__"] = module
+    exec(compile(source, filename, "exec"), module.__dict__)
+
+
+def _add_env_path(name: str, folder: str) -> None:
+    current = [p for p in os.environ.get(name, "").split(os.pathsep) if p]
+    if folder not in current:
+        os.environ[name] = os.pathsep.join([*current, folder])
 
 
 _IN_USE = []  # type: list[BinaryIO]  # held open for the process's life (see _hold)
