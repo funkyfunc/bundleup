@@ -75,16 +75,44 @@ def _rerun_with_another_python(here: "tuple[int, int]") -> None:
                 exe = os.path.join(folder, name)
                 if os.path.isfile(exe) and os.access(exe, os.X_OK):
                     _rerun([exe, sys.argv[0], *sys.argv[1:]])
+    import subprocess  # only on this rare path
+
     if sys.platform == "win32":
         launcher = [os.path.join(d, "py.exe") for d in folders]
         found = [p for p in launcher if os.path.isfile(p)]
         if found:
             for version in wanted:
                 probe = [found[0], "-%d.%d" % version, "-c", ""]
-                import subprocess  # only on this rare path
-
                 if subprocess.call(probe, stderr=subprocess.DEVNULL) == 0:
                     _rerun([found[0], "-%d.%d" % version, sys.argv[0], *sys.argv[1:]])
+    # Unversioned names, asked for their version: Apple's /usr/bin/python3 has no python3.9
+    # beside it, and Homebrew's newer python3 usually comes first on PATH (fourth review).
+    names = ["python3.exe", "python.exe"] if sys.platform == "win32" else ["python3", "python"]
+    plain = [os.path.join(folder, name) for folder in folders for name in names]
+    if sys.platform == "darwin":
+        plain.append("/usr/bin/python3")
+    me = os.path.realpath(sys.executable)
+    seen = set()  # type: set[str]
+    best = None  # type: tuple[tuple[int, int], str] | None
+    for exe in plain:
+        real = os.path.realpath(exe)
+        if real in seen or real == me or not os.path.isfile(exe):
+            continue
+        seen.add(real)
+        try:
+            out = subprocess.run(
+                [exe, "-I", "-S", "-c", "import sys; print('%d %d' % sys.version_info[:2])"],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.DEVNULL,
+                timeout=10,
+            ).stdout.split()
+            version = (int(out[0]), int(out[1]))
+        except (OSError, ValueError, IndexError, subprocess.TimeoutExpired):
+            continue  # not a Python (Windows' Store placeholder), or broken
+        if version in wanted and (best is None or version > best[0]):
+            best = (version, exe)
+    if best:
+        _rerun([best[1], sys.argv[0], *sys.argv[1:]])
 
 
 def _rerun(command: "list[str]") -> "NoReturn":
@@ -118,7 +146,9 @@ def _check() -> None:
     here = sys.version_info[:2]
     if here < PYTHON or (PYTHON_MAX is not None and here > PYTHON_MAX):
         want = "%d.%d" % PYTHON
-        if PYTHON_MAX is None:
+        if len(set(VERSIONS)) > 1 and PYTHON_MAX is not None:  # several payloads: name them all
+            wanted = "Python " + ", ".join("%d.%d" % v for v in sorted(set(VERSIONS)))
+        elif PYTHON_MAX is None:
             wanted = "Python %s or newer" % want
         elif PYTHON_MAX == PYTHON:
             wanted = "Python %s" % want

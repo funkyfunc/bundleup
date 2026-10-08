@@ -301,6 +301,15 @@ def test_the_wrong_python_reruns_with_a_matching_one(bundle: Path, tmp_path: Pat
     assert "RERUN" not in " ".join(json.loads(r.stdout)["env"])  # not passed on to children
     alone = env_for(tmp_path)  # no matching Python anywhere: the one-sentence error
     assert "bundled for Python" in run(exact, alone, python=other).stderr
+    # Only an unversioned python3 of the right version, as Apple's /usr/bin/python3 is (fourth
+    # review): asked for its version, then used.
+    plain = tmp_path / "plain"
+    plain.mkdir()
+    (plain / "python3").symlink_to(base_python())
+    env = env_for(tmp_path)
+    env["PATH"] = f"{plain}{os.pathsep}{env['PATH']}"
+    r = run(exact, env, python=other)
+    assert r.returncode == 0, r.stderr
 
 
 def test_a_pure_python_bundle_runs_on_other_versions(bundle: Path, tmp_path: Path) -> None:
