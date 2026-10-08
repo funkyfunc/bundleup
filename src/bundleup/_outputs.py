@@ -206,6 +206,8 @@ def write_pyz(
     total = sum(layer.path.stat().st_size for layer in layers)
     diags: list[Diagnostic] = []
     check_size(total, max_size, diags)
+    if max_size is None and total > LARGE:
+        diags.append(_large(total, ps))
     steps.start("verify")
     mine = [[layer for layer in layers if i in layer.owners] for i in range(len(ps))]
     files = [{rel: h for layer in own for rel, h in layer.files.items()} for own in mine]
@@ -395,6 +397,25 @@ def stage_lambda(p: Prepared, *, stage: Path, steps: Steps) -> Path:
         info.compress_type = zipfile.ZIP_DEFLATED
         zf.writestr(info, manifest_json)
     return staged
+
+
+# GitHub refuses files over 100 MB, so a repository, or a skill installed from one, can't hold a
+# bigger bundle without Git LFS (docs.github.com, "About large files on GitHub", 2026-10-07).
+LARGE = 100 * 10**6
+
+
+def _large(total: int, ps: list[Prepared]) -> Diagnostic:
+    """A warning for a bundle too big for a git repository, saying where the size comes from."""
+    largest = ", ".join(f"{x.name} {describe_size(x.size_bytes)}" for x in ps[0].sizes[:3])
+    each = f" in each of the {len(ps)} payloads" if len(ps) > 1 else ""
+    return Diagnostic(
+        "large-bundle",
+        "warning",
+        f"the bundle is {describe_size(total)}: GitHub refuses files over 100 MB, so a "
+        "repository (or a skill installed from one) can't hold it without Git LFS",
+        hint=f"the largest packages{each} (unpacked): {largest}; fewer --python or "
+        "--python-platform values make it smaller, and --max-size makes a limit an error",
+    )
 
 
 def check_size(size: int, max_size: int | None, diagnostics: list[Diagnostic]) -> None:

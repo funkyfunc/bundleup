@@ -6,6 +6,46 @@ platform, format and size limit the destination needs, so you can see and change
 CI builds gauntlet 14 (python-pptx, lxml, Pillow) with each recipe marked *CI*, from a Mac and
 from Linux.
 
+## A skill installed on people's machines (Claude Code, agent package managers)
+
+A skill's scripts fail with `ModuleNotFoundError` on a machine that doesn't have their packages,
+and installing them on first use needs pip, a package index and the network. Instead, ship the
+packages in one file next to the scripts and run every script through it
+([ADR-0040](adr/0040-entry-python-runs-any-script.md)):
+
+```
+my-skill/
+  SKILL.md
+  pyproject.toml        # [project] dependencies = ["python-pptx", "pymupdf", ...], then `uv lock`
+  uv.lock
+  scripts/
+    deck_edit.py        # plain scripts the agent can read
+    check_setup.py
+    deps.pyz            # built below
+```
+
+```bash
+bundleup build my-skill --entry python -o my-skill/scripts/deps.pyz \
+  --python 3.12 \
+  --python-platform aarch64-apple-darwin --python-platform x86_64-apple-darwin \
+  --python-platform x86_64-pc-windows-msvc --python-platform x86_64-manylinux_2_28
+```
+
+and in SKILL.md: `python3 scripts/deps.pyz scripts/deck_edit.py ...` (`python` on Windows). The
+scripts' own helper modules import as usual (the script's folder comes first on `sys.path`).
+
+- **Which Pythons:** packages with compiled code (lxml, Pillow) have a build per Python version,
+  so list the versions your users have. A bundle started with another version re-runs itself
+  with a matching `python3.X` if one is installed (ADR-0036); otherwise it says which it needs.
+  `bundleup check --matrix` shows which platforms and versions the lock's wheels cover.
+- **Size:** each file is stored once across platforms and versions, but compiled packages differ
+  per platform. Measured 2026-10-07 for python-pptx, lxml, Pillow, PyMuPDF, xlsxwriter and
+  pywin32 on the four platforms above: 144 MiB for one Python, 230 MiB for three, 314 MiB for
+  five; PyMuPDF is about half. Over 100 MB, bundleup warns (`large-bundle`): GitHub refuses such
+  files, so the repository a skill is installed from needs Git LFS, or fewer platforms or Pythons.
+- **No network, no index, no install step** on the user's machine; the first run unpacks into a
+  cache (a second or two for this size), later runs start like an installed venv.
+
 ## A Claude API Skill or code execution script *(CI)*
 
 Claude API Skills and code execution run in a sandbox with Python 3.11 on Linux x86_64, **no

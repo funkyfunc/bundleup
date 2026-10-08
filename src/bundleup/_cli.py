@@ -332,6 +332,25 @@ def _shown(path: Path) -> str:
     return str(path) if relative.startswith("..") else relative
 
 
+def _payloads_line(payloads: list[dict[str, object]]) -> str:
+    """A bundle for several platforms, in a few words: `4 payloads: Python 3.12 on macOS arm64,
+    Windows x86_64, ...` (each payload's target JSON, ADR-0038)."""
+    from ._python import PLATFORM_NAMES
+
+    pythons = sorted(
+        {str(p["python"]) for p in payloads}, key=lambda v: tuple(map(int, v.split(".")))
+    )
+    places = []
+    for p in payloads:
+        where = (
+            "any OS" if p["any_os"] else PLATFORM_NAMES.get(str(p["platform"]), str(p["platform"]))
+        )
+        place = f"{where} {p['machine']}" if p["machine"] and not p["any_os"] else where
+        if place not in places:
+            places.append(place)
+    return f"{len(payloads)} payloads: Python {', '.join(pythons)} on {', '.join(places)}"
+
+
 def _success_lines(result: BuildResult, style: Style) -> list[str]:
     """At most two lines (rule 11): what was made and where, then the target in dim."""
     shown = _shown(result.output) + ("/" if result.format == "dir" else "")
@@ -343,7 +362,8 @@ def _success_lines(result: BuildResult, style: Style) -> list[str]:
         f"{style.dim(f'({size}) in {result.duration_s:.2f}s')}"
     )
     packages = plural(result.packages, "package")
-    details = [result.target.describe(result.native, result.pythons, result.reach), packages]
+    target = result.target.describe(result.native, result.pythons, result.reach)
+    details = [_payloads_line(result.payloads) if result.payloads else target, packages]
     if result.format == "lambda" and result.handler:
         details.append(f"handler {result.handler}")
     second = style.dim(f"  {f' {style.dot} '.join(details)}")

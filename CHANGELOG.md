@@ -16,6 +16,11 @@ The first working release. From a project with `uv.lock` or `pylock.toml`, or a 
   builds for other platforms (`--python-platform`), and `--max-size` (refuse an output that's too
   big). Destinations such as Lambda and Claude API Skills are tested
   [recipes](docs/recipes.md), not named targets.
+- `--entry python`: a `.pyz` that runs the scripts it's given (`python deps.pyz tool.py`), so
+  one bundle serves every script of a skill. A bundle for several platforms stores each file
+  once. Over 100 MB (GitHub's file limit), a build warns (`large-bundle`).
+- Packages are installed from the lock's own files and index, with their hashes: a project
+  locked against a company index builds from it, never from a same-named package on PyPI.
 - `bundleup check`: what won't survive bundling, before shipping: code that doesn't compile on
   the target Python, packages without a wheel for a platform (from the lock alone, for any number
   of platforms with `--also-platform`, or as a grid with `--matrix`), data files outside packages,
