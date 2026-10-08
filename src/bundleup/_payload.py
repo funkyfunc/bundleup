@@ -22,7 +22,7 @@ from ._errors import (
     UsageError,
 )
 from ._python import Portability, PythonRange, Target
-from ._source import Source
+from ._source import APP_MAINS, Source
 from ._steps import Progress, run
 from ._text import listing
 from ._uv import console_scripts, launchers
@@ -47,6 +47,19 @@ def resolve_entry(source: Source, site: Path, *, entry: str | None, script: str 
     `--entry python` runs whatever script it's given, with the bundle's packages."""
     if entry == "python":
         return Entry("python", "")
+    if source.app:  # a folder of modules (ADR-0041): its main file, or what --entry names
+        if entry is None:
+            entry = next((m for m in APP_MAINS if (source.path / m).is_file()), None)
+            if entry is None:
+                raise EntryPointError(
+                    f"{source.name} has no {', '.join(APP_MAINS)}, so bundleup doesn't know "
+                    "what to run",
+                    hint="pass --entry main.py, --entry module:function, or --entry python",
+                )
+        if entry.endswith(".py"):
+            if not (site / entry).is_file():
+                raise EntryPointError(f"--entry {entry}: there's no such file in {source.name}")
+            return Entry("script", entry)
     if script:
         if entry:
             raise UsageError(
@@ -198,7 +211,13 @@ def write_layers(sites: list[Path], stage: Path) -> list[Layer]:
 
 
 def verify_payload(
-    site: Path, *, pylock: Path, target: Target, written: dict[str, str], script: str | None
+    site: Path,
+    *,
+    pylock: Path,
+    target: Target,
+    written: dict[str, str],
+    script: str | None,
+    own: tuple[str, ...] = (),
 ) -> list[_verify.LockedPackage]:
     """Fail the build if the payload doesn't match uv.lock and the wheels' RECORD files exactly.
 
@@ -207,7 +226,7 @@ def verify_payload(
     locked = _verify.locked_packages(pylock.read_text(encoding="utf-8"), target.markers)
     problems = _verify.check_lock(locked, _verify.installed_distributions(site))
     problems += _verify.check_records(
-        site, written, removed=launchers(site), added=[script] if script else []
+        site, written, removed=launchers(site), added=[*([script] if script else []), *own]
     )
     if problems:
         raise BundleMismatchError(
@@ -324,3 +343,4 @@ class Prepared:
     sizes: list[_check.PackageSize]
     pythons: PythonRange  # the minor versions the bundle runs on (ADR-0030)
     reach: Portability  # whether it runs on any OS and CPU (ADR-0034)
+    own: tuple[str, ...] = ()  # a folder app's files, copied in rather than installed (ADR-0041)

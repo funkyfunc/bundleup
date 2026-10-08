@@ -33,8 +33,9 @@ a machine that "has some Python" hits it.
 
 A bundler in the spirit of esbuild: **one fast command, sensible defaults, one artifact out.**
 
-- **In:** a project that already declares its dependencies: `pyproject.toml` + `uv.lock` or
-  `pylock.toml` (PEP 751), or a single PEP 723 script.
+- **In:** a project that declares its dependencies: `pyproject.toml` + `uv.lock` or
+  `pylock.toml` (PEP 751), a PEP 723 script, or, without a lock, a `pyproject.toml`, `setup.py`
+  or `requirements.txt` resolved at build time ([ADR-0041](docs/adr/0041-input-without-a-lock.md)).
 - **Out:** one `.pyz`. Runs with `python app.pyz`; when it's pure Python, on every Python version
   the lock allows and on any OS ([ADR-0034](docs/adr/0034-pure-python-bundles-run-on-any-os.md));
   with compiled code, one `.pyz` can carry a payload per platform and Python version

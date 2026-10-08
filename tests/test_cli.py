@@ -229,7 +229,7 @@ def test_error_python_mismatch(tmp_path: Path) -> None:
 def test_error_no_lockfile(tmp_path: Path) -> None:
     (tmp_path / "app").mkdir()
     (tmp_path / "app" / "pyproject.toml").write_text('[project]\nname = "app"\n')
-    r = cli("build", "app", cwd=tmp_path)
+    r = cli("build", "app", "--locked", cwd=tmp_path)
     assert r.returncode == 1 and not (tmp_path / "app" / "uv.lock").exists()
     check_snapshot("error-no-lockfile", redact(r.stderr, tmp_path))
 

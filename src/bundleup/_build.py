@@ -17,6 +17,7 @@ from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
 
 from . import _check, _config, _coverage, _platforms
+from . import _toml as tomllib
 from ._check import CheckReport
 from ._errors import (
     BundleupError,
@@ -336,21 +337,39 @@ def _also_platforms(pylock: Path, target: Target, names: Sequence[str]) -> list[
     return found
 
 
-def _unlocked_script(source: Source) -> list[Diagnostic]:
-    """A script with dependencies but no lock is resolved afresh on every build (ADR-0028)."""
-    if not source.is_script or source.path.with_name(source.path.name + ".lock").exists():
+def _unlocked(source: Source, *, pinned: bool) -> list[Diagnostic]:
+    """Input without a lock builds (ADR-0041), but its versions were resolved just now, so a
+    later build can bundle different ones: a warning, with the way to lock. `--strict` or
+    `--locked` make it an error."""
+    if pinned:
         return []
-    meta = script_metadata(source.path.read_text(encoding="utf-8"))
-    if not meta.get("dependencies"):
+    if source.is_script and source.pep723:
+        meta = script_metadata(source.path.read_text(encoding="utf-8"))
+        if not meta.get("dependencies"):
+            return []
+        name = source.path.name
+        message = f"{name} has no lockfile"
+        hint = f"run `uv lock --script {name}` and keep {name}.lock next to it"
+    elif source.declared is not None and source.declared.suffix == ".txt":
+        name = source.declared.name
+        message = f"{name} doesn't pin every package it needs to one version (==)"
+        hint = (
+            "pin them all: `uv pip compile requirements.in -o requirements.txt "
+            "--generate-hashes`, or `pip freeze > requirements.txt`"
+        )
+    elif source.declared is not None:
+        name = source.declared.name
+        message = f"{source.path.name} has no lockfile (uv.lock or pylock.toml)"
+        hint = "lock it: `uv lock`, or `pip lock .` (pip 25.1+, writes pylock.toml)"
+    else:
         return []
-    name = source.path.name
     return [
         Diagnostic(
             "unlocked",
             "warning",
-            f"{name} has no lockfile, so its dependencies were resolved just now; building again "
-            "later can bundle different versions",
-            hint=f"run `uv lock --script {name}` and keep {name}.lock next to it",
+            f"{message}, so its dependencies were resolved just now; building again later can "
+            "bundle different versions",
+            hint=hint,
             file=name,
         )
     ]
@@ -407,10 +426,26 @@ def _prepare(
     site = stage / "site"
     script = script_path(source, fmt)
     steps.start("export")
-    reqs, pylock = export(uv, source, lock_mode=options.lock_mode, stage=stage, progress=progress)
+    exported = export(
+        uv,
+        source,
+        lock_mode=options.lock_mode,
+        python=target.version,
+        stage=stage,
+        progress=progress,
+    )
+    pylock = exported.pylock
     coverage = _wheel_coverage(pylock, target)  # before installing: a precise error, early
     steps.start("install")
-    install(uv, source, target=target, reqs=reqs, site=site, script=script, progress=progress)
+    own = install(
+        uv,
+        source,
+        target=target,
+        reqs=exported.installs,
+        site=site,
+        script=script,
+        progress=progress,
+    )
     check_wheel_platforms(site, target)
     if fmt == "pyz" or options.entry or script:
         entry = resolve_entry(source, site, entry=options.entry, script=script)
@@ -435,7 +470,7 @@ def _prepare(
     )
     diagnostics += _format_diagnostics(fmt, site, sizes)
     diagnostics += coverage
-    diagnostics += _unlocked_script(source)
+    diagnostics += _unlocked(source, pinned=exported.pinned)
     pythons = python_range(site, pylock=pylock, target=target, source=source, native=native)
     interpreters = {
         (3, minor): find_interpreter(uv, f"3.{minor}", cwd=stage, progress=progress)
@@ -481,6 +516,7 @@ def _prepare(
         sizes=sizes,
         pythons=pythons,
         reach=reach,
+        own=tuple(own),
     )
 
 
@@ -526,7 +562,10 @@ def check(
 
 
 def _matrix(pylock: Path, source: Source) -> list[_coverage.MatrixCell]:
-    """`check --matrix`: wheel coverage for every platform and every Python the project allows."""
-    spec = SpecifierSet(source.requires_python or "")
+    """`check --matrix`: wheel coverage for every platform and every Python the project allows
+    (and the lock covers: one resolved at build time starts at the target's version)."""
+    text = pylock.read_text(encoding="utf-8")
+    covered = tomllib.loads(text).get("requires-python") or ""
+    spec = SpecifierSet(source.requires_python or "") & SpecifierSet(covered)
     pythons = [v for v in _coverage.MATRIX_PYTHONS if spec.contains(f"{v[0]}.{v[1]}.0")]
-    return _coverage.matrix(pylock.read_text(encoding="utf-8"), pythons)
+    return _coverage.matrix(text, pythons)

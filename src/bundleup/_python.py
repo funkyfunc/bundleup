@@ -221,11 +221,12 @@ def _find_cmd(uv: str, source: Source, *, request: str | None) -> list[str]:
     cmd = [uv, "python", "find"]
     if request:
         cmd.append(request)
-        if source.is_script:
-            # A script next to a project shouldn't pick up the project's venv.
-            cmd.append("--no-project")
-    elif source.is_script:
+    if source.is_script and source.pep723 and not request:
         cmd += ["--script", str(source.path)]  # honours the script's requires-python
+    elif source.is_script or source.app:
+        # A script next to a project shouldn't pick up the project's venv; a folder app isn't a
+        # project at all (its own venv/ or .venv is for development).
+        cmd.append("--no-project")
     return cmd
 
 

@@ -6,6 +6,12 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-08** · tooling · `uv pip compile --universal --format pylock.toml` resolves a
+  requirements.txt, pyproject.toml or setup.py for every platform at once, with markers and
+  hashes, the same shape as `uv export`'s pylock. With no dependencies it writes `packages = []`,
+  so appending a `[[packages]]` table is invalid TOML. Reading a setup.py project's metadata
+  (compile) or building it (install) writes `build/` and `*.egg-info` into the project, even with
+  a lock. Evidence: `tests/test_inputs.py`, ADR-0041.
 - **2026-10-08** · runtime · `python -` (a program on stdin) has `sys.argv == ["-"]`, piped
   input with no arguments `[""]`, like a prompt. ADR-0037's child check treated neither as the
   bundle's code, so click's `test_light_imports` (which runs `python -`) couldn't import click in

@@ -1,2 +1,2 @@
 error: <TMP>/nowhere is not a project directory or a .py script
-hint: pass a directory with pyproject.toml, or a PEP 723 script
+hint: point bundleup at a folder with pyproject.toml, setup.py or requirements.txt, or at a .py script

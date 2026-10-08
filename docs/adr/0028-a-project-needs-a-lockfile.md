@@ -1,6 +1,6 @@
 # ADR-0028: A project needs a lockfile; bundleup never writes one into it
 
-- **Status:** Accepted (2026-10-07)
+- **Status:** Accepted (2026-10-07); the first decision (a project needs a lockfile) superseded by [ADR-0041](0041-input-without-a-lock.md)
 - **Date:** 2026-10-07
 - **Deciders:** the owner approved fixing the [independent review](../findings/2026-10-07-independent-review.md)'s
   findings, from a plan that named this fix; the details were designed by an agent and haven't

@@ -212,7 +212,9 @@ def write_pyz(
     mine = [[layer for layer in layers if i in layer.owners] for i in range(len(ps))]
     files = [{rel: h for layer in own for rel, h in layer.files.items()} for own in mine]
     locked = [
-        verify_payload(p.site, pylock=p.pylock, target=p.target, written=written, script=p.script)
+        verify_payload(
+            p.site, pylock=p.pylock, target=p.target, written=written, script=p.script, own=p.own
+        )
         for p, written in zip(ps, files)
     ]
     steps.start("write")
@@ -329,7 +331,7 @@ def _multi_manifest(
 
 def _plain_manifest(p: Prepared, fmt: Format, written: dict[str, str]) -> bytes:
     locked = verify_payload(
-        p.site, pylock=p.pylock, target=p.target, written=written, script=p.script
+        p.site, pylock=p.pylock, target=p.target, written=written, script=p.script, own=p.own
     )
     return manifest(
         source=p.source,

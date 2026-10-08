@@ -1,5 +1,5 @@
 """Lockfiles: a standard pylock.toml (PEP 751) instead of uv.lock (ADR-0026), and no lockfile
-at all (ADR-0028)."""
+at all (ADR-0028, ADR-0041)."""
 
 from __future__ import annotations
 
@@ -58,14 +58,20 @@ def test_editable_project_in_pylock_is_refused(tmp_path: Path) -> None:
         build(BuildOptions(path=path, output=tmp_path / "app.pyz"))
 
 
-def test_a_project_without_a_lockfile_is_refused_and_left_untouched(tmp_path: Path) -> None:
-    """bundleup never writes uv.lock into a project (ADR-0028; the review found it did)."""
+def test_a_project_without_a_lockfile_builds_with_a_warning_and_is_left_untouched(
+    tmp_path: Path,
+) -> None:
+    """Resolved at build time, in the stage (ADR-0041): never a uv.lock or build output written
+    into the project (ADR-0028; the review found a uv.lock written). --locked refuses."""
     path = project(tmp_path / "p", PYLOCK)
     (path / "pylock.toml").unlink()
-    with pytest.raises(NoLockfileError) as e:
-        build(BuildOptions(path=path, output=tmp_path / "app.pyz"))
-    assert e.value.hint and "uv lock" in e.value.hint
+    result = build(BuildOptions(path=path, output=tmp_path / "app.pyz"))
+    assert [d.code for d in result.diagnostics] == ["unlocked"]
     assert sorted(p.name for p in path.iterdir()) == ["pyproject.toml", "src"]
+    assert sorted(p.name for p in (path / "src").iterdir()) == ["locked_app"]
+    with pytest.raises(NoLockfileError) as e:
+        build(BuildOptions(path=path, output=tmp_path / "b.pyz", lock_mode="locked"))
+    assert e.value.hint and "uv lock" in e.value.hint
 
 
 def test_an_unlocked_script_with_dependencies_gets_a_warning(tmp_path: Path) -> None:

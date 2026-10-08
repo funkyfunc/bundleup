@@ -36,7 +36,7 @@ and change only the old one's status line.
 | [0025](0025-dir-and-lambda-formats-and-presets.md) | How `--format dir`, `--format lambda` and target presets work | Proposed; presets superseded by 0039 |
 | [0026](0026-pylock-toml-input.md) | A project's `pylock.toml` is used when it has no `uv.lock` | Proposed |
 | [0027](0027-children-see-the-bundle-only-from-its-own-python.md) | Child processes see the bundle only when they run the bundle's own Python | Accepted (amended by 0037) |
-| [0028](0028-a-project-needs-a-lockfile.md) | A project needs a lockfile; bundleup never writes one into it | Accepted |
+| [0028](0028-a-project-needs-a-lockfile.md) | A project needs a lockfile; bundleup never writes one into it | Accepted; first decision superseded by 0041 |
 | [0029](0029-start-up-checks-c-library-and-macos-version.md) | Bundles check the C library and macOS version at start-up | Accepted |
 | [0030](0030-pure-python-bundles-run-on-a-range.md) | A pure-Python bundle runs on every Python version its lock allows | Accepted (shebang superseded by 0036) |
 | [0031](0031-wheel-coverage-from-the-lock.md) | Wheel coverage is checked from the lock, before installing, for any number of targets | Accepted |
@@ -49,3 +49,4 @@ and change only the old one's status line.
 | [0038](0038-one-pyz-for-several-platforms.md) | One `.pyz` can carry a payload per platform and Python version | Proposed |
 | [0039](0039-recipes-instead-of-target-presets.md) | Recipes and capabilities (`--max-size`) instead of named target presets | Accepted |
 | [0040](0040-entry-python-runs-any-script.md) | `--entry python`: a bundle that runs the scripts it's given | Proposed |
+| [0041](0041-input-without-a-lock.md) | Input without a lock builds, resolved at build time, with a warning | Accepted |

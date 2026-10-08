@@ -1,2 +1,2 @@
-error: app has no lockfile, so bundleup can't tell exactly what to bundle
-hint: run `uv lock` in the project (or write a pylock.toml), then build again
+error: app has no lockfile, and --locked asks for one
+hint: lock it (`uv lock`, `pip lock .`, or pin every package in requirements.txt), or build without --locked to resolve the versions now

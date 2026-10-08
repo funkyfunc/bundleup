@@ -117,25 +117,35 @@ Known limits: Lambda doesn't run `.pth` files from `/var/task` (bundleup warns,
 `pth-not-run`), and has no `/dev/shm`, so `multiprocessing.Pool` and `Queue` don't work there
 (an AWS limitation; the emulator CI uses has it, so this isn't tested).
 
-## Coming from pip or requirements.txt
+## Coming from pip, requirements.txt or setup.py
 
-bundleup needs a **lock**: the exact version and file hash of everything it bundles, so the
-same input always makes the same bundle and `verify` can check it. A `requirements.txt` usually
-isn't one (it may say `requests>=2`, and it never lists what requests needs), so bundleup
-refuses it and says how to make one. You don't have to switch tools to do so: installing
-bundleup also installs `uv`, and pip can write a lock too.
+bundleup takes Python projects as they are ([ADR-0041](adr/0041-input-without-a-lock.md)); you
+don't need uv to use it (installing bundleup installs its own).
 
-| You have | Run once | Then |
+| You have | Run | What happens |
 |---|---|---|
-| A script and a `requirements.txt` | `uv add --script main.py -r requirements.txt` and `uv lock --script main.py` | `bundleup build main.py` |
-| A script with no dependency list | `uv add --script tool.py <packages>` and `uv lock --script tool.py` | `bundleup build tool.py` |
-| A `pyproject.toml` you install with `pip install .` | `uv lock`, or `pip lock .` (pip 25.1+, writes `pylock.toml`) | `bundleup build` |
-| Several scripts and a `requirements.txt` | `uv init --bare` and `uv add -r requirements.txt` (a `pyproject.toml` and `uv.lock`) | `bundleup build --entry python -o deps.pyz`, then `python deps.pyz main.py` |
+| A `pyproject.toml` you install with `pip install .` | `bundleup build` | Builds; warns `unlocked` |
+| A legacy `setup.py` / `setup.cfg` project | `bundleup build` | Builds; warns `unlocked` |
+| A folder with `main.py`, other modules and a `requirements.txt` | `bundleup build myapp/` | The folder's files go in as they are (not `.venv`, caches or `build/`); runs `__main__.py`, `main.py` or `app.py`, or `--entry server.py` |
+| A script with a `requirements.txt` beside it | `bundleup build tool.py` | Builds; warns `unlocked` unless every version is pinned |
+| A script that needs only the standard library | `bundleup build tool.py` | Builds; a script importing an undeclared package is refused, naming it |
+| A `pylock.toml` from `pip lock .` (pip 25.1+) | `bundleup build` | Builds from the lock |
 
-The first command adds a `# /// script` block (PEP 723) at the top of the script, listing its
-dependencies; pip and plain `python` ignore it, so nothing else changes. Commit the lock next to
-the script or project and rerun `uv lock` when the dependencies change: a stale lock is an
-error, not a silent rebuild (ADR-0033).
+Without a lock, the versions are resolved when you build (for every platform at once, in a
+temporary folder: nothing is written into your project), and the bundle's manifest records exactly
+what went in. Two builds a week apart can still differ, which is what the `unlocked` warning
+says. To make builds repeatable, lock once:
+
+- `uv lock` (or `pip lock .`) in a project;
+- a `requirements.txt` that pins every package it needs (`uv pip compile requirements.in -o
+  requirements.txt --generate-hashes`, or `pip freeze > requirements.txt`) counts as a lock; with
+  `--hash` on every line, uv also checks the hashes;
+- `uv add --script tool.py <packages>` and `uv lock --script tool.py` for a single script.
+
+`--strict` fails on the warning; `--locked` refuses anything that isn't locked.
+`poetry.lock` and `Pipfile.lock` aren't read: export them (`poetry export --with-hashes -o
+requirements.txt`, `pipenv requirements --hash > requirements.txt`) or build from
+`pyproject.toml`.
 
 ## Behind a company index or proxy
 

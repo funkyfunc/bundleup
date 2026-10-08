@@ -31,8 +31,10 @@ bundleup cache clean            # remove unpacked bundles not used for 30 days
 python dist/<name>.pyz          # run it: no install, no network
 ```
 
-bundleup reads `pyproject.toml` + `uv.lock` (or a standard `pylock.toml`, or the script's `# /// script` block) and needs
-[uv](https://docs.astral.sh/uv/) at build time; the bundle needs only Python. On first run it
+bundleup reads what you have: `pyproject.toml` with `uv.lock` or `pylock.toml`, a script's
+`# /// script` block, or, without a lock, a `pyproject.toml`, `setup.py` or `requirements.txt`
+(resolved at build time, with a warning; [recipes](docs/recipes.md)). It brings its own
+[uv](https://docs.astral.sh/uv/) for the build; the bundle needs only Python. On first run it
 unpacks to a cache (`~/Library/Caches/bundleup`, `~/.cache/bundleup`, or a temp directory if
 those aren't writable), so later runs start as fast as an installed virtualenv. A pure-Python
 bundle runs on every Python version its lock allows (`Python 3.10+`), and on any OS when the lock
@@ -43,8 +45,8 @@ packages installed on the machine (they come after the bundle's, but a machine p
 win over a bundled namespace package of the same name: a Python rule, PEP 420). If it's started
 with the wrong Python, it runs itself again with a matching one if one is installed; otherwise, and on
 the wrong platform, it says so in one sentence. Programs it starts with
-its own Python see its packages; any other Python it starts doesn't. A project needs a lockfile:
-bundleup never writes one into it (run `uv lock` first).
+its own Python see its packages; any other Python it starts doesn't. bundleup never writes into
+your project.
 
 Every build checks the code first: a file of your project that doesn't compile on the target
 Python stops the build, and anything that may not work in a bundle (a dependency's file that needs

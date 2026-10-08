@@ -1,8 +1,11 @@
-"""What's being bundled: a project directory or a PEP 723 script, and its lockfile."""
+"""What's being bundled: a project directory, a script or a folder of modules, and what decides
+its dependencies: a lockfile, or, without one, what declares them (ADR-0041)."""
 
 from __future__ import annotations
 
+import ast
 import re
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -11,10 +14,7 @@ from packaging.utils import canonicalize_name
 
 from . import _toml as tomllib
 from . import _verify
-from ._errors import (
-    NoLockfileError,
-    ProjectError,
-)
+from ._errors import ProjectError
 from ._formats import Format
 
 PEP723 = re.compile(r"(?m)^# /// (?P<type>[a-zA-Z0-9-]+)$\s(?P<content>(^#(| .*)$\s)+)^# ///$")
@@ -22,74 +22,235 @@ PEP723 = re.compile(r"(?m)^# /// (?P<type>[a-zA-Z0-9-]+)$\s(?P<content>(^#(| .*)
 
 @dataclass(frozen=True)
 class Source:
-    """What's being bundled: a project directory or a PEP 723 script."""
+    """What's being bundled: a project directory, a script, or a folder of modules."""
 
-    path: Path  # project directory or script file
+    path: Path  # project directory, script file, or folder
     name: str
     requires_python: str | None
     is_script: bool
     pylock: Path | None = None  # a project's pylock.toml (PEP 751), used when there's no uv.lock
+    # Without a lock (ADR-0041), what declares the dependencies, resolved at build time: a
+    # requirements.txt, or the project's pyproject.toml, setup.py or setup.cfg.
+    declared: Path | None = None
+    app: bool = False  # a folder of modules and a requirements.txt: its files go in as they are
+    pep723: bool = True  # a script with a `# /// script` block (else: requirements.txt or none)
 
     @property
     def workdir(self) -> Path:
         """Where uv commands run: relative paths in the lock resolve against it."""
         return self.path.parent if self.is_script else self.path
 
+    @property
+    def locked(self) -> bool:
+        """Whether a lockfile decides the contents (uv.lock, pylock.toml, <script>.lock)."""
+        if self.is_script and self.pep723:
+            return self.path.with_name(self.path.name + ".lock").is_file()
+        return not self.is_script and not self.app and self.declared is None
+
 
 def load_source(path: Path) -> Source:
-    """Read what's being bundled. Raises ProjectError if it isn't a project or a script."""
+    """Read what's being bundled. Raises ProjectError if it's none of the things bundleup takes."""
     path = path.resolve()
     if path.is_file() and path.suffix == ".py":
-        text = path.read_text(encoding="utf-8")
-        if not any(m.group("type") == "script" for m in PEP723.finditer(text)):
+        return _load_script(path)
+    if not path.is_dir():
+        raise ProjectError(
+            f"{path} is not a project directory or a .py script",
+            hint="point bundleup at a folder with pyproject.toml, setup.py or requirements.txt, "
+            "or at a .py script",
+        )
+    pyproject = path / "pyproject.toml"
+    if pyproject.is_file():
+        return _load_project(path, pyproject)
+    legacy = next((path / n for n in ("setup.py", "setup.cfg") if (path / n).is_file()), None)
+    if legacy is not None:
+        # A setuptools project without pyproject.toml: uv builds it the way pip would.
+        return Source(path, _legacy_name(path), None, is_script=False, declared=legacy)
+    requirements = path / "requirements.txt"
+    if requirements.is_file() or any((path / n).is_file() for n in APP_MAINS):
+        undeclared = [] if requirements.is_file() else third_party_imports(path, local=path)
+        if undeclared:
             raise ProjectError(
-                f"{path.name} doesn't say what it depends on: it has no `# /// script` block "
-                "(PEP 723)",
-                hint=f"add one: `uv add --script {path.name} <packages>` (or `-r requirements.txt`"
-                f"), then `uv lock --script {path.name}`",
+                f"{path.name} imports {_which(undeclared)} in the standard library, and has "
+                "no requirements.txt saying which packages provide them",
+                hint="list them in requirements.txt (an empty one says it needs none)",
             )
-        meta = script_metadata(text)
-        return Source(path, path.stem, meta.get("requires-python"), is_script=True)
-    if path.is_dir():
-        pyproject = path / "pyproject.toml"
-        if not pyproject.exists():
-            if (path / "requirements.txt").is_file():
-                raise ProjectError(
-                    f"{path.name} has a requirements.txt but no pyproject.toml; bundleup needs a "
-                    "lock: exact versions and hashes of everything it bundles",
-                    hint="for one script: `uv add --script main.py -r requirements.txt`, `uv lock "
-                    "--script main.py`, then bundle main.py; docs/recipes.md has the rest",
-                )
-            raise ProjectError(
-                f"{path} has no pyproject.toml",
-                hint="point bundleup at a project directory or a .py script",
-            )
-        try:
-            project = tomllib.loads(pyproject.read_text(encoding="utf-8")).get("project") or {}
-        except tomllib.TOMLDecodeError as e:
-            raise ProjectError(f"{pyproject} isn't valid TOML: {e}") from None
-        if "name" not in project:
-            raise ProjectError(
-                f"{pyproject} has no [project] name", hint='add `name = "..."` under [project]'
-            )
-        # uv.lock first (it's what uv users have); a standard pylock.toml otherwise (ADR-0026).
-        # Without either, refuse: `uv export` would resolve and write a uv.lock into the
-        # project, and the bundle would match nothing anyone reviewed (ADR-0028).
-        uv_lock = find_uv_lock(path)
-        lock = path / "pylock.toml"
-        pylock = lock if lock.is_file() and uv_lock is None else None
-        if uv_lock is None and pylock is None:
-            raise NoLockfileError(
-                f"{path.name} has no lockfile, so bundleup can't tell exactly what to bundle",
-                hint="run `uv lock` in the project (or write a pylock.toml), then build again",
-            )
+        declared = requirements if requirements.is_file() else None
         return Source(
-            path, project["name"], project.get("requires-python"), is_script=False, pylock=pylock
+            path, safe_name(path.name), None, is_script=False, declared=declared, app=True
         )
     raise ProjectError(
-        f"{path} is not a project directory or a .py script",
-        hint="pass a directory with pyproject.toml, or a PEP 723 script",
+        f"{path} has no pyproject.toml, setup.py, requirements.txt or main.py",
+        hint="point bundleup at a project directory, a folder of modules, or a .py script",
     )
+
+
+# What runs when a folder of modules is bundled without --entry: what `python folder/` runs, then
+# the usual names.
+APP_MAINS = ("__main__.py", "main.py", "app.py")
+
+
+def _load_script(path: Path) -> Source:
+    text = path.read_text(encoding="utf-8")
+    if any(m.group("type") == "script" for m in PEP723.finditer(text)):
+        meta = script_metadata(text)
+        return Source(path, path.stem, meta.get("requires-python"), is_script=True)
+    # No `# /// script` block: a requirements.txt beside it, or only the standard library.
+    requirements = path.with_name("requirements.txt")
+    if requirements.is_file():
+        return Source(path, path.stem, None, is_script=True, declared=requirements, pep723=False)
+    undeclared = third_party_imports(path, local=path.parent)
+    if undeclared:
+        name = path.name
+        raise ProjectError(
+            f"{name} imports {_which(undeclared)} in the standard library, but doesn't say "
+            "which packages provide them",
+            hint=f"add them: `uv add --script {name} <packages>` (a `# /// script` block), or "
+            "list them in a requirements.txt beside it",
+        )
+    return Source(path, path.stem, None, is_script=True, pep723=False)
+
+
+def _load_project(path: Path, pyproject: Path) -> Source:
+    try:
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as e:
+        raise ProjectError(f"{pyproject} isn't valid TOML: {e}") from None
+    project = data.get("project") or {}
+    poetry = data.get("tool", {}).get("poetry", {})
+    name = project.get("name") or poetry.get("name")
+    if not name and not (path / "setup.py").is_file() and not (path / "setup.cfg").is_file():
+        raise ProjectError(
+            f"{pyproject} has no [project] name", hint='add `name = "..."` under [project]'
+        )
+    name = name or _legacy_name(path)
+    # uv.lock first (it's what uv users have); a standard pylock.toml otherwise (ADR-0026).
+    # Without either, the dependencies pyproject.toml declares are resolved at build time, in
+    # the stage: bundleup never writes a lock into the project (ADR-0028, ADR-0041).
+    uv_lock = find_uv_lock(path)
+    lock = path / "pylock.toml"
+    pylock = lock if lock.is_file() and uv_lock is None else None
+    declared = pyproject if uv_lock is None and pylock is None else None
+    return Source(
+        path,
+        name,
+        project.get("requires-python"),
+        is_script=False,
+        pylock=pylock,
+        declared=declared,
+    )
+
+
+def _legacy_name(path: Path) -> str:
+    """A setuptools project's name: setup.cfg's [metadata], a literal in setup.py, or the folder."""
+    import configparser
+
+    cfg = configparser.ConfigParser()
+    try:
+        cfg.read(path / "setup.cfg", encoding="utf-8")
+        if cfg.has_option("metadata", "name"):
+            return cfg.get("metadata", "name")
+    except configparser.Error:
+        pass
+    setup = path / "setup.py"
+    if setup.is_file():
+        found = re.search(r"""\bname\s*=\s*["']([^"']+)["']""", setup.read_text(encoding="utf-8"))
+        if found:
+            return found.group(1)
+    return safe_name(path.name)
+
+
+def third_party_imports(path: Path, *, local: Path) -> list[str]:
+    """Top-level modules a script (or every .py in a folder) imports that are neither in the
+    standard library nor beside it. Imports guarded by `try: ... except ImportError` or `if
+    TYPE_CHECKING:` are optional and don't count. Empty when this Python can't tell (3.9 has no
+    sys.stdlib_module_names)."""
+    stdlib = getattr(sys, "stdlib_module_names", None)
+    if stdlib is None:
+        return []
+    files = [path] if path.is_file() else list(_app_files(path, suffix=".py"))
+    neighbours = {p.stem for p in local.glob("*.py")} | {
+        p.parent.name for p in local.glob("*/__init__.py")
+    }
+    found: set[str] = set()
+    for file in files:
+        try:
+            tree = ast.parse(file.read_text(encoding="utf-8"))
+        except (SyntaxError, UnicodeDecodeError, ValueError):
+            continue  # the build's own check reports what doesn't compile
+        found |= _imports(tree)
+    return sorted(found - set(stdlib) - neighbours - {"__future__", "__main__"})
+
+
+def _which(names: list[str]) -> str:
+    return f"{names[0]}, which isn't" if len(names) == 1 else f"{', '.join(names)}, which aren't"
+
+
+def _imports(tree: ast.AST) -> set[str]:
+    names: set[str] = set()
+
+    def visit(node: ast.AST, optional: bool) -> None:
+        if isinstance(node, ast.Try):
+            caught = {_name(h.type) for h in node.handlers}
+            guarded = bool(caught & {None, "ImportError", "ModuleNotFoundError", "Exception"})
+            for child in node.body:
+                visit(child, optional or guarded)
+            for child in [*node.handlers, *node.orelse, *node.finalbody]:
+                visit(child, optional)
+            return
+        if isinstance(node, ast.If) and "TYPE_CHECKING" in ast.dump(node.test):
+            return
+        if not optional and isinstance(node, ast.Import):
+            names.update(alias.name.split(".")[0] for alias in node.names)
+        elif not optional and isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            names.add(node.module.split(".")[0])
+        for child in ast.iter_child_nodes(node):
+            visit(child, optional)
+
+    visit(tree, False)
+    return names
+
+
+def _name(node: ast.expr | None) -> str | None:
+    """The exception a handler catches, by name (None: a bare `except:`)."""
+    if node is None:
+        return None
+    if isinstance(node, ast.Tuple):
+        return next(
+            (n for n in map(_name, node.elts) if n in ("ImportError", "ModuleNotFoundError")), ""
+        )
+    return (
+        node.id
+        if isinstance(node, ast.Name)
+        else node.attr
+        if isinstance(node, ast.Attribute)
+        else ""
+    )
+
+
+# Not part of a folder app: tooling, environments and build output.
+SKIP_DIRS = {"__pycache__", "node_modules", "dist", "build", "site-packages", "venv", "env"}
+
+
+def _app_files(folder: Path, *, suffix: str = "") -> list[Path]:
+    """The files of a folder app, sorted: everything but hidden files, virtual environments,
+    caches and build output."""
+    found = []
+    for item in sorted(folder.iterdir()):
+        if item.name.startswith(".") or item.name.endswith(".egg-info"):
+            continue
+        if item.is_dir():
+            if item.name in SKIP_DIRS or (item / "pyvenv.cfg").exists():
+                continue
+            found += _app_files(item, suffix=suffix)
+        elif item.is_file() and item.name.endswith(suffix) and not item.name.endswith(".pyc"):
+            found.append(item)
+    return found
+
+
+def app_files(source: Source) -> list[tuple[str, Path]]:
+    """A folder app's files and where each goes in the payload (POSIX, relative)."""
+    return [(f.relative_to(source.path).as_posix(), f) for f in _app_files(source.path)]
 
 
 def find_uv_lock(project: Path) -> Path | None:

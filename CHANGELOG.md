@@ -19,6 +19,10 @@ The first working release. From a project with `uv.lock` or `pylock.toml`, or a 
 - `--entry python`: a `.pyz` that runs the scripts it's given (`python deps.pyz tool.py`), so
   one bundle serves every script of a skill. A bundle for several platforms stores each file
   once. Over 100 MB (GitHub's file limit), a build warns (`large-bundle`).
+- Projects without a lock build too (ADR-0041): a `pyproject.toml` installed with pip, a
+  `setup.py` project, a folder of modules with `requirements.txt`, a script with a
+  `requirements.txt` beside it or none at all. Versions are resolved at build time, with an
+  `unlocked` warning unless every one is pinned; nothing is written into the project.
 - Packages are installed from the lock's own files and index, with their hashes: a project
   locked against a company index builds from it, never from a same-named package on PyPI.
 - `bundleup check`: what won't survive bundling, before shipping: code that doesn't compile on

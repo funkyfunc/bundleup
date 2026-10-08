@@ -43,7 +43,8 @@ What that means concretely:
 
 **Dead simple**
 - One command, no config file needed: `bundleup build app.py` does the right thing.
-- Reads the files you already have: `pyproject.toml`, `uv.lock`, `pylock.toml`, PEP 723 scripts.
+- Reads the files you already have: `pyproject.toml`, `uv.lock`, `pylock.toml`, PEP 723 scripts,
+  and without a lock `setup.py` or `requirements.txt` (ADR-0041).
 - Sensible defaults: the platform you're on; for pure-Python code, every Python version the lock
   allows ([ADR-0030](adr/0030-pure-python-bundles-run-on-a-range.md)); with compiled code, the
   one version it was built for.
@@ -93,7 +94,8 @@ If something can't work, you find out at **build** time, not from a user:
 ## What we solve
 
 1. **One command from the files you already have.** It reads your `pyproject.toml` with `uv.lock`
-   or `pylock.toml`, or a PEP 723 script, and produces one `.pyz` per platform. There's nothing
+   or `pylock.toml`, a PEP 723 script, or a pip-style project or `requirements.txt`, and produces
+   one `.pyz` per platform. There's nothing
    new to configure, and nothing is written into your project.
 2. **It runs on the user's Python without installing anything.** That includes compiled packages:
    NumPy, cryptography, lxml. The payload unpacks once to a cache on first run (compiled code
