@@ -91,6 +91,10 @@ def _rerun_with_another_python(here: "tuple[int, int]") -> None:
     plain = [os.path.join(folder, name) for folder in folders for name in names]
     if sys.platform == "darwin":
         plain.append("/usr/bin/python3")
+        # Without the developer tools, Apple's python3 is a stub that opens an install dialog.
+        tools = ("/Library/Developer/CommandLineTools/usr/bin/python3", "/Applications/Xcode.app")
+        if not any(os.path.exists(t) for t in tools):
+            plain = [p for p in plain if os.path.realpath(p) != "/usr/bin/python3"]
     me = os.path.realpath(sys.executable)
     seen = set()  # type: set[str]
     best = None  # type: tuple[tuple[int, int], str] | None
@@ -434,6 +438,8 @@ def _prune(root: str) -> None:
             continue
         try:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)  # fails if a program holds it
+            if now - os.stat(path).st_mtime < PRUNE_AFTER:
+                continue  # started (and marked used) since we looked
             doomed = os.path.join(root, ".tmp-%s-%d-pruned" % (entry, os.getpid()))
             os.rename(path, doomed)  # out of the way first: never a half-deleted copy in place
             shutil.rmtree(doomed, ignore_errors=True)

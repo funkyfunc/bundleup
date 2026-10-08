@@ -203,6 +203,7 @@ def build(
                 steps=steps,
                 progress=report,
                 max_size=options.max_size,
+                strict=options.strict,
             )
         elif fmt == "dir":
             check_size(sum(x.size_bytes for x in p.sizes), options.max_size, diagnostics)

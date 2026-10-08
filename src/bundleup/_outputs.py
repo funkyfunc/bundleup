@@ -192,6 +192,7 @@ def write_pyz(
     steps: Steps,
     progress: Progress,
     max_size: int | None = None,
+    strict: bool = False,
 ) -> list[Diagnostic]:
     """The default: shebang + outer zip with the loader, the manifest and the payload, or one
     payload per platform and Python version when there are several (ADR-0038). Refuses, before
@@ -211,6 +212,12 @@ def write_pyz(
     check_size(total, max_size, diags)
     if max_size is None and total > LARGE and _in_git(output):
         diags.append(_large(total, ps))
+        if strict:  # before anything is written, as for every other warning (fifth review)
+            raise CheckFailedError(
+                "found 1 warning, so nothing was written",
+                diagnostics=diags,
+                hint="--strict makes warnings fail too; build without it to allow them",
+            )
     steps.start("verify")
     mine = [[layer for layer in layers if i in layer.owners] for i in range(len(ps))]
     files = [{rel: h for layer in own for rel, h in layer.files.items()} for own in mine]

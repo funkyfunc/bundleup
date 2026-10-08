@@ -119,5 +119,9 @@ def test_a_bundle_too_big_for_git_warns_unless_a_limit_is_set(
     (tmp_path / ".git").mkdir()
     result = build(BuildOptions(path=tmp_path / "fn.py", output=tmp_path / "a.pyz"))
     assert [d.code for d in result.diagnostics] == ["large-bundle"]
+    strict = BuildOptions(path=tmp_path / "fn.py", output=tmp_path / "s.pyz", strict=True)
+    with pytest.raises(CheckFailedError):  # --strict means every warning (fifth review)
+        build(strict)
+    assert not (tmp_path / "s.pyz").exists()
     limited = BuildOptions(path=tmp_path / "fn.py", output=tmp_path / "b.pyz", max_size=10**9)
     assert build(limited).diagnostics == []  # the user chose a limit: no second opinion

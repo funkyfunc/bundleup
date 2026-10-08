@@ -53,7 +53,9 @@ def runs_bundle_code(site: str) -> bool:
             )
         return True  # 3.9 can't tell which module: assume the bundle's own (the common case)
     script = os.path.normcase(os.path.abspath(first))
-    homes = [site] + [p for p in os.environ.get(ENV_SCRIPTS, "").split(os.pathsep) if p]
+    homes = [site]
+    if script.endswith(".py"):  # a console script (no .py) never counts, wherever it lives
+        homes += [p for p in os.environ.get(ENV_SCRIPTS, "").split(os.pathsep) if p]
     return any(script.startswith(os.path.normcase(os.path.abspath(h)) + os.sep) for h in homes)
 
 

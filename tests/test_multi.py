@@ -57,6 +57,7 @@ def test_a_payload_per_os_when_the_lock_differs_and_verify_checks_each(tmp_path:
     )
     payloads = manifest(out)["payloads"]
     assert isinstance(payloads, list) and len(payloads) == 2
+    assert manifest(out)["manifest_version"] == 2  # layers and payloads
     assert [p["platform"] for p in result.payloads] == ["linux", "win32"]
     report = verify(out)
     assert report.ok, report.problems
@@ -88,3 +89,16 @@ def test_a_layered_bundle_runs_here(tmp_path: Path) -> None:
     r = subprocess.run([sys.executable, str(out)], capture_output=True, text=True, env=env)
     assert (r.returncode, r.stdout.strip()) == (0, "hello"), r.stderr
     assert verify(out).ok
+
+
+def test_unlocked_targets_resolve_from_the_lowest_python_asked_for() -> None:
+    """Fourth review: each payload of an unlocked multi-target build resolved from its own
+    Python, so they could bundle different versions; paths and single targets don't count."""
+    from bundleup._build import _lowest
+
+    def asked(*pythons: str | None) -> list[BuildOptions]:
+        return [BuildOptions(python=p) for p in pythons]
+
+    assert _lowest(asked("3.12", "3.10", "3.11")) == (3, 10)
+    assert _lowest(asked("3.12", "/usr/bin/python3")) is None  # one version: nothing to share
+    assert _lowest(asked("3.12")) is None and _lowest(asked(None, None)) is None

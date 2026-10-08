@@ -256,6 +256,8 @@ def find_uv_lock(project: Path) -> Path | None:
     another project's lock higher in the repository isn't this one's (fourth review)."""
     if (project / "uv.lock").is_file():
         return project / "uv.lock"
+    if (project / ".git").exists():
+        return None  # the repository's root: nothing above it is this project's
     for directory in project.parents:
         if (directory / "uv.lock").is_file() and _is_member(project, directory):
             return directory / "uv.lock"
