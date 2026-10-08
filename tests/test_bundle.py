@@ -584,3 +584,17 @@ def test_entry_python_is_for_a_pyz(tmp_path: Path) -> None:
     (tmp_path / "deps.py").write_text("# /// script\n# dependencies = []\n# ///\n")
     with pytest.raises(UsageError, match=r"--entry python makes a \.pyz"):
         build(BuildOptions(path=tmp_path / "deps.py", format="dir", entry="python"))
+
+
+def test_no_warnings_under_dev_mode(bundle: Path, tmp_path: Path) -> None:
+    """`python -X dev -W error` (as test suites like click's run): the loader leaves no file open
+    at exit, cold or warm."""
+    env = env_for(tmp_path)
+    for _ in ("cold", "warm"):
+        r = subprocess.run(
+            [sys.executable, "-X", "dev", "-W", "error", str(bundle)],
+            env=env,
+            capture_output=True,
+            text=True,
+        )
+        assert r.returncode == 0 and "Warning" not in r.stderr, r.stderr

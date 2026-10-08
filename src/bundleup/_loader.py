@@ -631,6 +631,11 @@ def _hold(site: str) -> None:
     except (OSError, ImportError):
         return  # a read-only cache, or locks unsupported: nothing to protect it from
     _IN_USE.append(handle)
+    import atexit
+
+    # Closed at exit, before Python tears down modules: otherwise the file is finalized open,
+    # and `-W error` or `python -X dev` prints a ResourceWarning (seen in click's suite).
+    atexit.register(handle.close)
 
 
 if __name__ == "__main__":

@@ -49,6 +49,7 @@ class Outcome:
     counts: dict[str, int]
     module_file: str
     tail: str
+    failed: list[str]  # every FAILED / ERROR test id in pytest's short summary
 
 
 @dataclass
@@ -61,6 +62,7 @@ class Record:
 
 
 SUMMARY = re.compile(r"\d+ (passed|failed|errors?|skipped)\b.* in [\d.]+s")
+FAILED = re.compile(r"^(?:FAILED|ERROR) (\S+)", re.MULTILINE)
 
 
 def summarize(stdout: str, stderr: str, exit_code: int) -> Outcome:
@@ -73,9 +75,9 @@ def summarize(stdout: str, stderr: str, exit_code: int) -> Outcome:
         kind.rstrip("s") if kind.startswith("error") else kind: int(n)
         for n, kind in COUNTS.findall(last)
     }
-    return Outcome(
-        exit_code, counts, found.group(1).strip() if found else "", "\n".join(lines[-15:])
-    )
+    module_file = found.group(1).strip() if found else ""
+    failed = sorted(set(FAILED.findall(stdout)))
+    return Outcome(exit_code, counts, module_file, "\n".join(lines[-15:]), failed)
 
 
 def run_tests(cmd: list[str], *, clone: Path, env: dict[str, str]) -> Outcome:
@@ -149,8 +151,11 @@ def run_suite(suite: Suite, python: str, version: str, work: Path) -> Record:
     elif (rec.bundle.exit_code, rec.bundle.counts) != (rec.venv.exit_code, rec.venv.counts):
         rec.outcome = "mismatch"
         venv, bundled = rec.venv, rec.bundle
+        only_bundle = sorted(set(bundled.failed) - set(venv.failed))
+        only_venv = sorted(set(venv.failed) - set(bundled.failed))
         rec.detail = (
             f"venv: {venv.exit_code} {venv.counts}; bundle: {bundled.exit_code} {bundled.counts}"
+            f"; fail only in the bundle: {only_bundle}; only in the venv: {only_venv}"
         )
     else:
         rec.outcome = "pass"
@@ -173,7 +178,7 @@ def main() -> int:
         rec = run_suite(suite, rb.python_path(opts.python), opts.python, work)
         records.append(rec)
         counts = rec.bundle.counts if rec.bundle else {}
-        print(f"{rec.outcome:<16} {rec.name:<14} {counts} {rec.detail[:200]}", flush=True)
+        print(f"{rec.outcome:<16} {rec.name:<14} {counts} {rec.detail[:1500]}", flush=True)
     out = rb.RESULTS / f"{opts.out}.json"
     out.write_text(json.dumps([asdict(r) for r in records], indent=1) + "\n")
     print(f"wrote {out}")
