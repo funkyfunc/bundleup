@@ -35,7 +35,8 @@ The first working release. From a project with `uv.lock` or `pylock.toml`, or a 
 - Bundles unpack once to a cache, start as fast as an installed venv, check the Python version,
   platform, CPU, C library and macOS version first, ignore the machine's own packages, and let
   child processes that run the bundle's code see its packages (no other Python or tool). `cache
-  clean` never removes a copy a running program uses.
+  clean` never removes a copy a running program uses, and a new version prunes older copies of
+  the same bundle unused for 30 days (POSIX).
 - A lock is checked against `pyproject.toml` by default (`--frozen` to skip); bundleup never
   writes or rewrites a project's lockfile.
 - `--json` output with JSON Schemas, stable exit codes and diagnostic codes, `[tool.bundleup]`

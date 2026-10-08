@@ -36,7 +36,8 @@ bundleup reads what you have: `pyproject.toml` with `uv.lock` or `pylock.toml`, 
 (resolved at build time, with a warning; [recipes](docs/recipes.md)). It brings its own
 [uv](https://docs.astral.sh/uv/) for the build; the bundle needs only Python. On first run it
 unpacks to a cache (`~/Library/Caches/bundleup`, `~/.cache/bundleup`, or a temp directory if
-those aren't writable), so later runs start as fast as an installed virtualenv. A pure-Python
+those aren't writable), so later runs start as fast as an installed virtualenv; unpacking a new version removes older
+copies of the same bundle that went unused for 30 days. A pure-Python
 bundle runs on every Python version its lock allows (`Python 3.10+`), and on any OS when the lock
 picks the same packages everywhere (`on any OS`); one with compiled code runs on the version and
 platform it was built for. A bundle only sees

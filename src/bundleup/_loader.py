@@ -399,6 +399,49 @@ def _mark_used(path: str, mtime: float) -> None:
             pass  # a read-only cache: it just won't look recently used
 
 
+PRUNE_AFTER = 30 * 86400.0  # seconds unused before an older copy of this bundle is removed
+
+
+def _prune(root: str) -> None:
+    """After unpacking a new copy: remove older copies of the same bundle (`<name>-<hash>`) not
+    used for PRUNE_AFTER and held by no running program, so updates don't pile up on machines
+    where nobody runs `bundleup cache clean` (fourth review). POSIX only: elsewhere a copy in use
+    can't be told apart. Best effort; runs only on the cold path."""
+    if os.name == "nt":
+        return
+    import fcntl
+    import shutil
+    import time
+
+    name = DIRNAME.rsplit("-", 1)[0]
+    now = time.time()
+    try:
+        entries = os.listdir(root)
+    except OSError:
+        return
+    for entry in entries:
+        head, _, digest = entry.rpartition("-")
+        if head != name or entry == DIRNAME or len(digest) != 16:
+            continue
+        path = os.path.join(root, entry)
+        try:
+            if now - os.stat(path).st_mtime < PRUNE_AFTER:
+                continue
+            lock = open(os.path.join(root, ".lock-" + entry), "a+b")  # noqa: SIM115
+        except OSError:
+            continue
+        try:
+            fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)  # fails if a program holds it
+            doomed = os.path.join(root, ".tmp-%s-%d-pruned" % (entry, os.getpid()))
+            os.rename(path, doomed)  # out of the way first: never a half-deleted copy in place
+            shutil.rmtree(doomed, ignore_errors=True)
+            os.unlink(os.path.join(root, ".lock-" + entry))
+        except OSError:
+            pass
+        finally:
+            lock.close()
+
+
 class _Window(object):
     """A read-only view of part of a file, so zipfile can read the payload in place."""
 
@@ -563,6 +606,7 @@ def _extract() -> str:
             finally:
                 if lock is not None:
                     lock.close()  # releases the lock
+            _prune(root)
             return final
         except OSError as e:
             problems.append("  %s: %s" % (root, e.strerror or e))

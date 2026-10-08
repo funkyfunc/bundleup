@@ -11,6 +11,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import time
 import zipfile
 from pathlib import Path
 from typing import Any
@@ -548,6 +549,7 @@ def test_pth_files_are_processed_like_site_py(
 
 TOOL = """\
 import sys
+import time
 
 import acme_private  # from the bundle
 import helper  # beside this script, as with plain python
@@ -674,3 +676,38 @@ def test_a_child_reading_its_program_from_stdin_sees_the_bundle(
     ).stdout.strip()
     r = run(out, env, "-c", CHILD_ON_STDIN)
     assert r.stdout.splitlines() == [f"the company index {plain}"] * 2, r.stderr + r.stdout
+
+
+@pytest.mark.skipif(WINDOWS, reason="pruning needs file locks to tell a copy in use")
+def test_unpacking_prunes_old_unused_copies_of_the_same_bundle(
+    bundle: Path, tmp_path: Path
+) -> None:
+    """End users can't run `bundleup cache clean`: a new copy removes older copies of the same
+    bundle unused for 30 days, unless a running program holds one (fourth review)."""
+    import fcntl
+
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    month = time.time() - 40 * 86400
+
+    def copy(digest: str, age: float) -> Path:
+        path = cache / f"probe-{digest}"
+        (path / "pkg").mkdir(parents=True)
+        os.utime(path, (age, age))
+        return path
+
+    old, recent, held, other = (
+        copy("0" * 16, month),
+        copy("1" * 16, time.time()),
+        copy("2" * 16, month),
+        cache / f"other-{'3' * 16}",
+    )
+    other.mkdir()
+    os.utime(other, (month, month))
+    lock = open(cache / f".lock-{held.name}", "a+b")  # noqa: SIM115  # held for the test's length
+    fcntl.flock(lock.fileno(), fcntl.LOCK_SH)
+    try:
+        assert probe(bundle, env_for(tmp_path, BUNDLEUP_CACHE=str(cache)))
+    finally:
+        lock.close()
+    assert not old.exists() and recent.exists() and held.exists() and other.exists()
