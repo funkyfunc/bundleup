@@ -3,9 +3,7 @@ its dependencies: a lockfile, or, without one, what declares them (ADR-0041)."""
 
 from __future__ import annotations
 
-import ast
 import re
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,6 +14,7 @@ from . import _toml as tomllib
 from . import _verify
 from ._errors import ProjectError
 from ._formats import Format
+from ._imports import imports_of, stdlib_ever, top_level_modules
 
 PEP723 = re.compile(r"(?m)^# /// (?P<type>[a-zA-Z0-9-]+)$\s(?P<content>(^#(| .*)$\s)+)^# ///$")
 
@@ -161,80 +160,20 @@ def _legacy_name(path: Path) -> str:
 
 
 def third_party_imports(path: Path, *, local: Path) -> list[str]:
-    """Top-level modules a script (or every .py in a folder) imports that are neither in the
-    standard library nor beside it. Imports guarded by `try: ... except ImportError` or `if
-    TYPE_CHECKING:` are optional and don't count. Empty when this Python can't tell (3.9 has no
-    sys.stdlib_module_names)."""
-    stdlib = getattr(sys, "stdlib_module_names", None)
-    if stdlib is None:
+    """Top-level modules a script (or every .py in a folder) imports for sure that are neither
+    in any version's standard library nor beside it. Empty when this Python can't tell (3.9 has
+    no sys.stdlib_module_names)."""
+    ever = stdlib_ever()
+    if ever is None:
         return []
     files = [path] if path.is_file() else list(_app_files(path, suffix=".py"))
-    neighbours = {p.stem for p in local.glob("*.py")} | {
-        p.parent.name for p in local.glob("*/__init__.py")
-    }
-    found: set[str] = set()
-    for file in files:
-        try:
-            tree = ast.parse(file.read_text(encoding="utf-8"))
-        except (SyntaxError, UnicodeDecodeError, ValueError):
-            continue  # the build's own check reports what doesn't compile
-        found |= imports_in(tree)
-    return sorted(found - set(stdlib) - neighbours - {"__future__", "__main__"})
+    neighbours = top_level_modules(local)
+    found: set[str] = set().union(*(imports_of(f) for f in files)) if files else set()
+    return sorted(found - ever - neighbours - {"__future__", "__main__"})
 
 
 def _which(names: list[str]) -> str:
     return f"{names[0]}, which isn't" if len(names) == 1 else f"{', '.join(names)}, which aren't"
-
-
-# An `if` on these runs only somewhere (a platform, a Python version): its imports are optional.
-CONDITIONAL = ("TYPE_CHECKING", "platform", "os.name", "version_info")
-
-
-def imports_in(tree: ast.AST) -> set[str]:
-    """The top-level modules a module's code imports for sure: not relative imports, and not
-    those guarded by `try/except ImportError` or an `if` on TYPE_CHECKING, the platform or the
-    Python version."""
-    names: set[str] = set()
-
-    def visit(node: ast.AST, optional: bool) -> None:
-        if isinstance(node, ast.Try):
-            caught = {_name(h.type) for h in node.handlers}
-            guarded = bool(caught & {None, "ImportError", "ModuleNotFoundError", "Exception"})
-            for child in node.body:
-                visit(child, optional or guarded)
-            for child in [*node.handlers, *node.orelse, *node.finalbody]:
-                visit(child, optional)
-            return
-        if isinstance(node, ast.If) and any(c in ast.unparse(node.test) for c in CONDITIONAL):
-            for child in [*node.body, *node.orelse]:
-                visit(child, True)
-            return
-        if not optional and isinstance(node, ast.Import):
-            names.update(alias.name.split(".")[0] for alias in node.names)
-        elif not optional and isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            names.add(node.module.split(".")[0])
-        for child in ast.iter_child_nodes(node):
-            visit(child, optional)
-
-    visit(tree, False)
-    return names
-
-
-def _name(node: ast.expr | None) -> str | None:
-    """The exception a handler catches, by name (None: a bare `except:`)."""
-    if node is None:
-        return None
-    if isinstance(node, ast.Tuple):
-        return next(
-            (n for n in map(_name, node.elts) if n in ("ImportError", "ModuleNotFoundError")), ""
-        )
-    return (
-        node.id
-        if isinstance(node, ast.Name)
-        else node.attr
-        if isinstance(node, ast.Attribute)
-        else ""
-    )
 
 
 # Not part of a folder app: tooling, environments and build output.
@@ -249,17 +188,22 @@ def _app_files(folder: Path, *, suffix: str = "") -> list[Path]:
         if item.name.startswith(".") or item.name.endswith(".egg-info"):
             continue
         if item.is_dir():
-            if item.name in SKIP_DIRS or (item / "pyvenv.cfg").exists():
-                continue
+            if item.is_symlink() or item.name in SKIP_DIRS or (item / "pyvenv.cfg").exists():
+                continue  # a symlinked folder could loop, or lead anywhere
             found += _app_files(item, suffix=suffix)
         elif item.is_file() and item.name.endswith(suffix) and not item.name.endswith(".pyc"):
             found.append(item)
     return found
 
 
-def python_files(folder: Path) -> list[tuple[str, Path]]:
-    """The .py files under a folder (as for a folder app) and their POSIX paths relative to it."""
-    return [(f.relative_to(folder).as_posix(), f) for f in _app_files(folder, suffix=".py")]
+def python_files(folder: Path, *, deep: bool = True) -> list[tuple[str, Path]]:
+    """The .py files in a folder (with `deep`, under it, as for a folder app; .gitignore applies
+    in a git work tree) and their POSIX paths relative to it."""
+    if not deep:
+        return [(f.name, f) for f in sorted(folder.glob("*.py")) if f.is_file()]
+    tracked = _git_files(folder)
+    found = [(f.relative_to(folder).as_posix(), f) for f in _app_files(folder, suffix=".py")]
+    return [(rel, f) for rel, f in found if tracked is None or rel in tracked]
 
 
 def app_files(source: Source) -> list[tuple[str, Path]]:

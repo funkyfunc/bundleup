@@ -16,7 +16,7 @@ from typing import Callable, Literal
 from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
 
-from . import _check, _config, _coverage, _platforms
+from . import _check, _config, _coverage, _imports, _platforms
 from . import _toml as tomllib
 from ._check import CheckReport
 from ._errors import (
@@ -390,14 +390,23 @@ def _own_code(
             if owner.name == project and rel.endswith(".py") and (site / rel).is_file()
         ]
     if entry is not None and entry.kind == "python":
+        # A project's or folder app's scripts anywhere under it (as git sees them); a script's
+        # neighbours only: its folder may be ~/Downloads (fifth review).
         folder = source.path if source.path.is_dir() else source.path.parent
-        bundled = _check.top_level_modules(site)
-        for rel, file in python_files(folder):
-            top = rel.split("/")[0]
-            if file == source.path or top in NOT_RUN or top.removesuffix(".py") in bundled:
+        bundled = _imports.top_level_modules(site)
+        for rel, file in python_files(folder, deep=not source.is_script)[:MOST_SCRIPTS]:
+            parts = rel.split("/")
+            if (
+                file == source.path
+                or NOT_RUN & set(parts[:-1])
+                or parts[0].removesuffix(".py") in bundled
+            ):
                 continue
             code.append((rel, file, True))
     return code
+
+
+MOST_SCRIPTS = 1000  # read at most this many scripts for --entry python
 
 
 def _unlocked(source: Source, *, pinned: bool) -> list[Diagnostic]:
@@ -553,7 +562,16 @@ def _prepare(
             )
         )
     code = _own_code(source, site, script=script, own=own, entry=entry)
-    diagnostics += _check.undeclared_imports(site, code)
+    provided = _imports.provided_by(site)
+    imported = [
+        (
+            shown,
+            _imports.imports_of(path),
+            _imports.top_level_modules(path.parent) if beside else set(),
+        )
+        for shown, path, beside in code
+    ]
+    diagnostics += _check.undeclared_imports(imported, provided, _imports.stdlib(target.version))
     diagnostics += _format_diagnostics(fmt, site, sizes)
     diagnostics += coverage
     diagnostics += _unlocked(source, pinned=exported.pinned)
@@ -575,6 +593,9 @@ def _prepare(
         run=run_python,
     )
     diagnostics += narrowed
+    every_import = set().union(*(names for _shown, names, _local in imported))
+    pythons, by_stdlib = _check.stdlib_range(pythons, target.version, every_import, provided)
+    diagnostics += by_stdlib
     reach = portability(pylock, target=target, pythons=pythons, native=native)
     if fmt == "lambda" and target.platform != "linux" and not reach.any_os:
         diagnostics.append(

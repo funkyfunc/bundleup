@@ -196,23 +196,55 @@ def test_a_lock_higher_up_counts_only_for_a_workspace_member(tmp_path: Path) -> 
 def test_undeclared_imports_are_reported(tmp_path: Path, private_index: str) -> None:
     """A bundle can't see the machine's packages, so an import the dependencies don't provide
     fails at run time: a warning at build time (fourth review). With --entry python, the scripts
-    in the folder are read too, and their neighbours count."""
+    it will be given are read too (beside a script; anywhere under a project or folder app), and
+    their neighbours count; tests aren't."""
     (tmp_path / "deps.py").write_text(private_index + "import acme_private, yaml\n")
-    scripts = tmp_path / "scripts"
-    scripts.mkdir()
-    (scripts / "edit.py").write_text("import acme_private, helper, json, requests\n")
-    (scripts / "helper.py").write_text("X = 1\n")
+    (tmp_path / "edit.py").write_text("import acme_private, helper, json, requests\n")
+    (tmp_path / "helper.py").write_text("X = 1\n")
     (tmp_path / "tests").mkdir()
-    (tmp_path / "tests" / "test_x.py").write_text("import pytest\n")  # not run by the bundle
+    (tmp_path / "tests" / "test_x.py").write_text("import pytest\n")
     result = build(
         BuildOptions(path=tmp_path / "deps.py", entry="python", output=tmp_path / "d.pyz")
     )
     found = {d.file: d.message for d in result.diagnostics if d.code == "undeclared-import"}
     assert found == {
         "deps.py": "deps.py imports yaml: neither the bundle nor the standard library has it",
-        "scripts/edit.py": "scripts/edit.py imports requests: neither the bundle nor the "
-        "standard library has it",
+        "edit.py": "edit.py imports requests: neither the bundle nor the standard library has it",
     }
+
+
+@pytest.mark.skipif(sys.version_info < (3, 10), reason="3.9 has no sys.stdlib_module_names")
+def test_modules_from_pth_folders_count_and_the_targets_stdlib_decides(tmp_path: Path) -> None:
+    """Fifth review: gauntlet 23's .pth-added modules (and pywin32's win32api) were reported
+    missing, and the standard library was the build machine's, not the target's."""
+    from bundleup._imports import provided_by, stdlib
+
+    site = tmp_path / "site"
+    (site / "win32" / "lib").mkdir(parents=True)
+    (site / "win32" / "win32api.pyd").write_text("")
+    (site / "win32" / "lib" / "win32con.py").write_text("")
+    (site / "pywin32.pth").write_text("# comment\nwin32\nwin32/lib\nimport os\n")
+    (site / "_distutils_hack").mkdir()
+    assert {"win32api", "win32con", "distutils"} <= provided_by(site)
+    old, new, older = stdlib((3, 11)), stdlib((3, 13)), stdlib((3, 10))
+    assert old is not None and new is not None and older is not None
+    assert "imp" in old and "imp" not in new and "tomllib" in old and "tomllib" not in older
+
+
+@pytest.mark.skipif(sys.version_info < (3, 10), reason="3.9 has no sys.stdlib_module_names")
+def test_a_pure_bundles_range_stops_where_the_stdlib_lacks_an_import(tmp_path: Path) -> None:
+    """Fifth review: `import imp` was claimed for 3.12+, where it's gone."""
+    from bundleup._check import stdlib_range
+    from bundleup._python import PythonRange
+
+    narrowed, diags = stdlib_range(PythonRange((3, 9), None), (3, 10), {"imp", "json"}, set())
+    assert narrowed == PythonRange((3, 9), (3, 11)) and [d.code for d in diags] == ["python-range"]
+    narrowed, _ = stdlib_range(PythonRange((3, 9), None), (3, 12), {"tomllib"}, set())
+    assert narrowed == PythonRange((3, 11), None)
+    unchanged, diags = stdlib_range(
+        PythonRange((3, 9), None), (3, 12), {"distutils"}, {"distutils"}
+    )
+    assert unchanged == PythonRange((3, 9), None) and diags == []
 
 
 def test_a_folder_app_follows_gitignore_and_flags_secrets(tmp_path: Path) -> None:

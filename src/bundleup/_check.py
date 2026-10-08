@@ -17,17 +17,15 @@ It also measures each package for the size report.
 
 from __future__ import annotations
 
-import ast
 import json
 import os
-import sys
 from collections import defaultdict
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from . import _bytecode, _platforms, _verify
+from . import _bytecode, _imports, _platforms, _verify
 from ._coverage import MatrixCell
 from ._errors import Diagnostic
 from ._python import Portability, PythonRange
@@ -376,26 +374,20 @@ def analyze(
     return diags, package_sizes(site, owner)
 
 
-def undeclared_imports(site: Path, code: list[tuple[str, Path, bool]]) -> list[Diagnostic]:
-    """Modules the bundled code imports that neither the payload nor the standard library has:
-    the most common way a bundle fails at run time, since it can't see the machine's packages
-    (fourth review). `code`: (name shown, file, whether modules beside it import too, as for a
-    script run with `--entry python`). A warning: the check reads imports, it doesn't run code.
-    Skipped where this Python can't tell what the standard library is (3.9)."""
-    from ._source import imports_in
-
-    stdlib = getattr(sys, "stdlib_module_names", None)
+def undeclared_imports(
+    code: list[tuple[str, set[str], set[str]]], provided: set[str], stdlib: set[str] | None
+) -> list[Diagnostic]:
+    """Modules the bundled code imports that neither the payload (`provided`) nor the target's
+    standard library has: the most common way a bundle fails at run time, since it can't see
+    the machine's packages (fourth review). `code`: (name shown, what it imports, the modules
+    beside it that count too). A warning: it reads imports, it doesn't run code. Skipped where
+    the standard library is unknown (bundleup on 3.9)."""
     if stdlib is None:
         return []
-    provided = top_level_modules(site) | set(stdlib) | {"__future__", "__main__"}
+    have = provided | stdlib | {"__future__", "__main__"}
     diags = []
-    for shown, path, beside in code:
-        try:
-            tree = ast.parse(path.read_text(encoding="utf-8"))
-        except (OSError, SyntaxError, UnicodeDecodeError, ValueError):
-            continue  # syntax-error reports what doesn't compile
-        local = top_level_modules(path.parent) if beside else set()
-        missing = sorted(imports_in(tree) - provided - local)
+    for shown, imported, local in code:
+        missing = sorted(imported - have - local)
         if missing:
             diags.append(
                 Diagnostic(
@@ -411,14 +403,40 @@ def undeclared_imports(site: Path, code: list[tuple[str, Path, bool]]) -> list[D
     return diags
 
 
-def top_level_modules(folder: Path) -> set[str]:
-    """What `import x` finds in a folder on sys.path: packages (folders, namespace ones too),
-    modules and extension modules."""
-    names = set()
-    for item in folder.iterdir() if folder.is_dir() else []:
-        if item.is_dir():
-            if not item.name.endswith((".dist-info", ".data")) and item.name.isidentifier():
-                names.add(item.name)
-        elif item.suffix in (".py", ".so", ".pyd") or ".cpython-" in item.name:
-            names.add(item.name.split(".")[0])
-    return names
+def stdlib_range(
+    pythons: PythonRange, here: tuple[int, int], imported: set[str], provided: set[str]
+) -> tuple[PythonRange, list[Diagnostic]]:
+    """Narrow a pure-Python bundle's range to the versions whose standard library has every
+    module its code imports from it (fifth review: `import imp` was claimed for 3.12+, where
+    it's gone; `import tomllib` for 3.9, before it existed). Modules the payload provides
+    (setuptools' distutils) don't count."""
+    if pythons.exact:
+        return pythons, []
+    top = pythons.max or max(_imports.NEWEST, here)
+    versions = [(3, minor) for minor in range(pythons.min[1], top[1] + 1)]
+    libraries = {v: _imports.stdlib(v) for v in versions}
+    if any(lib is None for lib in libraries.values()):
+        return pythons, []
+    ever = set().union(*(lib for lib in libraries.values() if lib is not None))
+    used = (imported & ever) - provided
+    ok = [v for v in versions if used <= (libraries[v] or set())]
+    if ok == versions or here not in ok:
+        return pythons, []
+    low = high = versions.index(here)  # the stretch of versions around the target that work
+    while low > 0 and versions[low - 1] in ok:
+        low -= 1
+    while high < len(versions) - 1 and versions[high + 1] in ok:
+        high += 1
+    open_ended = pythons.max is None and high == len(versions) - 1
+    narrowed = PythonRange(versions[low], None if open_ended else versions[high])
+    missing = sorted(m for m in used if any(m not in (libraries[v] or set()) for v in versions))
+    return narrowed, [
+        Diagnostic(
+            "python-range",
+            "warning",
+            f"the code imports {', '.join(missing)}, which not every Python in {pythons} has, "
+            f"so the bundle runs on Python {narrowed}",
+            hint="import it conditionally (`if sys.version_info >= ...`, or `try/except "
+            "ImportError`) to keep the wider range",
+        )
+    ]
