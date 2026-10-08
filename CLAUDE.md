@@ -48,14 +48,16 @@ Do these **as you go**, not only at the end:
 A snapshot, not a changelog: history is in [docs/roadmap.md](docs/roadmap.md) "Done", the ADRs
 and git.
 
-- **What works (2026-10-07):** `bundleup build|check|targets|verify|cache` from a project
+- **What works (2026-10-07):** `bundleup build|check|verify|cache` from a project
   (`uv.lock` or `pylock.toml`; a lockfile is required, ADR-0028) or a PEP 723 script. Outputs: a
   `.pyz` (default), `--format dir`, `--format lambda`; `--max-size`. No named targets: each
   destination is a tested recipe in docs/recipes.md (ADR-0039). Builds for this machine or another
   platform. Pure-Python bundles run on every
   Python version their lock allows (ADR-0030) and on any OS when the lock agrees (ADR-0034);
   compiled ones on one version and platform, and one `.pyz` can carry a payload per platform and
-  version (ADR-0038). A stale lock is an error (ADR-0033). Every build checks the code
+  version, each file stored once (ADR-0038). `--entry python` makes a bundle that runs the
+  scripts it's given, one for all of a skill's scripts (ADR-0040). Packages come from the lock's
+  own files and index, hash-checked (a company index works). A stale lock is an error (ADR-0033). Every build checks the code
   and, for other platforms, wheel coverage from the lock (ADR-0024, ADR-0031).
 - **Runtime:** unpacks once to a content-addressed cache; checks Python version, platform, CPU,
   C library, macOS version; isolates from the machine's packages; children of the bundle's own
@@ -68,7 +70,7 @@ and git.
   configuration, builds 1.1-2.4× faster; warm start equals a venv; first runs 2.3-15× faster.
 - **Not yet:** a PyPI release (0.0.1 is a placeholder; [docs/releasing.md](docs/releasing.md)).
 - **ADR status:** 0023-0026 and 0033-0038 are **Proposed** (written while the owner was
-  away); 0039 is accepted; 0027-0032 are accepted fixes the owner asked for, with designs the owner hasn't reviewed.
+  away); 0040 is Proposed; 0039 is accepted; 0027-0032 are accepted fixes the owner asked for, with designs the owner hasn't reviewed.
   Three independent reviews: [first](docs/findings/2026-10-07-independent-review.md),
   [second](docs/findings/2026-10-07-second-review.md), [third](docs/findings/2026-10-07-third-review.md).
 - bundleup depends on the `uv` package (bundled binary) but prefers a uv ≥ 0.9 on `PATH`
@@ -89,7 +91,7 @@ pyproject.toml, src/bundleup/  the package (ADR-0018): __init__.py (public API),
                         (Format, sizes), _zipwriter.py, _bytecode.py, _cache.py, _errors.py,
                         _term.py, _text.py
 tests/snapshots/        CLI output and API snapshots; docs/cli-reference.md is generated too
-docs/schema/            JSON Schemas of each command's `--json` (build, check, targets, verify, cache)
+docs/schema/            JSON Schemas of each command's `--json` (build, check, verify, cache)
 tests/                  pytest: loader/CLI edge cases the gauntlet doesn't reach
 docs/roadmap.md         "Next up" work list, then possible future directions
 docs/python-for-js-reviewers.md  code style rules + review guide for the JS-fluent owner
