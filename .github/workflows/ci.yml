@@ -90,6 +90,10 @@ jobs:
           # Built for the Mac it ran on: pure-Python bundles must run on other OSes (ADR-0034).
           - { name: any-os-macos-to-linux, build: macos-15, run: ubuntu-24.04-arm, platform: host }
           - { name: any-os-macos-to-windows, build: macos-15, run: windows-2025, platform: host }
+          # One bundle for three platforms, built on a Mac, run on each (ADR-0038).
+          - { name: multi-on-linux, build: macos-15, run: ubuntu-24.04, platform: "x86_64-manylinux_2_28,x86_64-pc-windows-msvc,aarch64-apple-darwin" }
+          - { name: multi-on-windows, build: macos-15, run: windows-2025, platform: "x86_64-manylinux_2_28,x86_64-pc-windows-msvc,aarch64-apple-darwin" }
+          - { name: multi-on-macos, build: macos-15, run: macos-15, platform: "x86_64-manylinux_2_28,x86_64-pc-windows-msvc,aarch64-apple-darwin" }
     runs-on: ${{ matrix.build }}
     steps:
       - uses: actions/checkout@v7

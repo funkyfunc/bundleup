@@ -10,7 +10,8 @@ The first working release. From a project with `uv.lock` or `pylock.toml`, or a 
 - `bundleup build`: one `.pyz` that runs on plain Python with no install step. A pure-Python one
   runs on every Python version its lock allows and, when the lock picks the same packages
   everywhere, on any OS and CPU; one with compiled code on the version and platform it was built
-  for. Started with the wrong Python, a bundle runs itself again with a matching installed one. Also `--format dir` (a plain directory for host applications) and `--format lambda` (an AWS
+  for, or, with several `--python`/`--python-platform`, one file with a payload for each. Started
+  with the wrong Python, a bundle runs itself again with a matching installed one. Also `--format dir` (a plain directory for host applications) and `--format lambda` (an AWS
   Lambda zip), and builds for other platforms (`--python-platform`, presets `--target lambda`,
   `lambda-arm64`, `claude-api`).
 - `bundleup check`: what won't survive bundling, before shipping: code that doesn't compile on

@@ -14,8 +14,7 @@ marked *Proposed*.
 
 19. **Release 0.1.0**: everything is prepared ([docs/releasing.md](releasing.md), [CHANGELOG](../CHANGELOG.md),
     [release.yml](../.github/workflows/release.yml)); publishing needs the owner (trusted publishing on pypi.org, then a tag).
-21. **One `.pyz` for several platforms** (a payload per OS × CPU × Python, the loader picks):
-    the founding case has compiled dependencies (third review). Needs an ADR and the owner's go; after 0.1 (scope is frozen until it has users).
+
 
 Frozen until 0.1 has users: new formats, presets and nightly automation. Deferred: faster warm
 rebuilds (cache compressed zip members per wheel); packages a target already provides (would break "the lock decides"); agent triage of `corpus-failure` issues (ADR-0017, by the owner); standalone executables
@@ -48,6 +47,7 @@ Details are in the linked ADRs and findings, and in git history.
 | 19a | `[tool.bundleup]` configuration | 2026-10-07 | [ADR-0032](adr/0032-tool-bundleup-configuration.md) |
 | 20 | The second review's fixes: `--locked` by default, cache-root trust, runtime variables, range check, any-OS pure bundles, Skills size limit | 2026-10-07 | [findings](findings/2026-10-07-second-review.md), [ADR-0033](adr/0033-a-stale-lock-is-an-error.md), [ADR-0034](adr/0034-pure-python-bundles-run-on-any-os.md) |
 | 22 | The third review's fixes: children activate only for bundle code, exact range check, re-run with a matching Python, macOS 26 / Windows CPU, in-use copies kept, `check --matrix` | 2026-10-07 | [findings](findings/2026-10-07-third-review.md), [ADR-0036](adr/0036-wrong-python-reruns-and-a-platform-matrix.md), [ADR-0037](adr/0037-children-activate-only-for-bundle-code.md) |
+| 21 | One `.pyz` for several platforms and Python versions | 2026-10-07 | [ADR-0038](adr/0038-one-pyz-for-several-platforms.md) |
 | 17 | Docs match the code: MISSION, vision, README, roadmap, CLAUDE.md | 2026-10-07 | the review's section 1 |
 
 Before writing code in an unfamiliar area, look at [references.md](references.md) for projects

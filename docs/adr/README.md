@@ -46,3 +46,4 @@ and change only the old one's status line.
 | [0035](0035-check-older-pythons-syntax-without-their-interpreters.md) | A range's oldest Python is checked with a real interpreter, installed privately if needed | Proposed |
 | [0036](0036-wrong-python-reruns-and-a-platform-matrix.md) | A plain `python3` shebang and a re-run with a matching Python; `check --matrix`; in-use copies are kept | Proposed |
 | [0037](0037-children-activate-only-for-bundle-code.md) | A child process activates the bundle only when it runs the bundle's code | Proposed |
+| [0038](0038-one-pyz-for-several-platforms.md) | One `.pyz` can carry a payload per platform and Python version | Proposed |

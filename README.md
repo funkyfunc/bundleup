@@ -19,6 +19,7 @@ bundleup build                  # the project in this directory -> dist/<name>.p
 bundleup build path/to/script.py  # a PEP 723 script with inline dependencies
 bundleup build --python 3.9     # build with Python 3.9 (pure Python: runs on 3.9 and newer)
 bundleup build --python 3.11 --python-platform linux   # build on a Mac for Linux x86_64
+bundleup build --python-platform linux --python-platform macos --python-platform windows   # one file for all three
 bundleup build --json           # the result as JSON on stdout, for scripts and agents
 bundleup check                  # what won't survive bundling, and each package's size
 bundleup check --also-platform windows   # which packages lack a wheel for another OS

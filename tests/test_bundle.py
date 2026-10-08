@@ -323,6 +323,23 @@ def test_a_pure_python_bundle_runs_on_other_versions(bundle: Path, tmp_path: Pat
     assert r.returncode == 0, r.stderr
 
 
+def test_the_loader_picks_the_payload_that_fits(bundle: Path, tmp_path: Path) -> None:
+    """A multi-platform bundle (ADR-0038): payloads for other machines are passed over."""
+    with zipfile.ZipFile(bundle) as zf:
+        dirname = json.loads(zf.read("manifest.json"))["cache_dir"]
+    here = sys.version_info[:2]
+    common = {"python": here, "python_max": here, "abiflags": None, "pth": [], "libc": None}
+    elsewhere = {**common, "dirname": "x-0", "member": "nothing.zip", "platform": "sunos5",
+                 "machine": None, "target": "Python on Solaris", "macos": None}  # fmt: skip
+    fits = {**common, "dirname": dirname, "member": "payload.zip", "platform": None,
+            "machine": None, "target": "Python here", "macos": None}  # fmt: skip
+    multi = relabel(bundle, tmp_path / "multi.pyz", PAYLOADS=[elsewhere, fits])
+    assert probe(multi, env_for(tmp_path))["argv"] == []
+    nowhere = relabel(bundle, tmp_path / "nowhere.pyz", PAYLOADS=[elsewhere])
+    r = run(nowhere, env_for(tmp_path))
+    assert r.returncode == 1 and "bundled for Python on Solaris" in r.stderr
+
+
 def test_wrong_platform_is_explained(bundle: Path, tmp_path: Path) -> None:
     # A platform no test machine has, so this fails everywhere.
     fake = relabel(bundle, tmp_path / "other.pyz", PLATFORM="sunos5", TARGET="Python on Solaris")

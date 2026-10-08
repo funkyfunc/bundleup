@@ -59,7 +59,10 @@ def build_all(python: str, platform: str, out: Path, only: list[str]) -> int:
         bundle = out / f"{meta['id']}.pyz"
         cmd = [str(rb.BUNDLEUP), "build", str(src), "--python", py]
         # "host": build for this machine; pure-Python bundles then run on any OS (ADR-0034).
-        target = [] if platform == "host" else ["--python-platform", platform]
+        # Several, comma-separated: one bundle with a payload for each (ADR-0038).
+        target = []
+        for name in platform.split(","):
+            target += [] if name == "host" else ["--python-platform", name]
         built = rb.sh([*cmd, *target, "-o", str(bundle), "--json"])
         records.append(
             {"id": meta["id"], "built": built.returncode == 0, "output": built.stdout[-2000:]}
@@ -89,10 +92,11 @@ def run_one(project: Path, python: str, out: Path, built: dict[str, bool]) -> li
     bundle = stage / "app.pyz"
     shutil.copy(out / f"{meta['id']}.pyz", bundle)
     with zipfile.ZipFile(bundle) as zf:
-        made_for = json.loads(zf.read("manifest.json"))["target"]
-    if not made_for.get("any_os", False) and made_for["platform"] != sys.platform:
+        manifest = json.loads(zf.read("manifest.json"))
+    targets = [p["target"] for p in manifest.get("payloads") or [manifest]]
+    if not any(t.get("any_os", False) or t["platform"] == sys.platform for t in targets):
         res.outcome = "skipped"  # compiled code or OS-specific dependencies: not for this OS
-        res.detail = f"built for {made_for['platform']} only"
+        res.detail = f"built for {', '.join(sorted({t['platform'] for t in targets}))} only"
         return [res]
     args = meta.get("args", [])
     home, cwd = rb.fresh_dirs(stage, "base")
@@ -135,7 +139,8 @@ def main() -> int:
     parser.add_argument("--python", required=True)
     parser.add_argument(
         "--python-platform",
-        help="build: the target platform, in uv's terms, or `host` for this machine",
+        help="build: the target platform in uv's terms, `host` for this machine, or several "
+        "comma-separated for one multi-platform bundle",
     )
     parser.add_argument("--dir", type=Path, required=True, help="where bundles go / come from")
     parser.add_argument("--jobs", type=int, default=4)

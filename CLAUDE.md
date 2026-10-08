@@ -53,7 +53,8 @@ and git.
   `.pyz` (default), `--format dir`, `--format lambda`; presets `lambda`, `lambda-arm64`,
   `claude-api`. Builds for this machine or another platform. Pure-Python bundles run on every
   Python version their lock allows (ADR-0030) and on any OS when the lock agrees (ADR-0034);
-  compiled ones on one version and platform. A stale lock is an error (ADR-0033). Every build checks the code
+  compiled ones on one version and platform, and one `.pyz` can carry a payload per platform and
+  version (ADR-0038). A stale lock is an error (ADR-0033). Every build checks the code
   and, for other platforms, wheel coverage from the lock (ADR-0024, ADR-0031).
 - **Runtime:** unpacks once to a content-addressed cache; checks Python version, platform, CPU,
   C library, macOS version; isolates from the machine's packages; children of the bundle's own
@@ -65,7 +66,7 @@ and git.
 - **Speed** ([findings](docs/findings/2026-10-07-speed-vs-pex-best.md)): against pex's fastest
   configuration, builds 1.1-2.4× faster; warm start equals a venv; first runs 2.3-15× faster.
 - **Not yet:** a PyPI release (0.0.1 is a placeholder; [docs/releasing.md](docs/releasing.md)).
-- **ADR status:** 0023-0026 and 0033-0037 are **Proposed** (written while the owner was away);
+- **ADR status:** 0023-0026 and 0033-0038 are **Proposed** (written while the owner was away);
   0027-0032 are accepted fixes the owner asked for, with designs the owner hasn't reviewed.
   Three independent reviews: [first](docs/findings/2026-10-07-independent-review.md),
   [second](docs/findings/2026-10-07-second-review.md), [third](docs/findings/2026-10-07-third-review.md).

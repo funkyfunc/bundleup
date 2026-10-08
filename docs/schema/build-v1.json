@@ -180,6 +180,13 @@
                 "null"
               ],
               "description": "What runs: module:function, module, or the script's path; null for a dir or Lambda output with none (added within version 1)"
+            },
+            "payloads": {
+              "type": "array",
+              "description": "A bundle for several platforms (added within version 1, ADR-0038): each payload's target, shaped like `target`; empty for a single payload",
+              "items": {
+                "type": "object"
+              }
             }
           }
         }
