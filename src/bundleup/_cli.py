@@ -102,7 +102,7 @@ def parsers() -> dict[str, argparse.ArgumentParser]:
     build = commands.add_parser(
         "build",
         help="bundle a project or script into one .pyz",
-        description="Bundle a project (pyproject.toml + uv.lock) or a PEP 723 script.",
+        description="Bundle a project, a folder of modules or a script; locked or not.",
         epilog=BUILD_EXAMPLES,
         formatter_class=_HelpFormatter,
         allow_abbrev=False,

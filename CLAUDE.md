@@ -48,8 +48,10 @@ Do these **as you go**, not only at the end:
 A snapshot, not a changelog: history is in [docs/roadmap.md](docs/roadmap.md) "Done", the ADRs
 and git.
 
-- **What works (2026-10-07):** `bundleup build|check|verify|cache` from a project
-  (`uv.lock` or `pylock.toml`; a lockfile is required, ADR-0028) or a PEP 723 script. Outputs: a
+- **What works (2026-10-08):** `bundleup build|check|verify|cache` from a project (`uv.lock`,
+  `pylock.toml`, or no lock: resolved at build time with a warning, ADR-0041), a folder of
+  modules with `requirements.txt`, or a script (PEP 723, `requirements.txt` beside it, or
+  standard library only). Outputs: a
   `.pyz` (default), `--format dir`, `--format lambda`; `--max-size`. No named targets: each
   destination is a tested recipe in docs/recipes.md (ADR-0039). Builds for this machine or another
   platform. Pure-Python bundles run on every

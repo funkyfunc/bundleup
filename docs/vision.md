@@ -78,7 +78,8 @@ the user has to figure out a venv and pip.
 bundleup build scripts/make_deck.py -o scripts/make_deck.pyz
 ```
 
-Add `--python-platform macos --python-platform linux --python-platform windows` (and more
+Add `--python-platform macos --python-platform x86_64-apple-darwin --python-platform linux
+--python-platform windows` (`macos` is Apple Silicon; the second covers Intel Macs; add more
 `--python` versions if your users vary) and `make_deck.pyz` carries a payload for each; on the
 user's machine, `python make_deck.pyz` picks the right one and just works: no install, no network.
 `bundleup check --matrix` shows which platforms the lock's wheels can serve. Pure-Python scripts

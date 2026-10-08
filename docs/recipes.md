@@ -32,19 +32,32 @@ bundleup build my-skill --entry python -o my-skill/scripts/deps.pyz \
 ```
 
 and in SKILL.md: `python3 scripts/deps.pyz scripts/deck_edit.py ...` (`python` on Windows). The
-scripts' own helper modules import as usual (the script's folder comes first on `sys.path`).
+scripts' own helper modules import as usual (the script's folder comes first on `sys.path`), and
+a script that starts another one from that folder with `sys.executable` shares the bundle. Every
+build reads the scripts' imports and warns (`undeclared-import`) about any the bundle doesn't
+provide, so a missing dependency shows up before your users find it.
 
 - **Which Pythons:** packages with compiled code (lxml, Pillow) have a build per Python version,
   so list the versions your users have. A bundle started with another version re-runs itself
-  with a matching `python3.X` if one is installed (ADR-0036); otherwise it says which it needs.
+  with a matching Python if one is installed (`python3.X`, or a plain `python3`/`python` of the
+  right version, such as Apple's `/usr/bin/python3`; ADR-0036); otherwise it names the versions
+  it needs.
   `bundleup check --matrix` shows which platforms and versions the lock's wheels cover.
 - **Size:** each file is stored once across platforms and versions, but compiled packages differ
   per platform. Measured 2026-10-07 for python-pptx, lxml, Pillow, PyMuPDF, xlsxwriter and
   pywin32 on the four platforms above: 144 MiB for one Python, 230 MiB for three, 314 MiB for
   five; PyMuPDF is about half. Over 100 MB, bundleup warns (`large-bundle`): GitHub refuses such
   files, so the repository a skill is installed from needs Git LFS, or fewer platforms or Pythons.
+  **Check that your skill's delivery channel fetches Git LFS files** before relying on it; that
+  isn't verified for agent package managers.
+- **Python must be installed.** A bundle needs a Python 3 on the user's machine. macOS has one
+  (Apple's 3.9, if the developer tools are installed); many Windows machines don't, and `python`
+  there may be the Microsoft Store placeholder, which isn't Python. Windows users need Python from
+  python.org or the Store first; bundles that bring their own interpreter are on the roadmap.
 - **No network, no index, no install step** on the user's machine; the first run unpacks into a
-  cache (a second or two for this size), later runs start like an installed venv.
+  cache (a second or two for this size), later runs start like an installed venv. When a new
+  version of the skill unpacks, copies of older versions unused for 30 days are removed
+  (macOS and Linux), so updates don't pile up.
 
 ## A Claude API Skill or code execution script *(CI)*
 

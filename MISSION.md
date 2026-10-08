@@ -1,6 +1,6 @@
 # Mission
 
-> **Pack a locked Python project into one checked `.pyz` per target platform that runs on any
+> **Pack a Python project into one checked `.pyz` per target platform that runs on any
 > matching Python with no install step, and tell you before you ship what won't survive packing.**
 
 **Dead simple to use, but also powerful and fast.** pex can already do much of the core job; we
