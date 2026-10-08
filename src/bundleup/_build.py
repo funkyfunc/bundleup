@@ -173,7 +173,14 @@ def build(
             where = stage if len(combinations) == 1 else stage / f"target-{i}"
             where.mkdir(exist_ok=True)
             prepared.append(
-                _prepare(combination, fmt=fmt, stage=where, steps=steps, progress=report)
+                _prepare(
+                    combination,
+                    fmt=fmt,
+                    stage=where,
+                    steps=steps,
+                    progress=report,
+                    floor=_lowest(combinations),
+                )
             )
         p = prepared[0]
         p_diagnostics = _merged_diagnostics(prepared)
@@ -255,6 +262,14 @@ def _combinations(options: BuildOptions) -> list[BuildOptions]:
     ]
 
 
+def _lowest(combinations: list[BuildOptions]) -> tuple[int, int] | None:
+    """The lowest Python version asked for: input without a lock is resolved from it for every
+    payload, so they all bundle the same versions (fourth review: each resolved from its own)."""
+    asked = [c.python for c in combinations if c.python and re.fullmatch(r"\d+\.\d+", c.python)]
+    found = [(int(v.split(".")[0]), int(v.split(".")[1])) for v in asked]
+    return min(found) if len(found) > 1 else None
+
+
 def _served(prepared: list[Prepared], options: BuildOptions) -> bool:
     """Whether an already prepared pure-Python payload runs on this combination too, so it needs
     no payload of its own: its Python range covers the version and it runs on any OS (or on this
@@ -278,12 +293,18 @@ def _merged_diagnostics(prepared: list[Prepared]) -> list[Diagnostic]:
     """Every payload's findings, once each; for several payloads, each says which one it's about."""
     if len(prepared) == 1:
         return list(prepared[0].diagnostics)
-    seen: dict[tuple[str, str], Diagnostic] = {}
+    found: dict[tuple[str, str], tuple[Diagnostic, list[str]]] = {}
     for p in prepared:
         label = p.target.describe(p.native, p.pythons, p.reach)
         for d in p.diagnostics:
-            seen.setdefault((d.code, d.message), replace(d, message=f"{d.message} [{label}]"))
-    return sorted(seen.values(), key=lambda d: d.level != "error")
+            found.setdefault((d.code, d.message), (d, []))[1].append(label)
+    merged = [  # a finding every payload has is about the bundle: no label (fourth review)
+        d
+        if len(labels) == len(prepared)
+        else replace(d, message=f"{d.message} [{'; '.join(labels)}]")
+        for d, labels in found.values()
+    ]
+    return sorted(merged, key=lambda d: d.level != "error")
 
 
 _STRICT_HINT = "--strict makes warnings fail too; build without it to allow them"
@@ -450,7 +471,13 @@ def _format_diagnostics(
 
 
 def _prepare(
-    options: BuildOptions, *, fmt: Format, stage: Path, steps: Steps, progress: Progress
+    options: BuildOptions,
+    *,
+    fmt: Format,
+    stage: Path,
+    steps: Steps,
+    progress: Progress,
+    floor: tuple[int, int] | None = None,
 ) -> Prepared:
     """The steps `build` and `check` share: find the Python, read the lock, install, compile,
     analyze."""
@@ -472,7 +499,7 @@ def _prepare(
         uv,
         source,
         lock_mode=options.lock_mode,
-        python=target.version,
+        python=min(floor, target.version) if floor else target.version,
         stage=stage,
         progress=progress,
     )
