@@ -629,7 +629,7 @@ def test_a_child_reading_its_program_from_stdin_sees_the_bundle(
 ) -> None:
     """`python -` (click's test suite) or python with piped input, started by the bundle's
     program: the program's own code, so it sees the bundle, like `-c` (nightly suites,
-    2026-10-08). Nothing extra is imported for it, importlib included."""
+    2026-10-08). It loads importlib only if plain Python does (Ubuntu's own sitecustomize)."""
     (tmp_path / "deps.py").write_text(private_index)
     locked = subprocess.run(
         ["uv", "lock", "--script", "deps.py"], cwd=tmp_path, capture_output=True
@@ -637,5 +637,12 @@ def test_a_child_reading_its_program_from_stdin_sees_the_bundle(
     assert locked.returncode == 0, locked.stderr
     out = tmp_path / "deps.pyz"
     build(BuildOptions(path=tmp_path / "deps.py", output=out, entry="python"))
-    r = run(out, env_for(tmp_path), "-c", CHILD_ON_STDIN)
-    assert r.stdout.splitlines() == ["the company index False"] * 2, r.stderr + r.stdout
+    env = env_for(tmp_path)
+    plain = subprocess.run(
+        [sys.executable, "-c", "import sys; print('importlib' in sys.modules)"],
+        env=env,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    r = run(out, env, "-c", CHILD_ON_STDIN)
+    assert r.stdout.splitlines() == [f"the company index {plain}"] * 2, r.stderr + r.stdout
