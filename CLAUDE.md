@@ -96,7 +96,8 @@ pyproject.toml, src/bundleup/  the package (ADR-0018): __init__.py (public API),
                         _check.py (the analysis), _verify.py (lock/RECORD checks, `verify`),
                         _loader.py (the bundle's __main__), _runtime.py + _sitecustomize.py
                         (copied into each payload, ADR-0027), _platforms.py, _formats.py
-                        (Format, sizes), _zipwriter.py, _bytecode.py, _cache.py, _errors.py,
+                        (Format, sizes), _imports.py (imports, stdlib by version), _smoke.py
+                        (--smoke), _zipwriter.py, _bytecode.py, _cache.py, _errors.py,
                         _term.py, _text.py
 tests/snapshots/        CLI output and API snapshots; docs/cli-reference.md is generated too
 docs/schema/            JSON Schemas of each command's `--json` (build, check, verify, cache)
@@ -159,8 +160,9 @@ UPDATE_SNAPSHOTS=1 uv run pytest -q tests/test_cli.py                       # af
 - **Use uv** for all Python tooling. Standalone scripts use PEP 723 headers and run with `uv run`.
 - **Mind the target Pythons:** the runtime bootstrap must work on macOS's system Python 3.9.
 - **Git:** stage explicit paths, never `git add -A`: other sessions may be editing the repo at the
-  same time. Work on `main` (the owner's choice, 2026-10-07) and check CI after pushing; commit
-  each fix as soon as it passes (never `git checkout -- .` over uncommitted work). Commit only when asked. Commit messages describe the change only. No AI attribution
+  same time. Work on `main` (the owner's choice, 2026-10-07) and check CI after pushing; push in
+  batches, not after every commit (each push queues a full CI run); commit each fix as soon as it
+  passes (never `git checkout -- .` over uncommitted work). Commit only when asked. Commit messages describe the change only. No AI attribution
   (no `Co-Authored-By`, no "Generated with" lines).
 
 ## Working with the user
