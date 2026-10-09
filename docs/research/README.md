@@ -23,5 +23,10 @@ Start with the [primer](../python-primer.md).
 | [round-5-cli-compass.md](round-5-cli-compass.md) | Round 5: CLI and library API style guide (attachments didn't arrive; bundleup specifics assumed) | High |
 | [round-5-cli-gemini.md](round-5-cli-gemini.md) | Same brief, from Gemini | Medium (agrees on rules; startup numbers not credible) |
 | [round-5-synthesis.md](round-5-synthesis.md) | Points to the resulting [CLI style guide](../cli-style-guide.md) | — |
+| [round-6-next-tool-compass.md](round-6-next-tool-compass.md) | Round 6: the next tool for shipping Python, through the JS ecosystem's history; gaps and complaints (run without attachments) | High on structure and primary sources; reaction counts unavailable, Reddit/X not searched |
+| [round-6b-next-tool-compass.md](round-6b-next-tool-compass.md) | Same brief, a second Compass run | Same; agrees with round 6 |
+| [round-7-agents-compass.md](round-7-agents-compass.md) | Round 7: Python when agents write, run and consume the code (the sceptical run) | Medium-high; many 2026 arXiv preprints, unchecked |
+| [round-7b-agents-compass.md](round-7b-agents-compass.md) | Same brief, a second Compass run | Same; agrees with round 7 |
+| [round-6-and-7-synthesis.md](round-6-and-7-synthesis.md) | What rounds 6 and 7 mean for bundleup | — |
 | [verification-notes.md](verification-notes.md) | Claims checked by hand, and known errors in each report | — |
 | [prompts.md](prompts.md) | Index of the research briefs, one file per round in [prompts/](prompts/) | — |

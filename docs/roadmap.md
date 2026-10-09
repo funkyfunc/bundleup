@@ -168,6 +168,23 @@ What [MISSION.md](../MISSION.md) defines as done:
 | **Agents as operators (hypothesis)** | A bundleup skill so an agent can bundle a script it wrote (build where there's network, run in an offline sandbox) | Plausible and unserved, but no evidence of demand found yet; validate with users first |
 | **Notebooks (docs only)** | Document the recipe: `nbconvert` → PEP 723 script → bundleup | Magics and display calls break automatic conversion; a recipe is enough |
 
+## From rounds 6 and 7 (2026-10-09, not started; the owner decides)
+
+See the [synthesis](research/round-6-and-7-synthesis.md).
+
+- **Check against a described target environment:** data describing a destination (its Python,
+  platform, network, preinstalled packages: the Claude API sandbox, Gemini, Lambda), so `check`
+  says "needs X, which that sandbox lacks". Data anyone can write, not presets (ADR-0039); needs
+  an ADR. Round 7 ranks it the largest unmet need.
+- **Supply-chain checks on dependencies:** flag very new, rarely downloaded or known-hallucinated
+  packages before bundling (agents pick dependencies; ~5% of model-named packages don't exist).
+- **A noexec cache as a gauntlet condition:** pex scies fail where `/tmp` is noexec
+  (ComfyUI-Docker #170).
+- **MCP servers, revisited after the pilot:** MCPB added a `uv` runtime because vendored Python
+  broke on pydantic's version-specific core; a multi-version `.pyz` covers that offline.
+- **One environment translated into each platform's format** (Modal, E2B, Codex setup,
+  Dockerfile): a possible future output.
+
 ## Far: bigger bets
 
 - **Run bundles from a URL:** `bundleup run https://…/tool.pyz`, cached and verified, like `npx`

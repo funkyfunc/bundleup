@@ -6,6 +6,12 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-09** · research · Rounds 6 and 7 (four Compass runs, no attachments) converge: Python's
+  empty seat is "project → artifact that runs elsewhere" (uv #5802 is still a "wish"), offline
+  portable environments and "will it run there?" checks are what an independent tool can own, and
+  uv shipping an executable builder is the main risk. Agent code fails elsewhere through its
+  environment (68.3% ran from a clean environment; 13.5× more runtime than declared dependencies,
+  arXiv 2512.22387). Evidence: [synthesis](research/round-6-and-7-synthesis.md).
 - **2026-10-08** · process · A claim in a findings write-up ("no false warnings across the
   gauntlet") came from a scan that grepped the text output for the diagnostic's *code*, which only
   `--json` shows, so it couldn't have found anything. Check that a scan can find a known case

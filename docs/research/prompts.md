@@ -10,5 +10,5 @@ Each file says which part to paste. Kept so the research can be re-run later and
 | 3 | [Is there an authentic agent-specific angle?](prompts/round-3-agents.md) | Run | `round-3-*` |
 | 4 | [Use cases, input shapes and output formats](prompts/round-4-use-cases-and-outputs.md) | Run | `round-4-*` |
 | 5 | [CLI and library design for developer tools](prompts/round-5-cli-and-library-design.md) | Run | `round-5-*` |
-| 6 | [The next tool for shipping Python, through the JS ecosystem's history; gaps and complaints](prompts/round-6-the-next-python-tool.md) | Written 2026-10-08, not run | — |
-| 7 | [Python when agents write, run and consume the code](prompts/round-7-python-when-agents-write-and-run-code.md) | Written 2026-10-08, not run | — |
+| 6 | [The next tool for shipping Python, through the JS ecosystem's history; gaps and complaints](prompts/round-6-the-next-python-tool.md) | Run twice, 2026-10-09 (Compass) | `round-6-*`, `round-6b-*` |
+| 7 | [Python when agents write, run and consume the code](prompts/round-7-python-when-agents-write-and-run-code.md) | Run twice, 2026-10-09 (Compass) | `round-7-*`, `round-7b-*` |
