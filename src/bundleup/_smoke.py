@@ -48,8 +48,13 @@ class SmokeResult:
 
 
 def parse_args(text: str) -> tuple[str, ...]:
-    """`--smoke "scripts/tool.py --help"` -> its arguments, split as a shell would."""
-    return tuple(shlex.split(text, posix=os.name != "nt"))
+    """`--smoke "scripts/tool.py --help"` -> its arguments, split as a shell would: quotes group
+    words, and backslashes stay as they are, so Windows paths survive (shlex's Windows mode kept
+    the quotes; CI, 2026-10-09)."""
+    lexer = shlex.shlex(text, posix=True)
+    lexer.whitespace_split = True
+    lexer.escape = ""
+    return tuple(lexer)
 
 
 def run(bundle: Path, python: str, args: tuple[str, ...]) -> SmokeResult:

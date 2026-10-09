@@ -35,8 +35,8 @@ def test_a_bundle_that_runs_passes(tmp_path: Path) -> None:
     assert result.smoke.command == ["python", "t.pyz", "--help"]  # the default arguments
     assert "ran ['--help'] work" in result.smoke.output  # in a fresh folder, not here
     assert result.to_json_dict()["smoke"] == result.smoke.to_json_dict()
-    args = parse_args("tool.py --name 'two words'")
-    assert args == ("tool.py", "--name", "two words")
+    args = parse_args(r"""tool.py --name 'two words' "C:\scripts\x.py" """)
+    assert args == ("tool.py", "--name", "two words", r"C:\scripts\x.py")
 
 
 def test_a_bundle_that_fails_fails_the_build(tmp_path: Path) -> None:
