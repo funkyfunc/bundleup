@@ -33,7 +33,22 @@ the owner hasn't confirmed is marked *Proposed*.
 26. **Owner review of the Proposed ADRs** (the owner): 0038 (multi-platform bundles) and 0040
     (`--entry python`) first, since they define the founding skill's features; then 0023-0026 and
     0033-0037. Accept, change or reject each; agents then update statuses.
-19. **Release 0.1.0**: everything is prepared ([docs/releasing.md](releasing.md), [CHANGELOG](../CHANGELOG.md),
+27. **`--smoke`: run the finished bundle once before shipping** (sixth review): in a fresh HOME
+    with network blocked where the OS allows, with arguments the author gives (it runs their
+    program, so opt-in). Static checks can't see run-time failures; the gauntlet does this and
+    `check` doesn't. *Proposed*: needs the owner's go.
+28. **Decide how child processes see the bundle** (the owner, then an ADR): today PYTHONPATH and
+    a sitecustomize injected into every child, activating by a heuristic (ADR-0027, 0037, 0040);
+    the alternative is a real venv materialised in the cache (as pex `--venv` does), whose Python
+    sees the payload as its site-packages with no heuristics. Compare both on the gauntlet's
+    child-process projects (16, 19, 23) and the skill fixture before more fixes pile on.
+29. **Decide whether a build may download an interpreter by default** (the owner; ADR-0035 is
+    Proposed): today the oldest Python of a pure bundle's range is fetched if it isn't installed
+    (respecting `UV_PYTHON_DOWNLOADS=never` and offline mode); the sixth review wants it opt-in,
+    with the `ast` check (and its `python-range-approximate` warning) as the default.
+30. **Decide CI's shape** (the owner): every push runs 41 jobs (~12 minutes); the sixth review
+    suggests tests plus the gauntlet on three OSes per push and the full matrix nightly.
+31. **Release 0.1.0**: everything is prepared ([docs/releasing.md](releasing.md), [CHANGELOG](../CHANGELOG.md),
     [release.yml](../.github/workflows/release.yml)); publishing needs the owner (trusted publishing on pypi.org, then a tag).
     Deferred by the owner (2026-10-07) until the value proposition has been tested.
 

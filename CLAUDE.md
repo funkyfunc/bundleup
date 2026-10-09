@@ -76,9 +76,10 @@ and git.
 - **Not yet:** a PyPI release (0.0.1 is a placeholder; [docs/releasing.md](docs/releasing.md)).
 - **ADR status:** 0023-0026 and 0033-0038 are **Proposed** (written while the owner was
   away), and 0040 (`--entry python`'s design); 0039 and 0041 are accepted; 0027-0032 are accepted fixes the owner asked for, with designs the owner hasn't reviewed.
-  Five independent reviews: [first](docs/findings/2026-10-07-independent-review.md),
+  Six independent reviews: [first](docs/findings/2026-10-07-independent-review.md),
   [second](docs/findings/2026-10-07-second-review.md), [third](docs/findings/2026-10-07-third-review.md),
-  [fourth](docs/findings/2026-10-08-fourth-review.md), [fifth](docs/findings/2026-10-08-fifth-review.md);
+  [fourth](docs/findings/2026-10-08-fourth-review.md), [fifth](docs/findings/2026-10-08-fifth-review.md),
+  [sixth](docs/findings/2026-10-08-sixth-review.md);
   the brief is [review-brief.md](docs/findings/review-brief.md).
 - bundleup depends on the `uv` package (bundled binary) but prefers a uv ≥ 0.9 on `PATH`
   (ADR-0011). Rust stays reserved for a future scanner (ADR-0008).
