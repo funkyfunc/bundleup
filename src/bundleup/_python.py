@@ -20,7 +20,7 @@ from ._errors import (
     UvError,
 )
 from ._source import Source
-from ._steps import Progress, run
+from ._steps import Progress, ProgressEvent, run
 
 PLATFORM_NAMES = {"darwin": "macOS", "linux": "Linux", "win32": "Windows"}
 
@@ -258,6 +258,15 @@ def fetch_interpreter(uv: str, version: str, *, cwd: Path, progress: Progress) -
         return found
     env = {**os.environ, "UV_PYTHON_INSTALL_DIR": str(private_pythons())}
     install = [uv, "python", "install", version, "--no-bin", "--no-registry"]
+    # Said, not done silently (the owner, accepting ADR-0035): a build that downloads something
+    # should tell you, and how to stop it.
+    progress(
+        ProgressEvent(
+            "note",
+            f"downloading Python {version} into bundleup's own folder (once); "
+            "UV_PYTHON_DOWNLOADS=never turns this off",
+        )
+    )
     try:
         run(install, cwd=cwd, what="uv python install", progress=progress, env=env)
         found = run(

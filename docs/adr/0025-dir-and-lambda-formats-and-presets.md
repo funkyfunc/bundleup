@@ -1,6 +1,6 @@
 # ADR-0025: How `--format dir`, `--format lambda` and target presets work
 
-- **Status:** Proposed; the presets part superseded by [ADR-0039](0039-recipes-instead-of-target-presets.md)
+- **Status:** Accepted (the owner, 2026-10-08); the presets part superseded by [ADR-0039](0039-recipes-instead-of-target-presets.md)
 - **Date:** 2026-10-06
 - **Deciders:** an agent, while the user was away (roadmap item 11); needs the user's confirmation
 

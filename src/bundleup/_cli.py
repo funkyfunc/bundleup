@@ -443,6 +443,10 @@ def _progress(opts: argparse.Namespace, style: Style) -> tuple[StatusLine, Progr
     def on_progress(event: ProgressEvent) -> None:
         if event.kind == "step":
             status.show(f"{event.text}…" if style.arrow == "→" else f"{event.text}...")
+        elif event.kind == "note":
+            if human and opts.quiet == 0:
+                status.clear()
+                print(style.dim(event.text), file=sys.stderr)
         elif opts.verbose >= 2 and human:
             status.clear()
             print(style.dim(f"$ {event.text}"), file=sys.stderr)

@@ -1,6 +1,6 @@
 # ADR-0033: A stale lock is an error by default; bundleup never rewrites it
 
-- **Status:** Proposed (written 2026-10-07 while the owner was away)
+- **Status:** Accepted (the owner, 2026-10-08)
 - **Date:** 2026-10-07
 - **Deciders:** an agent, from the [second independent review](../findings/2026-10-07-second-review.md)
 - **Supersedes:** "CI implies `--locked`" (style guide rule 9, ADR-0016); completes

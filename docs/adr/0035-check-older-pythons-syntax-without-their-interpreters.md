@@ -1,6 +1,6 @@
 # ADR-0035: A range's oldest Python is checked with a real interpreter, installed privately if needed
 
-- **Status:** Proposed (written 2026-10-07 while the owner was away)
+- **Status:** Accepted (the owner, 2026-10-08); with one change: a download is announced (`downloading Python 3.X ... UV_PYTHON_DOWNLOADS=never turns this off`)
 - **Date:** 2026-10-07
 - **Deciders:** an agent, after the second and third independent reviews
   ([second](../findings/2026-10-07-second-review.md), [third](../findings/2026-10-07-third-review.md))

@@ -1,6 +1,6 @@
 # ADR-0037: A child process activates the bundle only when it runs the bundle's code
 
-- **Status:** Proposed (written 2026-10-07 while the owner was away)
+- **Status:** Accepted (the owner, 2026-10-08)
 - **Date:** 2026-10-07
 - **Deciders:** an agent, from the [third independent review](../findings/2026-10-07-third-review.md)
 - **Amends:** [ADR-0027](0027-children-see-the-bundle-only-from-its-own-python.md)

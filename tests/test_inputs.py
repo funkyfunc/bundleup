@@ -293,3 +293,20 @@ def test_stdlib_tables_cover_this_python() -> None:
     from bundleup._imports import NEWEST
 
     assert sys.version_info[:2] <= NEWEST, "update ADDED/REMOVED in _imports.py for this Python"
+
+
+def test_downloading_a_python_is_announced(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """ADR-0035, as the owner accepted it: a build that downloads an interpreter says so, and how
+    to turn it off."""
+    from bundleup import _python
+    from bundleup._steps import ProgressEvent
+
+    monkeypatch.setattr(_python, "find_interpreter", lambda *a, **k: None)
+
+    def offline(*args: object, **kwargs: object) -> str:
+        raise UvError("uv python install failed")
+
+    monkeypatch.setattr(_python, "run", offline)
+    events: list[ProgressEvent] = []
+    assert _python.fetch_interpreter("uv", "3.8", cwd=tmp_path, progress=events.append) is None
+    assert [e.kind for e in events] == ["note"] and "UV_PYTHON_DOWNLOADS=never" in events[0].text

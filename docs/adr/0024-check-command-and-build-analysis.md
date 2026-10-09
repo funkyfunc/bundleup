@@ -1,6 +1,6 @@
 # ADR-0024: `bundleup check` reports what won't survive bundling, and every build runs it
 
-- **Status:** Proposed
+- **Status:** Accepted (the owner, 2026-10-08)
 - **Date:** 2026-10-05
 - **Deciders:** an agent, while the user was away (roadmap item 10); needs the user's confirmation
 

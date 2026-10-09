@@ -1,6 +1,6 @@
 # ADR-0036: A plain `python3` shebang and a re-run with a matching Python; `check --matrix`; in-use copies are kept
 
-- **Status:** Proposed (written 2026-10-07 while the owner was away)
+- **Status:** Accepted (the owner, 2026-10-08)
 - **Date:** 2026-10-07
 - **Deciders:** an agent, from the [third independent review](../findings/2026-10-07-third-review.md)
 - **Supersedes:** the versioned shebang of [ADR-0030](0030-pure-python-bundles-run-on-a-range.md);

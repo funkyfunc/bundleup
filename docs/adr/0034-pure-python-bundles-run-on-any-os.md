@@ -1,6 +1,6 @@
 # ADR-0034: A pure-Python bundle runs on any OS when the lock selects the same packages everywhere
 
-- **Status:** Proposed (written 2026-10-07 while the owner was away)
+- **Status:** Accepted (the owner, 2026-10-08)
 - **Date:** 2026-10-07
 - **Deciders:** an agent, from the [second independent review](../findings/2026-10-07-second-review.md)
 - **Extends:** [ADR-0030](0030-pure-python-bundles-run-on-a-range.md) (the same idea, for OS and

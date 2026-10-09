@@ -1,6 +1,6 @@
 # ADR-0038: One `.pyz` can carry a payload per platform and Python version
 
-- **Status:** Proposed (the owner asked for the feature on 2026-10-07; this design is an agent's)
+- **Status:** Accepted (the owner, 2026-10-08)
 - **Date:** 2026-10-07
 - **Deciders:** the owner (the feature), an agent (the design)
 - **Amends:** [ADR-0010](0010-bundle-format-and-loader.md) (one payload per bundle)

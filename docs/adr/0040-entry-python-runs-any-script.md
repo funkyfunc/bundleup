@@ -1,6 +1,6 @@
 # ADR-0040: `--entry python`: a bundle that runs the scripts it's given
 
-- **Status:** Proposed (the owner asked for the feature on 2026-10-07; this design is an agent's)
+- **Status:** Accepted (the owner, 2026-10-08)
 - **Date:** 2026-10-07
 - **Deciders:** the owner (the feature), an agent (the design)
 

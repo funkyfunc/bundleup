@@ -16,9 +16,10 @@ from ._errors import (
 
 @dataclass(frozen=True)
 class ProgressEvent:
-    """Reported while building: a step starting, or a command about to run."""
+    """Reported while building: a step starting, a command about to run, or a note the user
+    should see (a Python being downloaded, ADR-0035)."""
 
-    kind: Literal["step", "command"]
+    kind: Literal["step", "command", "note"]
     text: str
 
 

@@ -1,6 +1,6 @@
 # ADR-0026: A project's `pylock.toml` is used when it has no `uv.lock`
 
-- **Status:** Proposed
+- **Status:** Accepted (the owner, 2026-10-08)
 - **Date:** 2026-10-06
 - **Deciders:** an agent, while the user was away (roadmap item 12); needs the user's confirmation
 

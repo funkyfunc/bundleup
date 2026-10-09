@@ -30,22 +30,17 @@ the owner hasn't confirmed is marked *Proposed*.
     and without the developer tools), Windows and Linux install the skill and use it; their
     problems become the next items. The fifth review's top recommendation: five reviews are no
     substitute for users.
-26. **Owner review of the Proposed ADRs** (the owner): 0038 (multi-platform bundles) and 0040
-    (`--entry python`) first, since they define the founding skill's features; then 0023-0026 and
-    0033-0037. Accept, change or reject each; agents then update statuses.
+26. ~~**Owner review of the Proposed ADRs**~~ done 2026-10-08: 0023-0026, 0033-0038 and 0040
+    accepted; 0035 with downloads announced.
 27. ~~**`--smoke`**~~ done 2026-10-08 ([ADR-0042](adr/0042-smoke-runs-the-bundle-once.md)): runs the finished bundle once in
     a fresh home folder, offline on macOS and Linux.
-28. **Decide how child processes see the bundle** (the owner, then an ADR): today PYTHONPATH and
-    a sitecustomize injected into every child, activating by a heuristic (ADR-0027, 0037, 0040);
-    the alternative is a real venv materialised in the cache (as pex `--venv` does), whose Python
-    sees the payload as its site-packages with no heuristics. Compare both on the gauntlet's
-    child-process projects (16, 19, 23) and the skill fixture before more fixes pile on.
-29. **Decide whether a build may download an interpreter by default** (the owner; ADR-0035 is
-    Proposed): today the oldest Python of a pure bundle's range is fetched if it isn't installed
-    (respecting `UV_PYTHON_DOWNLOADS=never` and offline mode); the sixth review wants it opt-in,
-    with the `ast` check (and its `python-range-approximate` warning) as the default.
-30. **Decide CI's shape** (the owner): every push runs 41 jobs (~12 minutes); the sixth review
-    suggests tests plus the gauntlet on three OSes per push and the full matrix nightly.
+28. ~~**Decide how child processes see the bundle**~~ decided 2026-10-08 (the owner, on the
+    agent's recommendation): keep the sitecustomize approach (ADR-0027, 0037, 0040, all passing);
+    revisit a venv in the cache (as pex `--venv` does) if real users hit child-process trouble.
+29. ~~**Decide whether a build may download an interpreter by default**~~ decided 2026-10-08:
+    yes, as uv does, but announced, and off with `UV_PYTHON_DOWNLOADS=never` (ADR-0035).
+30. ~~**Decide CI's shape**~~ decided 2026-10-08: the full matrix stays on every push (it's free
+    for a public repository and caught real bugs); agents push in batches instead.
 31. **Release 0.1.0**: everything is prepared ([docs/releasing.md](releasing.md), [CHANGELOG](../CHANGELOG.md),
     [release.yml](../.github/workflows/release.yml)); publishing needs the owner (trusted publishing on pypi.org, then a tag).
     Deferred by the owner (2026-10-07) until the value proposition has been tested.
