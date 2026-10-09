@@ -51,8 +51,7 @@ BUILD_EXAMPLES = """\
 examples:
   bundleup build                    bundle the project here into dist/<name>.pyz
   bundleup build --python 3.11 --python-platform linux   build for Linux x86_64
-  bundleup build --python-platform linux --python-platform windows   one .pyz for both
-  bundleup build --max-size 30MB    fail, writing nothing, if the output is bigger"""
+  bundleup build --python-platform linux --python-platform windows   one .pyz for both"""
 
 CHECK_EXAMPLES = f"""\
 examples:
@@ -263,6 +262,13 @@ def _add_build_options(command: argparse.ArgumentParser, *, output: bool) -> Non
             default=os.environ.get("BUNDLEUP_MAX_SIZE"),
             help=_env_help("fail if the output is bigger (30MB)", "BUNDLEUP_MAX_SIZE"),
         )
+        command.add_argument(
+            "--smoke",
+            nargs="?",
+            const="",
+            metavar="ARGS",
+            help="run it once, fresh home, no network (default args: --help)",
+        )
 
 
 def _add_output_options(command: argparse.ArgumentParser, *, verbose: str) -> None:
@@ -279,6 +285,14 @@ def _add_output_options(command: argparse.ArgumentParser, *, verbose: str) -> No
         default="auto",
         help="auto, always or never (default: auto; also NO_COLOR, FORCE_COLOR)",
     )
+
+
+def _smoke_args(text: str | None) -> tuple[str, ...] | None:
+    if text is None:
+        return None
+    from ._smoke import parse_args
+
+    return parse_args(text)
 
 
 def _max_size(text: str) -> int:
@@ -366,6 +380,9 @@ def _success_lines(result: BuildResult, style: Style) -> list[str]:
     details = [_payloads_line(result.payloads) if result.payloads else target, packages]
     if result.format == "lambda" and result.handler:
         details.append(f"handler {result.handler}")
+    if result.smoke:
+        offline = ", offline" if result.smoke.network_blocked else ""
+        details.append(f"ran once in {result.smoke.seconds:.1f}s{offline}")
     second = style.dim(f"  {f' {style.dot} '.join(details)}")
     return [first, second]
 
@@ -402,6 +419,7 @@ def _options(opts: argparse.Namespace) -> BuildOptions:
         strict=opts.strict,
         format=opts.format,
         max_size=getattr(opts, "max_size", None),
+        smoke=_smoke_args(getattr(opts, "smoke", None)),
     )
 
 

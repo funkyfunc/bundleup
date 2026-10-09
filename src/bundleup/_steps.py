@@ -60,6 +60,7 @@ STEPS = {
     "zip": "zipping",
     "verify": "verifying",
     "write": "writing",
+    "smoke": "running it once (--smoke)",
 }
 
 

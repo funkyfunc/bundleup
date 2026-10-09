@@ -226,6 +226,7 @@ anything else. Tested on every push: each gauntlet project runs with only that d
 
 ```bash
 bundleup check --strict --json > check.json   # exit 1 on any error or warning
+bundleup build --smoke "--version"            # build, then run it once offline in a fresh home
 bundleup build --locked                       # CI implies --locked when there's a lockfile
 bundleup verify dist/app.pyz                  # the bundle matches its manifest
 ```

@@ -33,10 +33,8 @@ the owner hasn't confirmed is marked *Proposed*.
 26. **Owner review of the Proposed ADRs** (the owner): 0038 (multi-platform bundles) and 0040
     (`--entry python`) first, since they define the founding skill's features; then 0023-0026 and
     0033-0037. Accept, change or reject each; agents then update statuses.
-27. **`--smoke`: run the finished bundle once before shipping** (sixth review): in a fresh HOME
-    with network blocked where the OS allows, with arguments the author gives (it runs their
-    program, so opt-in). Static checks can't see run-time failures; the gauntlet does this and
-    `check` doesn't. *Proposed*: needs the owner's go.
+27. ~~**`--smoke`**~~ done 2026-10-08 ([ADR-0042](adr/0042-smoke-runs-the-bundle-once.md)): runs the finished bundle once in
+    a fresh home folder, offline on macOS and Linux.
 28. **Decide how child processes see the bundle** (the owner, then an ADR): today PYTHONPATH and
     a sitecustomize injected into every child, activating by a heuristic (ADR-0027, 0037, 0040);
     the alternative is a real venv materialised in the cache (as pex `--venv` does), whose Python

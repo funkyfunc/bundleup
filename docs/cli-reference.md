@@ -37,7 +37,7 @@ bugs: https://github.com/funkyfunc/bundleup/issues
 ```
 usage: bundleup build [-h] [-o FILE] [--format FORMAT] [--python VERSION] [--entry NAME]
                       [--python-platform OS] [--locked | --frozen] [--strict] [--max-size SIZE]
-                      [--json] [-q] [-v] [--color WHEN]
+                      [--smoke [ARGS]] [--json] [-q] [-v] [--color WHEN]
                       [path]
 
 Bundle a project, a folder of modules or a script; locked or not.
@@ -57,6 +57,7 @@ options:
   --frozen              bundle the lock as it is, without checking it (as in uv)
   --strict              warnings fail too (errors always do)
   --max-size SIZE       fail if the output is bigger (30MB) [env: BUNDLEUP_MAX_SIZE]
+  --smoke [ARGS]        run it once, fresh home, no network (default args: --help)
   --json                print one JSON document on stdout
   -q, --quiet           -q: warnings and errors only; -qq: errors
   -v, --verbose         -v: step timings; -vv: commands run
@@ -66,7 +67,6 @@ examples:
   bundleup build                    bundle the project here into dist/<name>.pyz
   bundleup build --python 3.11 --python-platform linux   build for Linux x86_64
   bundleup build --python-platform linux --python-platform windows   one .pyz for both
-  bundleup build --max-size 30MB    fail, writing nothing, if the output is bigger
 ```
 
 ## `bundleup check`

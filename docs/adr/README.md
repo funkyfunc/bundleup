@@ -50,3 +50,4 @@ and change only the old one's status line.
 | [0039](0039-recipes-instead-of-target-presets.md) | Recipes and capabilities (`--max-size`) instead of named target presets | Accepted |
 | [0040](0040-entry-python-runs-any-script.md) | `--entry python`: a bundle that runs the scripts it's given | Proposed |
 | [0041](0041-input-without-a-lock.md) | Input without a lock builds, resolved at build time, with a warning | Accepted |
+| [0042](0042-smoke-runs-the-bundle-once.md) | `--smoke` runs the finished bundle once before shipping | Accepted |

@@ -158,7 +158,8 @@
                   "check",
                   "zip",
                   "verify",
-                  "write"
+                  "write",
+                  "smoke"
                 ]
               },
               "additionalProperties": {
@@ -186,6 +187,16 @@
               "description": "A bundle for several platforms (added within version 1, ADR-0038): each payload's target, shaped like `target`; empty for a single payload",
               "items": {
                 "type": "object"
+              }
+            },
+            "smoke": {
+              "type": ["object", "null"],
+              "description": "What --smoke ran (added within version 1): the command, its exit code, the seconds it took, and whether the network was blocked; null without --smoke or when the bundle can't run here",
+              "properties": {
+                "command": {"type": "array", "items": {"type": "string"}},
+                "exit_code": {"type": "integer"},
+                "seconds": {"type": "number"},
+                "network_blocked": {"type": "boolean"}
               }
             }
           }

@@ -6,6 +6,7 @@ from __future__ import annotations
 import os
 import re
 import shutil
+import sys
 import tempfile
 import time
 from collections.abc import Sequence
@@ -16,7 +17,7 @@ from typing import Callable, Literal
 from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
 
-from . import _check, _config, _coverage, _imports, _platforms
+from . import _check, _config, _coverage, _imports, _platforms, _smoke
 from . import _toml as tomllib
 from ._check import CheckReport
 from ._errors import (
@@ -56,6 +57,7 @@ from ._python import (
     find_interpreter,
     find_python,
 )
+from ._smoke import SmokeResult
 from ._source import (
     Source,
     load_source,
@@ -87,6 +89,9 @@ class BuildOptions:
     format: Format | None = None
     # The most the output may be, in bytes: over it is an error, before writing (ADR-0039).
     max_size: int | None = None
+    # Run the finished .pyz once with these arguments, in a fresh home folder with no network
+    # (`--smoke`); None: don't; (): the default, `--help`.
+    smoke: tuple[str, ...] | None = None
     # More Python versions and platforms: a .pyz gets a payload for every combination of
     # [python, *more_pythons] and [python_platform, *more_python_platforms] (ADR-0038).
     more_pythons: tuple[str, ...] = ()
@@ -115,6 +120,7 @@ class BuildResult:
     reach: Portability | None = None  # whether it runs on any OS / CPU (ADR-0034)
     # A bundle for several platforms: each payload's target, as in `target` (ADR-0038).
     payloads: list[dict[str, object]] = field(default_factory=list)
+    smoke: SmokeResult | None = None  # what --smoke ran, if it did
 
     @property
     def handler(self) -> str | None:
@@ -144,6 +150,7 @@ class BuildResult:
             "format": self.format,
             "entry": self.entry,
             "payloads": self.payloads,
+            "smoke": self.smoke.to_json_dict() if self.smoke else None,
         }
 
 
@@ -164,6 +171,7 @@ def build(
             f"a {fmt} output is for one platform and Python version",
             hint="give one --python and one --python-platform, or build a .pyz",
         )
+    smoked: SmokeResult | None = None
     with tempfile.TemporaryDirectory(prefix="bundleup-") as tmp:
         stage = Path(tmp)
         prepared: list[Prepared] = []
@@ -205,6 +213,10 @@ def build(
                 max_size=options.max_size,
                 strict=options.strict,
             )
+            if options.smoke is not None:
+                steps.start("smoke")
+                smoked, skipped = _smoke_run(prepared, output, options.smoke)
+                diagnostics += skipped
         elif fmt == "dir":
             check_size(sum(x.size_bytes for x in p.sizes), options.max_size, diagnostics)
             write_dir(p, output, steps=steps)
@@ -242,6 +254,7 @@ def build(
         entry=str(p.entry) if p.entry else None,
         pythons=p.pythons,
         reach=p.reach,
+        smoke=smoked,
         payloads=[
             x.target.to_json_dict(native=x.native, pythons=x.pythons, reach=x.reach)
             for x in prepared
@@ -260,6 +273,38 @@ def _combinations(options: BuildOptions) -> list[BuildOptions]:
         replace(options, python=python, python_platform=platform, **single)
         for python in pythons
         for platform in platforms
+    ]
+
+
+# CPU names as Python reports them -> as targets name them.
+CPUS = {"arm64": "aarch64", "amd64": "x86_64", "x64": "x86_64"}
+
+
+def _smoke_run(
+    prepared: list[Prepared], output: Path, args: tuple[str, ...]
+) -> tuple[SmokeResult | None, list[Diagnostic]]:
+    """`--smoke`: run the bundle with the interpreter of a payload that fits this machine (the
+    one the build used); a bundle only for other platforms can't run here: a warning."""
+    import platform
+
+    here = CPUS.get(platform.machine().lower(), platform.machine().lower())
+    for p in prepared:
+        machine = CPUS.get(p.target.machine.lower(), p.target.machine.lower())
+        same_os = p.reach.any_os or p.target.platform == sys.platform
+        if same_os and (p.reach.any_cpu or not p.native or machine == here):
+            if p.entry is not None and p.entry.kind == "python" and not args:
+                raise UsageError(
+                    "--smoke needs a script to run for --entry python",
+                    hint="for example: --smoke 'scripts/tool.py --help'",
+                )
+            return _smoke.run(output, p.target.executable, args or ("--help",)), []
+    return None, [
+        Diagnostic(
+            "smoke-skipped",
+            "warning",
+            "--smoke: the bundle is only for other platforms, so it can't run here",
+            hint="run the smoke test on a machine it's built for (CI, say)",
+        )
     ]
 
 
@@ -315,6 +360,11 @@ def _settle(options: BuildOptions) -> tuple[BuildOptions, Format]:
     """What `build` and `check` start from: [tool.bundleup] filled in (ADR-0032), the format
     checked."""
     options, _configured = _config.apply(options)
+    if options.smoke is not None and (options.format or "pyz") != "pyz":
+        raise UsageError(
+            "--smoke runs a .pyz",
+            hint=f"drop --smoke: a {options.format} output's host runs it",
+        )
     if options.entry == "python" and (options.format or "pyz") != "pyz":
         raise UsageError(
             "--entry python makes a .pyz that runs the scripts it's given",
