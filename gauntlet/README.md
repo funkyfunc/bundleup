@@ -178,7 +178,9 @@ Each bundle should also be run under hostile conditions, because these break bun
 a normal shell. Covered by `run_bundlers.py`: no network, macOS's system Python 3.9, paths with
 spaces and non-ASCII characters, read-only cwd, read-only `HOME`, simultaneous first runs, a
 broken copy of every bundled package in the user's site-packages (`user-site-conflict`, bundleup
-only), Linux and Windows (CI). Still to do:
+only), a cache on a filesystem mounted noexec (`noexec-cache`, bundleup only, Linux CI, where the
+workflow mounts one and names it in `BUNDLEUP_GAUNTLET_NOEXEC`), Linux and Windows (CI). Still to
+do:
 
 - Read-only bundle location, and a read-only or missing cache directory
 - No `HOME` / unusual `HOME`

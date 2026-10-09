@@ -66,6 +66,13 @@ jobs:
       - name: Install the target Python
         if: ${{ !(runner.os == 'macOS' && matrix.python == '3.9') }}
         run: uv python install ${{ matrix.python }}
+      - name: Mount a noexec filesystem (Linux), for the noexec-cache condition
+        if: ${{ runner.os == 'Linux' }}
+        run: |
+          sudo mkdir -p /mnt/noexec
+          sudo mount -t tmpfs -o noexec,size=4g tmpfs /mnt/noexec
+          sudo chmod 1777 /mnt/noexec
+          echo "BUNDLEUP_GAUNTLET_NOEXEC=/mnt/noexec" >> "$GITHUB_ENV"
       - name: Run the gauntlet
         run: >
           uv run gauntlet/run_bundlers.py --tool bundleup --conditions --check

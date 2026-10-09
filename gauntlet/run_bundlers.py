@@ -558,6 +558,18 @@ def hostile(
         plant_shadows(py, bundle, home)
         record("user-site-conflict", run_bundle(py, bundle, args=args, home=home, cwd=cwd))
 
+        # A cache on a filesystem mounted noexec (a hardened container's /tmp): compiled modules
+        # can't load from it, so a native bundle must use another cache folder (rounds 6 and 7).
+        # CI mounts one on Linux and names it in BUNDLEUP_GAUNTLET_NOEXEC.
+        noexec = os.environ.get("BUNDLEUP_GAUNTLET_NOEXEC")
+        if noexec and Path(noexec).is_dir():
+            home, cwd = fresh_dirs(stage, "noexec")
+            cache = Path(noexec) / f"cache-{os.getpid()}-{bundle.stem}"
+            env = {"BUNDLEUP_CACHE": str(cache)}
+            record(
+                "noexec-cache", run_bundle(py, bundle, args=args, home=home, cwd=cwd, extra_env=env)
+            )
+
         # A pure-Python bundle runs on every version in its range (ADR-0030): run it on each other
         # installed Python the manifest allows.
         for other in in_range_pythons(bundle, version):

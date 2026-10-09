@@ -364,6 +364,25 @@ def _roots(archive: str) -> "list[tuple[str, bool]]":
     return roots
 
 
+def _loads_code(root: str) -> bool:
+    """Whether compiled modules can be loaded from `root`: not on a filesystem mounted noexec
+    (Linux), where loading a `.so` fails. Only matters for a bundle with native code; a hardened
+    container's noexec /tmp broke pex's scies (ComfyUI-Docker #170, rounds 6 and 7)."""
+    flag = getattr(os, "ST_NOEXEC", 0)
+    if ABIFLAGS is None or not flag:
+        return True
+    path = root
+    while not os.path.exists(path):  # the root may not exist yet: its filesystem is its parent's
+        parent = os.path.dirname(path)
+        if parent == path:
+            return True
+        path = parent
+    try:
+        return not os.statvfs(path).f_flag & flag
+    except OSError:
+        return True
+
+
 def _private(root: str) -> bool:
     """A shared root (the temp one, or the one next to the bundle) is only trusted if we own it
     and nobody else can write to it."""
@@ -378,6 +397,8 @@ def _private(root: str) -> bool:
 
 def _find() -> "str | None":
     for root, shared in _roots(_ARCHIVE):
+        if not _loads_code(root):
+            continue
         path = os.path.join(root, DIRNAME)
         try:
             found = os.stat(path)
@@ -591,6 +612,9 @@ def _extract() -> str:
     """
     problems = []  # type: list[str]
     for root, shared in _roots(_ARCHIVE):
+        if not _loads_code(root):
+            problems.append("  %s: mounted noexec, so compiled modules can't load from it" % root)
+            continue
         final = os.path.join(root, DIRNAME)
         tmp = os.path.join(root, ".tmp-%s-%d-%s" % (DIRNAME, os.getpid(), os.urandom(4).hex()))
         try:

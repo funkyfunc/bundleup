@@ -711,3 +711,24 @@ def test_unpacking_prunes_old_unused_copies_of_the_same_bundle(
     finally:
         lock.close()
     assert not old.exists() and recent.exists() and held.exists() and other.exists()
+
+
+def test_a_noexec_cache_is_skipped_for_native_code(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """A filesystem mounted noexec can't load compiled modules (a hardened container's /tmp broke
+    pex's scies, rounds 6 and 7): a bundle with native code skips such cache folders. The real
+    mount is a gauntlet condition on Linux CI."""
+    from bundleup import _loader
+
+    noexec = 8
+
+    class Stat:
+        f_flag = noexec
+
+    monkeypatch.setattr(_loader.os, "ST_NOEXEC", noexec, raising=False)
+    monkeypatch.setattr(_loader.os, "statvfs", lambda path: Stat(), raising=False)
+    monkeypatch.setattr(_loader, "ABIFLAGS", "")  # native code
+    assert not _loader._loads_code(str(tmp_path / "not-yet-created"))
+    monkeypatch.setattr(_loader, "ABIFLAGS", None)  # pure Python: any folder will do
+    assert _loader._loads_code(str(tmp_path))
