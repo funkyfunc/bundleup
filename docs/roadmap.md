@@ -133,7 +133,7 @@ What [MISSION.md](../MISSION.md) defines as done:
 
 | Idea | What it is | Why |
 |---|---|---|
-| ~~**`bundleup check`**~~ done ([ADR-0024](adr/0024-check-command-and-build-analysis.md)) | The pre-ship analyzer as its own command, runnable in CI on any project: "will this survive bundling?" | Useful even to people who bundle with something else; the most defensible part of the tool |
+| ~~**`bundleup check`**~~ done ([ADR-0024](adr/0024-check-command-and-build-analysis.md)) | The pre-ship analyzer as its own command, runnable in CI on any project: "will this survive bundling?" | Useful even to people who bundle with something else. Small today (~440 lines); what's left if uv ships bundling, so worth deepening |
 | ~~**Multi-platform bundles**~~ done (one per target: ADR-0014; one for several: ADR-0038) | One `.pyz` that runs on several OS/CPU/Python combinations, or one per target from a single machine (`--python`, `--platform`) | Build once on a Mac, ship to Linux servers. Round 4's #1 priority: it unlocks most strong-fit use cases ([ADR-0014](adr/0014-output-formats-and-target-presets.md), accepted) |
 | ~~**Cache override and runtime hardening**~~ done (item 8) | `BUNDLEUP_CACHE`, cache order (env → user cache → temp), per-build locks, stale-cache cleanup, isolated `sys.path` | Lambda's read-only filesystem, read-only roots, HPC node-local scratch, 1,000 jobs starting at once |
 | ~~**`--format dir`**~~ done ([ADR-0025](adr/0025-dir-and-lambda-formats-and-presets.md)) | A vendored directory built for a host application's Python and platform | Splunk, QGIS, Maya/Houdini, Azure Functions' `.python_packages` all hand-roll `pip install --target --platform` today ([ADR-0014](adr/0014-output-formats-and-target-presets.md), accepted) |

@@ -26,7 +26,7 @@ bundleup check --also-platform windows   # which packages lack a wheel for anoth
 bundleup check --matrix         # which OS, CPU and Python versions the lock's wheels cover
 bundleup build --max-size 30MB # fail, writing nothing, if the bundle is bigger
 bundleup build --format dir     # a plain directory, for apps that load packages from one
-bundleup verify dist/app.pyz    # check a bundle (and its unpacked copy) against its manifest
+bundleup verify dist/app.pyz    # bundle and unpacked copy vs its manifest (corruption; not a signature)
 bundleup cache clean            # remove unpacked bundles not used for 30 days
 python dist/<name>.pyz          # run it: no install, no network
 ```

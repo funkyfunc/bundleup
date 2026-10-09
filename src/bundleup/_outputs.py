@@ -210,7 +210,7 @@ def write_pyz(
     total = sum(layer.path.stat().st_size for layer in layers)
     diags: list[Diagnostic] = []
     check_size(total, max_size, diags)
-    if max_size is None and total > LARGE and _in_git(output):
+    if max_size is None and total > LARGE:
         diags.append(_large(total, ps))
         if strict:  # before anything is written, as for every other warning (fifth review)
             raise CheckFailedError(
@@ -421,21 +421,16 @@ def stage_lambda(p: Prepared, *, stage: Path, steps: Steps) -> Path:
 LARGE = 100 * 10**6
 
 
-def _in_git(output: Path) -> bool:
-    """Whether the bundle is written into a git work tree, where GitHub's limit matters (a fact
-    about one destination, so it only applies there; fourth review)."""
-    return any((d / ".git").exists() for d in output.absolute().parents)
-
-
 def _large(total: int, ps: list[Prepared]) -> Diagnostic:
-    """A warning for a bundle too big for a git repository, saying where the size comes from."""
+    """A warning for a bundle over 100 MB, wherever it's written (the sixth review: a build
+    shouldn't behave differently by where its output lands), saying where the size comes from."""
     largest = ", ".join(f"{x.name} {describe_size(x.size_bytes)}" for x in ps[0].sizes[:3])
     each = f" (of {len(ps)} payloads, the first)" if len(ps) > 1 else ""
     return Diagnostic(
         "large-bundle",
         "warning",
-        f"the bundle is {describe_size(total)}: GitHub refuses files over 100 MB, so a "
-        "repository (or a skill installed from one) can't hold it without Git LFS",
+        f"the bundle is {describe_size(total)}: hard to ship as one file (GitHub, for one, "
+        "refuses files over 100 MB, so a repository needs Git LFS for it)",
         hint=f"the largest packages{each}, unpacked: {largest}; fewer --python or "
         "--python-platform values make it smaller, and --max-size makes a limit an error",
     )

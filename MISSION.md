@@ -77,8 +77,10 @@ A bundler in the spirit of esbuild: **one fast command, sensible defaults, one a
   code from the zip. **stickytape / pinliner / tinyBundle** are abandoned.
 - **uv** has had requests open since 2024 for `uv zipapp` (#7419) and `uv bundle` (#5802). #5802 is
   labelled *"wish – Not on the immediate roadmap."*
-- **Astral** (uv, Ruff, ty) agreed to be acquired by OpenAI in March 2026. Governance worries are
-  real; so is the chance uv ships bundling whenever it decides to.
+- **Astral** (uv, Ruff, ty) agreed to be acquired by OpenAI in March 2026, per the round 1
+  research ([landscape](docs/research/round-1-landscape-compass.md), citing news reports; not
+  checked against a primary source). Either way, uv could ship bundling whenever it
+  decides to.
 
 Full research and its known errors: [docs/research/](docs/research/README.md).
 

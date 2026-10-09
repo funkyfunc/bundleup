@@ -285,3 +285,11 @@ def test_which_names_look_like_secrets(name: str, secret: bool) -> None:
     from bundleup._source import looks_secret
 
     assert looks_secret(name) is secret
+
+
+def test_stdlib_tables_cover_this_python() -> None:
+    """The added/removed tables stop at _imports.NEWEST: a newer Python needs them updated (from
+    its "What's new" page) before the range check can be trusted (sixth review)."""
+    from bundleup._imports import NEWEST
+
+    assert sys.version_info[:2] <= NEWEST, "update ADDED/REMOVED in _imports.py for this Python"

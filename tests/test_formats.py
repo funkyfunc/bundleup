@@ -108,15 +108,12 @@ def test_max_size_refuses_every_format_before_writing(tmp_path: Path) -> None:
 def test_a_bundle_too_big_for_git_warns_unless_a_limit_is_set(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Over GitHub's 100 MB file limit (made tiny here), written into a git work tree: a skill in
-    a repository can't hold it."""
+    """Over 100 MB (made tiny here), wherever it's written: a skill in a repository can't hold
+    it without Git LFS."""
     from bundleup import _outputs
 
     monkeypatch.setattr(_outputs, "LARGE", 10)
     (tmp_path / "fn.py").write_text(SCRIPT)
-    result = build(BuildOptions(path=tmp_path / "fn.py", output=tmp_path / "a.pyz"))
-    assert result.diagnostics == []  # not in a git repository: GitHub's limit doesn't apply
-    (tmp_path / ".git").mkdir()
     result = build(BuildOptions(path=tmp_path / "fn.py", output=tmp_path / "a.pyz"))
     assert [d.code for d in result.diagnostics] == ["large-bundle"]
     strict = BuildOptions(path=tmp_path / "fn.py", output=tmp_path / "s.pyz", strict=True)

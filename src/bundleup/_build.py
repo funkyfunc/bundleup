@@ -370,7 +370,7 @@ def _also_platforms(pylock: Path, target: Target, names: Sequence[str]) -> list[
 
 
 # Folders whose code doesn't run in the bundle: tests and docs import pytest, sphinx and the like.
-NOT_RUN = {"tests", "test", "docs", "doc", "examples", "src"}
+NOT_RUN = {"tests", "test", "docs", "doc", "examples"}
 
 
 def _own_code(
@@ -397,11 +397,11 @@ def _own_code(
         bundled = _imports.top_level_modules(site)
         for rel, file in python_files(folder, deep=not source.is_script)[:MOST_SCRIPTS]:
             parts = rel.split("/")
-            if (
-                file == source.path
-                or NOT_RUN & set(parts[:-1])
-                or parts[0].removesuffix(".py") in bundled
-            ):
+            folders = set(parts[:-1])
+            # Skip tests and docs, and the project's own packages anywhere (src/pkg/...): those
+            # are read from the payload. (`src` itself isn't skipped; sixth review.)
+            mine = (folders | {parts[0].removesuffix(".py")}) & bundled
+            if file == source.path or folders & NOT_RUN or mine:
                 continue
             code.append((rel, file, True))
     return code

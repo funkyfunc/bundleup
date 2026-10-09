@@ -24,7 +24,9 @@ Runs every project installed the normal way on Python 3.9 (macOS system Python),
 If a project fails here, the *test* is broken, not the bundler. Add `--heavy` to include PyTorch,
 `--python 3.11` to pick versions, or pass id prefixes (`05 13`) to run a subset.
 
-Last run (2026-10-03, macOS arm64): all projects pass on every Python they support.
+Last local run (2026-10-08, macOS arm64, bundleup with every hostile condition): 409 runs pass,
+plus the expected refusal of `17-modern-syntax` for older Pythons. CI runs every project except
+`20-heavy-ml` (it needs `--heavy`).
 
 ## Running the bundlers
 

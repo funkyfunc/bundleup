@@ -65,9 +65,12 @@ and git.
   C library, macOS version; isolates from the machine's packages; children of the bundle's own
   interpreter see its packages, other Pythons don't (ADR-0027).
 - **Evidence:** the gauntlet (24 projects, every hostile condition, plus running pure bundles on
-  every other installed Python) passes locally and in CI on Linux x64/arm64, macOS arm64 and
-  Windows; Lambda zips run in AWS's Lambda image; nightly: top-200 PyPI smoke test, a 22-program
-  corpus and four real test suites (failures open issues). Warm start equals an installed venv.
+  every other installed Python) passes locally; in CI on Linux x64/arm64, macOS arm64 and Windows,
+  23 of them (`20-heavy-ml` runs only with `--heavy`, which CI doesn't pass). CI results live in
+  the runs' artifacts, not in gauntlet/results/. Lambda zips run in AWS's Lambda image; the skill
+  recipe runs end to end (CI `skill`). Nightly: top-200 PyPI smoke test and a 22-program corpus
+  (their failures open issues), and four real test suites (no issues filed; read the run). First
+  all green together on 2026-10-08. Warm start equals an installed venv.
 - **Speed** ([findings](docs/findings/2026-10-07-speed-vs-pex-best.md)): against pex's fastest
   configuration, builds 1.1-2.4× faster; warm start equals a venv; first runs 2.3-15× faster.
 - **Not yet:** a PyPI release (0.0.1 is a placeholder; [docs/releasing.md](docs/releasing.md)).
@@ -112,14 +115,14 @@ gauntlet/bench.py       sequential speed benchmark (build, first run, warm start
 gauntlet/snapshot.py    describes installed packages; the matches-venv condition compares two snapshots
 gauntlet/smoke.py       nightly breadth test: top PyPI packages bundled and compared with a venv
 gauntlet/corpus*.py, corpus.toml  nightly corpus: real CLIs run installed vs bundled; failures -> issues
-gauntlet/weekly_summary.py  weekly findings page from the nightly smoke + corpus results (weekly.yml)
+gauntlet/weekly_summary.py  weekly findings page from the nightly smoke + corpus results (weekly.yml, paused)
 gauntlet/cross.py       cross-target gauntlet: build on one OS for another, run on the target
 gauntlet/formats.py     `dir` and Lambda outputs: run as a host app would, Lambda in AWS's image
 gauntlet/skill/         the founding use case: a skill's scripts sharing one --entry python bundle (CI `skill`)
 gauntlet/suites.py, suites.toml  real projects' test suites, venv vs bundle (CI only, suites.yml)
 .github/workflows/       ci.yml (every push: checks, tests, gauntlet matrix); nightly.yml (smoke
                         test); corpus.yml (corpus run + corpus-failure issues); suites.yml (test
-                        suites); weekly.yml (Monday summary of the nightly runs)
+                        suites); weekly.yml (summary of the nightly runs; schedule paused 2026-10-07, run by hand)
 gauntlet/report.py      results JSON -> markdown
 gauntlet/results/       committed results
 gauntlet/.work/         scratch (git-ignored)

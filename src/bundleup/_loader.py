@@ -443,7 +443,8 @@ def _prune(root: str) -> None:
             doomed = os.path.join(root, ".tmp-%s-%d-pruned" % (entry, os.getpid()))
             os.rename(path, doomed)  # out of the way first: never a half-deleted copy in place
             shutil.rmtree(doomed, ignore_errors=True)
-            os.unlink(os.path.join(root, ".lock-" + entry))
+            # The lock file stays: a process may have just opened it, and would then hold a lock
+            # on a deleted file (sixth review). `cache clean` removes stale ones.
         except OSError:
             pass
         finally:
