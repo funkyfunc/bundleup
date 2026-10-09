@@ -41,3 +41,9 @@ licenses checked 2026-10-04.
 | [splunk/splunk-sdk-python](https://github.com/splunk/splunk-sdk-python) README | The `bin/lib` + `--platform` pattern `--format dir` should replace |
 | [Blender: Python wheels in extensions](https://docs.blender.org/manual/en/latest/advanced/extensions/python_wheels.html) | How a host app expects per-platform wheels |
 | [Agent Skills: using scripts](https://agentskills.io/skill-creation/using-scripts) | Script conventions for agents (no prompts, `--help`, structured output, exit codes) |
+| [Claude code execution tool](https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool), [Agent Skills](https://platform.claude.com/docs/en/agents-and-tools/agent-skills/overview) | The Claude API sandbox: Python 3.11, no network, no installs, preinstalled libraries |
+| [Gemini code execution](https://ai.google.dev/gemini-api/docs/code-execution) | Fixed library list, no installs, 30 s per run |
+| [OpenAI shell tool](https://developers.openai.com/api/docs/guides/tools-shell), [Codex cloud environments](https://developers.openai.com/codex/cloud/environments) | Network off by default with an allowlist; installs in a setup phase |
+| [E2B templates](https://e2b.dev/docs/sandbox-template), [Modal images](https://modal.com/docs/guide/images) | Sandboxes built from images; Modal installs from `uv.lock` (`uv_sync`) |
+| [MCPB PR #158](https://github.com/modelcontextprotocol/mcpb/pull/158) | Why MCP bundles gained a `uv` runtime: vendored Python broke on version-specific compiled packages |
+| [ComfyUI-Docker #170](https://github.com/pixeloven/ComfyUI-Docker/issues/170) | A measured comparison of shipping options; pex scies fail on noexec `/tmp` |

@@ -6,6 +6,18 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-09** · ecosystem · Facts from rounds 6 and 7 worth keeping (checked by the research
+  against primary sources unless noted): pip 26.0 (Jan 2026) installs a PEP 723 script's
+  dependencies (`--requirements-from-script`) and 26.1 (Apr 2026) installs `pylock.toml`
+  (experimental); uv's macOS and Windows executables are code-signed since Sept 2026; uv keeps
+  uv.lock because pylock "is not sufficient to replace" it (uv #12584), so pylock is an exchange
+  format; PEP 711 (PyBI) is still Draft and python-build-standalone fills its role; PEP 817/825
+  (wheel variants for GPU builds) is in progress; Terminal-Bench 2.1 found that pinned Docker
+  images still broke because tasks fetched things from the internet (nine tasks; scores moved up to
+  12 points), the strongest argument for offline artifacts; agents set up only 6.69% of Python
+  repositories on EnvBench (2025 models); 97% of llms.txt files are never requested (Ahrefs, June
+  2026). Evidence: [round 6](research/round-6-next-tool-compass.md),
+  [round 7](research/round-7-agents-compass.md), [7b](research/round-7b-agents-compass.md).
 - **2026-10-09** · research · Rounds 6 and 7 (four Compass runs, no attachments) converge: Python's
   empty seat is "project → artifact that runs elsewhere" (uv #5802 is still a "wish"), offline
   portable environments and "will it run there?" checks are what an independent tool can own, and

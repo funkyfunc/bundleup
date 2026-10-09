@@ -53,7 +53,8 @@ haven't checked.
 
 - **A single `.py` file that inlines dependencies** ("tree-shaking"): both round 6 runs, citing
   uv #12035 (closed: dynamic imports defeat it). Roadmap item 24 isn't inlining (it embeds the
-  bundle as data), but the reports give no evidence of demand for it either: leave it Proposed.
+  bundle as data), and the reports neither support nor argue against that; the owner wants to
+  keep it (2026-10-09).
 - **Another installer, resolver or lockfile format**: uv has won that (round 6, both runs).
 - **Cross-compiled native executables** and Cosmopolitan builds: requests closed for years in
   PyInstaller and Nuitka; no C extensions in Cosmopolitan.

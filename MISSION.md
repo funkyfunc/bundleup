@@ -82,6 +82,24 @@ A bundler in the spirit of esbuild: **one fast command, sensible defaults, one a
   checked against a primary source). Either way, uv could ship bundling whenever it
   decides to.
 
+- **What rounds 6 and 7 found** (Oct 2026, four independent runs;
+  [synthesis](docs/research/round-6-and-7-synthesis.md)):
+  - The job nobody owns is *project → artifact that runs elsewhere*; next comes offline and
+    portable environments (uv #11746 "`uv layout`", #13587, #15519, #16519; Poetry #2184). Installing
+    is no longer the main complaint; the last mile is.
+  - The workarounds have known costs: PyInstaller's antivirus false positives (#8164, #8776), slow
+    one-file start-up (#7907) and no cross-compiling; pex scies (which bring their own CPython)
+    fail where `/tmp` is mounted noexec (ComfyUI-Docker #170).
+  - Most Python users are still on pip and requirements.txt: 74% use pip and 12% uv; 59% keep
+    dependencies in requirements.txt against 36% in pyproject.toml (PSF/JetBrains survey, Oct-Nov
+    2024). That is the case for taking unlocked input ([ADR-0041](docs/adr/0041-input-without-a-lock.md)).
+  - Agents make portability failures more common, not different: agent-written code usually runs
+    where it was written and breaks elsewhere through its environment.
+  - Agent sandboxes split into "nothing installable" (Claude API: Python 3.11, no network; Gemini:
+    fixed libraries, 30 s per run) and "bring an image" (E2B templates, Modal images with
+    `uv_sync`), with no common input format; MCP bundles added a `uv` runtime because vendored
+    Python broke on pydantic's version-specific compiled core (MCPB PR #158).
+
 Full research and its known errors: [docs/research/](docs/research/README.md).
 
 ## What history teaches (and what we'll do about it)

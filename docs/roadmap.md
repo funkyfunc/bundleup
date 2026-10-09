@@ -26,6 +26,8 @@ the owner hasn't confirmed is marked *Proposed*.
     dependencies (a PEP 723-style block) and the bundle as base64 with a short unpacker, for places
     that only take `.py` files. *Proposed*: needs the owner's go and an ADR
     ([note](findings/2026-10-08-inputs-outputs-and-transforms.md)).
+    Kept on purpose (the owner, 2026-10-09): rounds 6 and 7 argue against *inlining* dependencies
+    into one `.py` (uv #12035), not against one file that carries the bundle.
 25. **Pilot the founding skill with colleagues** (the owner): two or three people on macOS (with
     and without the developer tools), Windows and Linux install the skill and use it; their
     problems become the next items. The fifth review's top recommendation: five reviews are no
@@ -41,7 +43,17 @@ the owner hasn't confirmed is marked *Proposed*.
     yes, as uv does, but announced, and off with `UV_PYTHON_DOWNLOADS=never` (ADR-0035).
 30. ~~**Decide CI's shape**~~ decided 2026-10-08: the full matrix stays on every push (it's free
     for a public repository and caught real bugs); agents push in batches instead.
-31. **Release 0.1.0**: everything is prepared ([docs/releasing.md](releasing.md), [CHANGELOG](../CHANGELOG.md),
+32. **A noexec cache** (rounds 6 and 7): pex scies fail where `/tmp` is noexec (ComfyUI-Docker
+    #170). Skip cache folders where code can't be loaded, and test it in the gauntlet.
+33. **`check --audit`: supply-chain checks on the locked packages** (round 7): known
+    vulnerabilities of the locked versions and very new projects, from PyPI, opt-in (network).
+34. **Describe a target environment as data** (round 7's largest gap): a TOML file with a
+    destination's Python, platform, size limit and facts (network, installs), used with
+    `--against FILE`; a few published as recipes. Data, not named presets (ADR-0039).
+35. **MCP servers** (round 7): a recipe and a CI test for an MCP server shipped as a `.pyz`.
+36. **One environment, each platform's format** (round 7b): recipes for Docker, Modal and E2B
+    from a `.pyz`; Docker tested in CI.
+37. **Release 0.1.0**: everything is prepared ([docs/releasing.md](releasing.md), [CHANGELOG](../CHANGELOG.md),
     [release.yml](../.github/workflows/release.yml)); publishing needs the owner (trusted publishing on pypi.org, then a tag).
     Deferred by the owner (2026-10-07) until the value proposition has been tested.
 
@@ -167,23 +179,6 @@ What [MISSION.md](../MISSION.md) defines as done:
 | **MCP servers (deferred)** | A bundled MCP server that starts with `python server.pyz` | Only for offline or single-platform cases: MCPB already moved Python to a host-side `uv` server type, and compiled deps (pydantic) can't be bundled portably for unknown desktops |
 | **Agents as operators (hypothesis)** | A bundleup skill so an agent can bundle a script it wrote (build where there's network, run in an offline sandbox) | Plausible and unserved, but no evidence of demand found yet; validate with users first |
 | **Notebooks (docs only)** | Document the recipe: `nbconvert` → PEP 723 script → bundleup | Magics and display calls break automatic conversion; a recipe is enough |
-
-## From rounds 6 and 7 (2026-10-09, not started; the owner decides)
-
-See the [synthesis](research/round-6-and-7-synthesis.md).
-
-- **Check against a described target environment:** data describing a destination (its Python,
-  platform, network, preinstalled packages: the Claude API sandbox, Gemini, Lambda), so `check`
-  says "needs X, which that sandbox lacks". Data anyone can write, not presets (ADR-0039); needs
-  an ADR. Round 7 ranks it the largest unmet need.
-- **Supply-chain checks on dependencies:** flag very new, rarely downloaded or known-hallucinated
-  packages before bundling (agents pick dependencies; ~5% of model-named packages don't exist).
-- **A noexec cache as a gauntlet condition:** pex scies fail where `/tmp` is noexec
-  (ComfyUI-Docker #170).
-- **MCP servers, revisited after the pilot:** MCPB added a `uv` runtime because vendored Python
-  broke on pydantic's version-specific core; a multi-version `.pyz` covers that offline.
-- **One environment translated into each platform's format** (Modal, E2B, Codex setup,
-  Dockerfile): a possible future output.
 
 ## Far: bigger bets
 
