@@ -9,11 +9,33 @@ before work starts, and everything has to respect the accepted ADRs (in particul
 
 ## Next up
 
-In order. Take the first open item. Decisions need an ADR; one the owner hasn't confirmed is
-marked *Proposed*.
+In order. Take the first open item that isn't marked "(the owner)". Decisions need an ADR; one
+the owner hasn't confirmed is marked *Proposed*.
 
+22. **Skill bundles under GitHub's 100 MB per file**: the founding skill with PyMuPDF is one
+    144 MiB `.pyz`, which a git repository can't hold without Git LFS (and LFS support in agent
+    package managers is unverified). Write layers as separate files beside a small `.pyz`, or one
+    `.pyz` per platform with a tiny launcher; pick one in an ADR the owner confirms first
+    ([fifth review](findings/2026-10-08-fifth-review.md), Rec. 5).
+23. **Measure `pex --scie eager` on the founding skill**: size, first and warm start, and whether
+    files delivered by git are quarantined (Gatekeeper, SmartScreen). It brings its own CPython,
+    which answers Windows machines without Python; the result decides how the executables
+    investigation starts ([note](findings/2026-10-08-inputs-outputs-and-transforms.md), roadmap
+    "Standalone executables").
+24. **One literal `.py` file output** (`--format py`): a readable header with the pinned
+    dependencies (a PEP 723-style block) and the bundle as base64 with a short unpacker, for places
+    that only take `.py` files. *Proposed*: needs the owner's go and an ADR
+    ([note](findings/2026-10-08-inputs-outputs-and-transforms.md)).
+25. **Pilot the founding skill with colleagues** (the owner): two or three people on macOS (with
+    and without the developer tools), Windows and Linux install the skill and use it; their
+    problems become the next items. The fifth review's top recommendation: five reviews are no
+    substitute for users.
+26. **Owner review of the Proposed ADRs** (the owner): 0038 (multi-platform bundles) and 0040
+    (`--entry python`) first, since they define the founding skill's features; then 0023-0026 and
+    0033-0037. Accept, change or reject each; agents then update statuses.
 19. **Release 0.1.0**: everything is prepared ([docs/releasing.md](releasing.md), [CHANGELOG](../CHANGELOG.md),
     [release.yml](../.github/workflows/release.yml)); publishing needs the owner (trusted publishing on pypi.org, then a tag).
+    Deferred by the owner (2026-10-07) until the value proposition has been tested.
 
 
 Frozen until 0.1 has users: new formats, named targets and nightly automation. Deferred: faster warm
