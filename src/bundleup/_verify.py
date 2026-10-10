@@ -262,8 +262,7 @@ def _check_cache(cache: Path, files: dict[str, str]) -> list[str]:
             problems.append(f"changed file: {path}")
     for local in sorted(cache.rglob("*")):
         rel = local.relative_to(cache).as_posix()
-        compiled_here = rel.startswith(f"{RUNTIME_DIR}/.compiled-")  # the loader's mark
-        if local.is_file() and rel not in files and not rel.endswith(".pyc") and not compiled_here:
+        if local.is_file() and rel not in files and not rel.endswith(".pyc"):
             problems.append(f"extra file: {rel} isn't in the manifest")
     return problems
 

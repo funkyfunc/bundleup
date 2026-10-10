@@ -52,6 +52,23 @@ def test_list_finds_only_unpacked_bundles(cache: Path) -> None:
     assert found[0].size_bytes == 100
 
 
+def test_the_working_directorys_bundleup_folder_is_never_touched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`.bundleup/` beside a bundle can't be found from here, and the one in the folder you run
+    `cache` from isn't a cache root (eighth review: `cache clean` offered to remove it)."""
+    for name in ("HOME", "USERPROFILE", "TMPDIR", "TEMP", "TMP", "XDG_CACHE_HOME", "LOCALAPPDATA"):
+        monkeypatch.setenv(name, str(tmp_path / "elsewhere" / name.lower()))
+    monkeypatch.delenv("BUNDLEUP_CACHE", raising=False)
+    here = tmp_path / "work"
+    (here / ".bundleup").mkdir(parents=True)
+    old = unpacked(here / ".bundleup", "foo", age_days=90)
+    monkeypatch.chdir(here)
+    assert bundleup.list_cache() == []
+    bundleup.clean_cache(older_than_days=0)
+    assert old.exists()
+
+
 def test_clean_removes_old_copies_and_leftovers_only(cache: Path) -> None:
     keep = unpacked(cache, "recent", age_days=1)
     old = unpacked(cache, "old", age_days=40)

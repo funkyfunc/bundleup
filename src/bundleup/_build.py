@@ -817,6 +817,7 @@ def check(
         reach=p.reach,
         matrix=cells,
         against=_target_files.load(options.against) if options.against else None,
+        also_platforms=others,
     )
 
 

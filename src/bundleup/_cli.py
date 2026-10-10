@@ -540,6 +540,8 @@ def _check_lines(report: CheckReport, opts: argparse.Namespace, style: Style) ->
     errors, warnings = len(report.errors), len(report.warnings)
     verdict = findings(errors, warnings) or "no problems found"
     target = report.target.describe(report.native, report.pythons, report.reach)
+    if report.also_platforms:  # say what else was checked (eighth review)
+        target += f", and its wheels for {', '.join(report.also_platforms)}"
     lines = [f"{style.bold('Checked')} {name} for {target}: {verdict}"]
     packages = plural(len(report.packages), "package")
     largest = ", ".join(f"{p.name} {_size(p.size_bytes)}" for p in report.packages[:3])

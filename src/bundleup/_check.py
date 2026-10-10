@@ -97,6 +97,8 @@ class CheckReport:
     matrix: list[MatrixCell] = field(default_factory=list)  # `check --matrix` (ADR-0031)
     reach: Portability | None = None  # whether it would run on any OS / CPU (ADR-0034)
     against: TargetFile | None = None  # the --against file, if one was given (ADR-0044)
+    # `--also-platform`: the other platforms whose wheels were checked in the lock, uv's names.
+    also_platforms: list[str] = field(default_factory=list)
 
     @property
     def errors(self) -> list[Diagnostic]:
@@ -127,6 +129,7 @@ class CheckReport:
             "packages": [p.to_json_dict() for p in self.packages],
             "duration_s": round(self.duration_s, 3),
             "matrix": [cell.to_json_dict() for cell in self.matrix],
+            "also_platforms": self.also_platforms,
             "against": self.against.to_json_dict() if self.against else None,
         }
 

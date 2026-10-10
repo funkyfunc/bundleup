@@ -171,6 +171,13 @@
               "type": "number",
               "minimum": 0
             },
+            "also_platforms": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "With --also-platform (added within version 1): the other platforms whose wheels were checked in the lock, in uv's names"
+            },
             "matrix": {
               "type": "array",
               "description": "With --matrix (added within version 1): wheel coverage from the lock, one entry per platform and Python version",

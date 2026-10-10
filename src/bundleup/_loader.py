@@ -736,32 +736,48 @@ def _extract() -> str:
                 import shutil
 
                 shutil.rmtree(tmp, ignore_errors=True)
-    _fail(
-        "couldn't unpack into any cache directory:\n%s\nSet BUNDLEUP_CACHE to a writable directory."
-        % "\n".join(problems)
-    )
+    if os.environ.get("BUNDLEUP_CACHE"):  # the only folder tried (ADR-0048)
+        advice = "BUNDLEUP_CACHE is set, so it's the only folder used: point it at a writable "
+        advice += "folder where programs can run (not one mounted noexec), or unset it."
+    else:
+        advice = "Set BUNDLEUP_CACHE to a writable directory where programs can run."
+    _fail("couldn't unpack into any cache directory:\n%s\n%s" % ("\n".join(problems), advice))
 
 
 def _bytecode_for_here(site: str) -> None:
     """With PYTHONDONTWRITEBYTECODE, Python never caches what it compiles, so a payload run by
     another version than the one it was compiled for (a range, ADR-0030; a re-run on the Mac)
     would compile every module it imports on every start: 85 ms instead of 27 (seventh review).
-    Compile the payload once for this interpreter instead, then leave a mark. One stat on the warm
-    path, and only when the variable is set; nothing in a cache we can't write to."""
+    So, at exit, the payload's modules this run imported get their bytecode written; only those
+    (the eighth review measured compiling all 3,339 files of a payload up front: 4.7 s instead of
+    0.9 to use one). Costs nothing on the warm path unless the variable is set."""
     tag = getattr(sys.implementation, "cache_tag", None)
-    if not sys.dont_write_bytecode or not tag or tag == TAG:
-        return
-    marker = os.path.join(site, "__bundleup__", ".compiled-" + tag)
-    if os.path.exists(marker) or not os.access(site, os.W_OK):
-        return
-    import compileall
+    if sys.dont_write_bytecode and tag and tag != TAG:
+        import atexit
 
-    compileall.compile_dir(site, quiet=2)  # writes even under PYTHONDONTWRITEBYTECODE
-    try:
-        with open(marker, "w"):
-            pass
-    except OSError:
-        pass  # marked or not, the bytecode is there
+        atexit.register(_cache_imported, site)
+
+
+def _cache_imported(site: str) -> None:
+    """Write bytecode for the imported payload modules that have none for this interpreter, where
+    Python looks for it (`__spec__.cached`: honours -O and sys.pycache_prefix). Stops at the first
+    write that fails: a read-only cache."""
+    import py_compile
+
+    prefix = os.path.join(site, "")
+    for module in list(sys.modules.values()):
+        spec = getattr(module, "__spec__", None)
+        origin, cached = getattr(spec, "origin", None), getattr(spec, "cached", None)
+        if not (origin and cached and origin.startswith(prefix) and origin.endswith(".py")):
+            continue
+        if os.path.exists(cached):
+            continue
+        try:
+            py_compile.compile(origin, cfile=cached, doraise=True)
+        except OSError:
+            return
+        except py_compile.PyCompileError:
+            continue
 
 
 def _activate(site: str) -> None:

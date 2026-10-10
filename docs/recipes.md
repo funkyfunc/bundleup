@@ -170,6 +170,11 @@ noexec, and a bundle with compiled code refuses it with that reason rather than 
 Tested in CI: a bundle with a compiled extension runs in `python:3.12-slim` as is, read-only
 with `/tmp:exec`, and refuses clearly with a noexec `/tmp` (job `docker`).
 
+To skip the unpacking on every container start, unpack it while building the image: `ENV
+BUNDLEUP_CACHE=/opt/bundleup` then `RUN python /app/app.pyz --help` (any command that starts it).
+Set this way, the cache is the only place the bundle looks (ADR-0048), so a read-only container
+uses it as is. Not yet tested in CI.
+
 The same file goes into sandboxes built from images (not yet tested there):
 
 - **E2B:** use the Dockerfile above as the template's `e2b.Dockerfile`, then run

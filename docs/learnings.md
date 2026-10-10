@@ -6,6 +6,12 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-10** · process · Changing a fallback breaks whoever relied on it: making
+  `BUNDLEUP_CACHE` the only cache broke the gauntlet's noexec condition, `--smoke` on noexec
+  hosts and `bundleup cache`'s root filter, and the Mac-only local run couldn't see the first
+  (`ST_NOEXEC` is Linux). And compiling a whole payload to save milliseconds per start costs
+  seconds where every start is cold: compile what was imported, at exit. Evidence:
+  [eighth review](findings/2026-10-10-eighth-review.md).
 - **2026-10-10** · review · When one output wraps another (an executable around a `.pyz`), every
   report has to describe the outer one: the seventh review found the executable's target, smoke
   test and size check all describing the `.pyz` inside. And a "first place to look" cache setting

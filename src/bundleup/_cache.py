@@ -65,9 +65,9 @@ def cache_roots() -> list[Path]:
     """The loader's cache directories that exist and are ours (it also uses `.bundleup/` next to
     each bundle, which can't be found from here)."""
     roots = []
-    beside = os.path.join(os.path.abspath(""), ".bundleup")  # the root next to a bundle
+    beside = os.path.join("", ".bundleup")  # the root next to a bundle, as _roots("") spells it
     for root, shared in _loader._roots(""):
-        if root == beside:
+        if root == beside:  # never the working directory's (eighth review)
             continue
         if os.path.isdir(root) and (not shared or _loader._private(root)):
             roots.append(Path(root))

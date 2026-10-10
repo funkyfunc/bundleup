@@ -213,6 +213,14 @@ def test_bundleup_cache_override(bundle: Path, tmp_path: Path) -> None:
     assert out["file"].startswith(str(tmp_path / "c"))
 
 
+def test_an_unusable_explicit_cache_is_named(bundle: Path, tmp_path: Path) -> None:
+    """No fallback when BUNDLEUP_CACHE is set (ADR-0048), so the message says what to change."""
+    blocked = tmp_path / "a-file"
+    blocked.write_text("not a folder")
+    r = run(bundle, env_for(tmp_path, BUNDLEUP_CACHE=str(blocked / "cache")))
+    assert r.returncode == 1 and "BUNDLEUP_CACHE is set" in r.stderr, r.stderr
+
+
 def test_an_explicit_cache_is_the_only_one(bundle: Path, tmp_path: Path) -> None:
     """A copy already in the user cache must not win over BUNDLEUP_CACHE (seventh review: on a
     cluster, the login node's copy on NFS beat the compute nodes' local scratch)."""
@@ -340,13 +348,17 @@ def test_a_pure_python_bundle_runs_on_other_versions(bundle: Path, tmp_path: Pat
         pytest.skip(f"{SYSTEM_PYTHON} is the same version as the test Python")
     r = run(bundle, env_for(tmp_path), python=SYSTEM_PYTHON)
     assert r.returncode == 0, r.stderr
-    # Under PYTHONDONTWRITEBYTECODE another version would compile on every start: the payload is
-    # compiled for it once instead (seventh review), and marked.
+    # Under PYTHONDONTWRITEBYTECODE another version would compile on every start: what a run
+    # imported gets bytecode for it at exit (seventh and eighth reviews), wherever that Python
+    # looks for it (Apple's 3.9 sets sys.pycache_prefix under the home folder).
     cache = tmp_path / "nobytecode"
     env = env_for(tmp_path, BUNDLEUP_CACHE=str(cache), PYTHONDONTWRITEBYTECODE="1")
+    tag = subprocess.run(
+        [SYSTEM_PYTHON, "-c", "import sys; print(sys.implementation.cache_tag)"],
+        capture_output=True, text=True,
+    ).stdout.strip()  # fmt: skip
     assert run(bundle, env, python=SYSTEM_PYTHON).returncode == 0
-    (site,) = [p for p in cache.iterdir() if not p.name.startswith(".")]
-    assert list((site / "__bundleup__").glob(".compiled-cpython-*"))
+    assert list(tmp_path.rglob(f"*.{tag}.pyc"))
     assert verify(bundle).ok
 
 

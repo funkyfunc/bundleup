@@ -64,7 +64,7 @@ def run(bundle: Path, python: str | None, args: tuple[str, ...]) -> SmokeResult:
     CheckFailedError if it fails or doesn't finish."""
     here = [str(Path(a).absolute()) if a and not a.startswith("-") and Path(a).exists() else a
             for a in args]  # fmt: skip
-    with tempfile.TemporaryDirectory(prefix="bundleup-smoke-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="bundleup-smoke-", dir=_runnable()) as tmp:
         root = Path(tmp)
         for name in ("home", "cache", "work", "tmp"):
             (root / name).mkdir()
@@ -117,6 +117,23 @@ def run(bundle: Path, python: str | None, args: tuple[str, ...]) -> SmokeResult:
             ],
         )
     return result
+
+
+def _runnable() -> str | None:
+    """Where the fresh home and cache go: the temp folder, unless it's mounted noexec (a
+    hardened host), where a bundle with compiled code can't run from its cache; then bundleup's
+    build cache folder (eighth review: the cache is only where BUNDLEUP_CACHE says, ADR-0048)."""
+    flag = getattr(os, "ST_NOEXEC", 0)
+    try:
+        if not flag or not os.statvfs(tempfile.gettempdir()).f_flag & flag:
+            return None
+    except OSError:
+        return None
+    from ._bytecode import cache_dir
+
+    folder = cache_dir().parent / "smoke"
+    folder.mkdir(parents=True, exist_ok=True)
+    return str(folder)
 
 
 def _offline(command: list[str]) -> tuple[list[str], bool]:

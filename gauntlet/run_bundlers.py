@@ -587,17 +587,21 @@ def hostile(
         plant_shadows(py, bundle, home)
         record("user-site-conflict", run_bundle(py, bundle, args=args, home=home, cwd=cwd))
 
-        # A cache on a filesystem mounted noexec (a hardened container's /tmp): compiled modules
-        # can't load from it, so a native bundle must use another cache folder (rounds 6 and 7).
-        # CI mounts one on Linux and names it in BUNDLEUP_GAUNTLET_NOEXEC.
+        # A temp folder mounted noexec (a hardened container's /tmp) and no user cache (a
+        # read-only home): compiled modules can't load from the temp folder, so a native bundle
+        # must skip it for the folder beside the bundle (rounds 6 and 7). CI mounts one on Linux
+        # and names it in BUNDLEUP_GAUNTLET_NOEXEC. (An explicit BUNDLEUP_CACHE there is refused
+        # instead: it's the only folder used, ADR-0048; tests/test_bundle.py.)
         noexec = os.environ.get("BUNDLEUP_GAUNTLET_NOEXEC")
-        if noexec and Path(noexec).is_dir():
+        if noexec and Path(noexec).is_dir() and not WINDOWS:
             home, cwd = fresh_dirs(stage, "noexec")
-            cache = Path(noexec) / f"cache-{os.getpid()}-{bundle.stem}"
-            env = {"BUNDLEUP_CACHE": str(cache)}
-            record(
-                "noexec-cache", run_bundle(py, bundle, args=args, home=home, cwd=cwd, extra_env=env)
-            )
+            temp = Path(noexec) / f"tmp-{os.getpid()}-{bundle.stem}-{version}"
+            temp.mkdir(exist_ok=True)
+            home.chmod(stat.S_IRUSR | stat.S_IXUSR)
+            env = {"TMPDIR": str(temp)}
+            run = run_bundle(py, bundle, args=args, home=home, cwd=cwd, extra_env=env)
+            home.chmod(0o755)
+            record("noexec-cache", run)
 
         # A pure-Python bundle runs on every version in its range (ADR-0030): run it on each other
         # installed Python the manifest allows.
