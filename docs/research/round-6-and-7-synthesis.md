@@ -80,6 +80,7 @@ haven't checked.
 4. **MCP bundles**: MCPB added a `uv` server type because vendored Python bundles broke on
    pydantic's exact-version compiled core (MCPB PR #158). A multi-version `.pyz` solves that case
    offline; the roadmap's deferred "MCP servers" row deserves another look after the skill pilot.
+   *(A recipe was built and then dropped by the owner on 2026-10-09 as too niche.)*
 5. **Translate one environment into each platform's format** (Modal image, E2B template, Codex
    setup script, Dockerfile) (round 7b, medium gap): a possible future output, not now.
 

@@ -63,7 +63,9 @@ and git.
   and, for other platforms, wheel coverage from the lock (ADR-0024, ADR-0031). `--smoke` runs the
   finished bundle once, offline, in a fresh home (ADR-0042); `check --audit` asks PyPI about the
   locked packages (ADR-0043); `--against FILE` applies a destination described as data,
-  docs/targets/ (ADR-0044). Recipes tested in CI: skills, MCP servers, Docker, Lambda, Claude API.
+  docs/targets/ (ADR-0044). Recipes tested in CI: skills, Docker, Lambda, Claude API.
+- **Focus (the owner, 2026-10-09):** more kinds of projects in, more kinds of outputs out; no
+  recipes for niche hosts (an MCP server recipe was dropped).
 - **Runtime:** unpacks once to a content-addressed cache; checks Python version, platform, CPU,
   C library, macOS version; isolates from the machine's packages; children of the bundle's own
   interpreter see its packages, other Pythons don't (ADR-0027).
