@@ -597,10 +597,13 @@ def hostile(
             home, cwd = fresh_dirs(stage, "noexec")
             temp = Path(noexec) / f"tmp-{os.getpid()}-{bundle.stem}-{version}"
             temp.mkdir(exist_ok=True)
+            (home / "tmp").mkdir(exist_ok=True)  # run_bundle makes it: before the chmod
             home.chmod(stat.S_IRUSR | stat.S_IXUSR)
             env = {"TMPDIR": str(temp)}
-            run = run_bundle(py, bundle, args=args, home=home, cwd=cwd, extra_env=env)
-            home.chmod(0o755)
+            try:
+                run = run_bundle(py, bundle, args=args, home=home, cwd=cwd, extra_env=env)
+            finally:
+                home.chmod(0o755)
             record("noexec-cache", run)
 
         # A pure-Python bundle runs on every version in its range (ADR-0030): run it on each other
