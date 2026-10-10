@@ -24,10 +24,10 @@ import json
 import os
 import tempfile
 import zipfile
-from collections.abc import Collection, Iterable
+from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import IO, Any
 
 from packaging.markers import Marker
 from packaging.utils import canonicalize_name
@@ -343,13 +343,13 @@ def _payloads(manifest: dict[str, Any]) -> list[dict[str, Any]]:  # Any: JSON
 
 
 def _check_layer(
-    outer: zipfile.ZipFile, member: str, layer: dict[str, Any]
+    open_member: Callable[[str], IO[bytes]], member: str, layer: dict[str, Any]
 ) -> list[str]:  # Any: JSON
     """A zip's hash, then every file inside it, against the manifest."""
     try:
         with tempfile.TemporaryFile() as spool:
             digest = hashlib.sha256()
-            with outer.open(member) as source:  # can be hundreds of MB: stream it
+            with open_member(member) as source:  # can be hundreds of MB: stream it
                 for chunk in iter(lambda: source.read(1 << 20), b""):
                     digest.update(chunk)
                     spool.write(chunk)
@@ -358,17 +358,24 @@ def _check_layer(
             spool.seek(0)
             with zipfile.ZipFile(spool) as payload:
                 return _check_payload(payload, layer["files"])
+    except FileNotFoundError:
+        return [f"missing file: {member}, a part of the split bundle"]
     except (OSError, KeyError, zipfile.BadZipFile) as e:
         return [f"corrupted: {member} can't be read ({type(e).__name__}: {e})"]
 
 
 def _check_bundle(bundle: Path, manifest: dict[str, Any]) -> list[str]:  # Any: JSON
-    """The bundle file against its manifest. Corruption is a problem to report, not a crash."""
+    """The bundle file against its manifest, and a split bundle's parts folder (ADR-0045).
+    Corruption is a problem to report, not a crash."""
     try:
         with zipfile.ZipFile(bundle) as outer:
             problems = _check_loader(outer, manifest["loader"])
+            parts = manifest.get("parts")
+            # A split bundle's layers are files in the folder beside it.
+            source = (bundle.parent / parts).joinpath if parts else None
             for member, layer in sorted(_layers(manifest).items()):
-                problems += _check_layer(outer, member, layer)
+                opener = (lambda m: source(m).open("rb")) if source else outer.open
+                problems += _check_layer(opener, member, layer)
             return problems
     except (OSError, zipfile.BadZipFile) as e:
         return [f"corrupted: {bundle.name} can't be read ({type(e).__name__}: {e})"]

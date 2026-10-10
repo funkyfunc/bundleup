@@ -31,6 +31,7 @@ KEYS = {
     "output": "output",
     "strict": "strict",
     "max-size": "max_size",
+    "split": "split",
 }
 BOOLEANS = {"strict"}
 # Keys that also take a list: a .pyz for several Pythons or platforms (ADR-0038).
@@ -99,8 +100,8 @@ def apply(options: BuildOptions) -> tuple[BuildOptions, list[str]]:
             raise _invalid(
                 where, f"`{key}` must be {kind}", f"for example: {key} = {_example(key)}"
             )
-        if key == "max-size":  # "30MB", as on the command line
-            if options.max_size is None:
+        if key in ("max-size", "split"):  # "30MB", as on the command line
+            if getattr(options, field) is None:
                 try:
                     changes[field] = parse_size(str(value))
                 except UsageError as e:
@@ -122,4 +123,6 @@ def apply(options: BuildOptions) -> tuple[BuildOptions, list[str]]:
 
 
 def _example(key: str) -> str:
-    return {"strict": "true", "format": '"lambda"', "max-size": '"30MB"'}.get(key, '"..."')
+    return {"strict": "true", "format": '"lambda"', "max-size": '"30MB"', "split": '"100MB"'}.get(
+        key, '"..."'
+    )

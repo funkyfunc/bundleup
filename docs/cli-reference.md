@@ -35,10 +35,7 @@ bugs: https://github.com/funkyfunc/bundleup/issues
 ## `bundleup build`
 
 ```
-usage: bundleup build [-h] [-o FILE] [--format FORMAT] [--python VERSION] [--entry NAME]
-                      [--against FILE] [--python-platform OS] [--locked | --frozen] [--strict]
-                      [--max-size SIZE] [--smoke [ARGS]] [--json] [-q] [-v] [--color WHEN]
-                      [path]
+usage: bundleup build [options] [path]
 
 Bundle a project, a folder of modules or a script; locked or not.
 
@@ -58,6 +55,7 @@ options:
   --frozen              bundle the lock as it is, without checking it (as in uv)
   --strict              warnings fail too (errors always do)
   --max-size SIZE       fail if the output is bigger (30MB) [env: BUNDLEUP_MAX_SIZE]
+  --split SIZE          no file bigger: a .pyz + parts folder (100MB) [env: BUNDLEUP_SPLIT]
   --smoke [ARGS]        run it once, fresh home, no network (default args: --help)
   --json                print one JSON document on stdout
   -q, --quiet           -q: warnings and errors only; -qq: errors
@@ -72,10 +70,7 @@ examples:
 ## `bundleup check`
 
 ```
-usage: bundleup check [-h] [--format FORMAT] [--python VERSION] [--entry NAME] [--against FILE]
-                      [--python-platform OS] [--locked | --frozen] [--strict] [--also-platform OS]
-                      [--matrix] [--audit] [--json] [-q] [-v] [--color WHEN]
-                      [path]
+usage: bundleup check [options] [path]
 
 Install and compile like `build`, then report what won't work in a bundle and how big each package is. Every build runs the same checks.
 

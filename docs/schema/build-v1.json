@@ -54,6 +54,13 @@
               "type": "string",
               "description": "Relative to the project directory when inside it"
             },
+            "parts": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "description": "With --split, the folder of parts beside the output when the bundle didn't fit in one file (added within version 1, ADR-0045); size_bytes counts them too"
+            },
             "size_bytes": {
               "type": "integer",
               "minimum": 0

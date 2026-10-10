@@ -43,6 +43,11 @@ MEMBERS = ["payload.zip"]
 # A bundle for several platforms (ADR-0038): one dict per payload with the settings above in
 # lower case ("members", "dirname", "python", ...); the first that fits this machine is used.
 PAYLOADS = []  # type: list[dict[str, Any]]
+# `--split`: the folder beside the bundle that holds the members above instead of the bundle,
+# and each member's sha256, checked before unpacking (a part from another build would otherwise
+# be unpacked under this build's name).
+PARTS = None  # type: str | None
+SHA256 = {}  # type: dict[str, str]
 # --- end config ---
 
 _ARCHIVE = os.path.dirname(os.path.abspath(__file__))
@@ -513,9 +518,44 @@ def _pyc_path(member: str, final: str) -> "str | None":
     return os.path.join(prefix, os.path.splitdrive(final)[1].lstrip("\\/"), head, name)
 
 
+def _parts() -> "list[str]":
+    """The paths of a split bundle's parts, after checking each one is there and unchanged."""
+    import hashlib
+
+    folder = os.path.join(os.path.dirname(_ARCHIVE), str(PARTS))
+    paths = []
+    for member in MEMBERS:
+        path = os.path.join(folder, member)
+        digest = hashlib.sha256()
+        try:
+            with open(path, "rb") as f:
+                for chunk in iter(lambda: f.read(1 << 20), b""):
+                    digest.update(chunk)
+        except OSError:
+            _fail(
+                "this bundle is split, and its part %s is missing from %s.\n"
+                "Copy the whole %s folder along with %s."
+                % (member, folder, PARTS, os.path.basename(_ARCHIVE))
+            )
+        if digest.hexdigest() != SHA256.get(member):
+            _fail(
+                "this bundle's part %s doesn't match it (it's from another build, or damaged).\n"
+                "Copy %s and its %s folder again, from the same build."
+                % (path, os.path.basename(_ARCHIVE), PARTS)
+            )
+        paths.append(path)
+    return paths
+
+
 def _unpack(dest: str, final: str) -> None:
     import zipfile
 
+    if PARTS:
+        made = set()  # type: set[str]
+        for path in _parts():
+            with zipfile.ZipFile(path) as part:
+                _unpack_zip(part, dest, final, made)
+        return
     with open(_ARCHIVE, "rb") as f:
         outer = zipfile.ZipFile(f)
         infos = [outer.getinfo(name) for name in MEMBERS]

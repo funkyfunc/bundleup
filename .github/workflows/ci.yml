@@ -160,6 +160,14 @@ jobs:
           --python-platform aarch64-apple-darwin --python-platform x86_64-apple-darwin
           --python-platform x86_64-pc-windows-msvc --python-platform x86_64-manylinux_2_28
           -o skill/deps.pyz
+      - name: The same, split into files of at most 20 MB (--split, ADR-0045)
+        run: >
+          uv run bundleup build gauntlet/skill --entry python --python 3.12 --strict
+          --python-platform aarch64-apple-darwin --python-platform x86_64-apple-darwin
+          --python-platform x86_64-pc-windows-msvc --python-platform x86_64-manylinux_2_28
+          --split 20MB -o skill/split/deps.pyz
+          && test -d skill/split/deps.pyz.parts
+          && test -z "$(find skill/split -type f -size +20000000c)"
       - uses: actions/upload-artifact@v7
         with:
           name: skill
@@ -190,6 +198,8 @@ jobs:
           out=$("$py" skill/deps.pyz gauntlet/skill/scripts/run_sibling.py); echo "$out"
           [[ "$out" == "SKILL OK ['from-sibling'] True"* ]]
           if [ "$RUNNER_OS" = Windows ]; then [[ "$out" == *"win32api True"* ]]; fi
+          out=$("$py" skill/split/deps.pyz gauntlet/skill/scripts/make_deck.py b); echo "$out"
+          [[ "$out" == "SKILL OK ['b'] True"* ]]
 
   docker:
     # The Docker recipe (docs/recipes.md): a native bundle copied onto python:3.12-slim runs as is,

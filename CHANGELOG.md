@@ -13,8 +13,8 @@ The first working release. From a project with `uv.lock` or `pylock.toml`, or a 
   for, or, with several `--python`/`--python-platform`, one file with a payload for each. Started
   with the wrong Python, a bundle runs itself again with a matching installed one. Also `--format
   dir` (a plain directory for host applications) and `--format lambda` (an AWS Lambda zip),
-  builds for other platforms (`--python-platform`), and `--max-size` (refuse an output that's too
-  big). Destinations such as Lambda and Claude API Skills are tested
+  builds for other platforms (`--python-platform`), `--max-size` (refuse an output that's too
+  big) and `--split` (no file over a size: a small `.pyz` and a folder of parts). Destinations such as Lambda and Claude API Skills are tested
   [recipes](docs/recipes.md), not named targets.
 - `--entry python`: a `.pyz` that runs the scripts it's given (`python deps.pyz tool.py`), so
   one bundle serves every script of a skill. A bundle for several platforms stores each file

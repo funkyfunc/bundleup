@@ -99,6 +99,7 @@ def parsers() -> dict[str, argparse.ArgumentParser]:
     build = commands.add_parser(
         "build",
         help="bundle a project or script into one .pyz",
+        usage="%(prog)s [options] [path]",  # the options are listed below (rule 32: ~30 lines)
         description="Bundle a project, a folder of modules or a script; locked or not.",
         epilog=BUILD_EXAMPLES,
         formatter_class=_HelpFormatter,
@@ -109,6 +110,7 @@ def parsers() -> dict[str, argparse.ArgumentParser]:
     check = commands.add_parser(
         "check",
         help="report what won't survive bundling, without writing a bundle",
+        usage="%(prog)s [options] [path]",
         description="Install and compile like `build`, then report what won't work in a bundle "
         "and how big each package is. Every build runs the same checks.",
         epilog=CHECK_EXAMPLES,
@@ -272,6 +274,13 @@ def _add_build_options(command: argparse.ArgumentParser, *, output: bool) -> Non
             help=_env_help("fail if the output is bigger (30MB)", "BUNDLEUP_MAX_SIZE"),
         )
         command.add_argument(
+            "--split",
+            type=_max_size,
+            metavar="SIZE",
+            default=os.environ.get("BUNDLEUP_SPLIT"),
+            help=_env_help("no file bigger: a .pyz + parts folder (100MB)", "BUNDLEUP_SPLIT"),
+        )
+        command.add_argument(
             "--smoke",
             nargs="?",
             const="",
@@ -389,6 +398,9 @@ def _success_lines(result: BuildResult, style: Style) -> list[str]:
     details = [_payloads_line(result.payloads) if result.payloads else target, packages]
     if result.format == "lambda" and result.handler:
         details.append(f"handler {result.handler}")
+    if result.parts:
+        count = plural(sum(1 for _ in result.parts.iterdir()), "part")
+        details.append(f"{count} in {_shown(result.parts)}/, ship it alongside")
     if result.smoke:
         offline = ", offline" if result.smoke.network_blocked else ""
         details.append(f"ran once in {result.smoke.seconds:.1f}s{offline}")
@@ -428,6 +440,7 @@ def _options(opts: argparse.Namespace) -> BuildOptions:
         strict=opts.strict,
         format=opts.format,
         max_size=getattr(opts, "max_size", None),
+        split=getattr(opts, "split", None),
         smoke=_smoke_args(getattr(opts, "smoke", None)),
         against=opts.against,
     )

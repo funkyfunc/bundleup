@@ -100,6 +100,9 @@ class BuildOptions:
     format: Format | None = None
     # The most the output may be, in bytes: over it is an error, before writing (ADR-0039).
     max_size: int | None = None
+    # No file over this many bytes (`--split`): a bundle that doesn't fit in one is written as a
+    # small .pyz and a folder of parts beside it (ADR-0045).
+    split: int | None = None
     # A destination described as data (`--against FILE`, ADR-0044): its settings fill what isn't
     # set, and the result reports its facts.
     against: Path | None = None
@@ -136,6 +139,9 @@ class BuildResult:
     payloads: list[dict[str, object]] = field(default_factory=list)
     smoke: SmokeResult | None = None  # what --smoke ran, if it did
     against: TargetFile | None = None  # the --against file, if one was given
+    # `--split`: the folder of parts beside `output`, when the bundle didn't fit in one file;
+    # size_bytes counts them too.
+    parts: Path | None = None
 
     @property
     def handler(self) -> str | None:
@@ -150,8 +156,15 @@ class BuildResult:
             output = self.output.relative_to(self.project_dir).as_posix()
         except ValueError:
             output = str(self.output)
+        parts = None
+        if self.parts is not None:
+            try:
+                parts = self.parts.relative_to(self.project_dir).as_posix()
+            except ValueError:
+                parts = str(self.parts)
         return {
             "output": output,
+            "parts": parts,
             "size_bytes": self.size_bytes,
             "name": self.name,
             "version": self.version,
@@ -228,6 +241,7 @@ def build(
                 progress=report,
                 max_size=options.max_size,
                 strict=options.strict,
+                split=options.split,
             )
             if options.smoke is not None:
                 steps.start("smoke")
@@ -254,9 +268,15 @@ def build(
             partial.replace(output)
         steps.finish()
     size = output.stat().st_size if output.is_file() else sum(x.size_bytes for x in p.sizes)
+    parts = output.with_name(f"{output.name}.parts")
+    if fmt == "pyz" and options.split is not None and parts.is_dir():
+        size += sum(x.stat().st_size for x in parts.iterdir())
+    else:
+        parts = None
     return BuildResult(
         output=output,
         size_bytes=size,
+        parts=parts,
         name=p.source.name,
         version=p.version,
         packages=p.packages,
@@ -396,6 +416,13 @@ def _settle(options: BuildOptions) -> tuple[BuildOptions, Format]:
             "--entry python makes a .pyz that runs the scripts it's given",
             hint=f"drop --entry: a {options.format} output's host decides what runs",
         )
+    if options.split is not None and (options.format or "pyz") != "pyz":
+        raise UsageError(
+            "--split cuts a .pyz into parts",
+            hint=f"drop --split: a {options.format} output is written as it is",
+        )
+    if options.split is not None and options.split <= 0:
+        raise UsageError("--split must be more than 0", hint="for example: --split 100MB")
     if options.max_size is not None and options.max_size <= 0:
         raise UsageError("--max-size must be more than 0", hint="for example: --max-size 30MB")
     return options, _format(options)

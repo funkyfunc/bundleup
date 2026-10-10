@@ -58,10 +58,13 @@ provide, so a missing dependency shows up before your users find it.
   per platform. Measured 2026-10-07 for python-pptx, lxml, Pillow, PyMuPDF, xlsxwriter and
   pywin32 on the four platforms above: 144 MiB for one Python, 230 MiB for three, 314 MiB for
   five; PyMuPDF is about half (without it, python-pptx and pywin32 for the same four platforms
-  make 55 MiB: the `skill` CI job builds that, then runs the scripts on Linux, Windows and macOS). Over 100 MB, bundleup warns (`large-bundle`): GitHub refuses such
-  files, so the repository a skill is installed from needs Git LFS, or fewer platforms or Pythons.
-  **Check that your skill's delivery channel fetches Git LFS files** before relying on it; that
-  isn't verified for agent package managers.
+  make 55 MiB: the `skill` CI job builds that, then runs the scripts on Linux, Windows and macOS).
+  Over 100 MB, bundleup warns (`large-bundle`): GitHub refuses such files. **Add `--split 100MB`**
+  (or `split = "100MB"` under `[tool.bundleup]`): a bundle that doesn't fit becomes a small
+  `deps.pyz` and a `deps.pyz.parts/` folder beside it, no file over 100 MB, so no Git LFS
+  ([ADR-0045](adr/0045-split-a-bundle-into-parts.md)). Commit both; SKILL.md's command doesn't
+  change. A missing or mismatched part is refused by name. CI builds the skill with `--split 20MB`
+  and runs it on all three OSes.
 - **Python must be installed.** A bundle needs a Python 3 on the user's machine. macOS has one
   (Apple's 3.9, if the developer tools are installed); many Windows machines don't, and `python`
   there may be the Microsoft Store placeholder, which isn't Python. Windows users need Python from

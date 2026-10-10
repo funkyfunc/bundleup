@@ -1,7 +1,4 @@
-usage: bundleup check [-h] [--format FORMAT] [--python VERSION] [--entry NAME] [--against FILE]
-                      [--python-platform OS] [--locked | --frozen] [--strict] [--also-platform OS]
-                      [--matrix] [--audit] [--json] [-q] [-v] [--color WHEN]
-                      [path]
+usage: bundleup check [options] [path]
 
 Install and compile like `build`, then report what won't work in a bundle and how big each package is. Every build runs the same checks.
 

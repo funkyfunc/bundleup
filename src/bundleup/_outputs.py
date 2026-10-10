@@ -19,6 +19,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import re
 import shutil
 import zipfile
 from collections.abc import Iterable
@@ -39,6 +40,7 @@ from ._payload import (
     Prepared,
     pth_files,
     runtime_needs,
+    split_layer,
     verify_payload,
     write_layers,
     write_payload,
@@ -114,19 +116,23 @@ def write_bundle(
     loader_pyc: Path,
     manifest_json: bytes,
     max_size: int | None = None,
+    parts: str | None = None,
+    split: int | None = None,
 ) -> None:
     """Write shebang + outer zip to a temporary file, then rename it over `output`. `payloads`:
     member name -> payload zip (one, `payload.zip`, unless the bundle is for several platforms).
-    The finished file is checked against `max_size` before it replaces anything."""
+    The finished file is checked against `max_size` before it replaces anything. With `parts`
+    (`--split`), the payloads go into that folder beside `output` instead, written first."""
     output.parent.mkdir(parents=True, exist_ok=True)
     tmp = output.with_name(f".{output.name}.tmp-{os.getpid()}")
+    folder = output.with_name(parts or f"{output.name}.parts")
     try:
         with open(tmp, "wb") as f:
             # Plain python3 (works everywhere, also with Windows' py launcher); a wrong version
             # re-runs itself with a matching one (ADR-0036).
             f.write(b"#!/usr/bin/env python3\n")
             with zipfile.ZipFile(f, "w", zipfile.ZIP_STORED) as zf:
-                for member, payload in sorted(payloads.items()):
+                for member, payload in sorted(payloads.items()) if not parts else []:
                     info = zipfile.ZipInfo(member, FIXED_TIME)
                     info.external_attr = 0o100644 << 16
                     big = payload.stat().st_size > 0x7FFFFFFF
@@ -141,11 +147,51 @@ def write_bundle(
                 info.compress_type = zipfile.ZIP_DEFLATED  # can be MBs for big bundles
                 zf.writestr(info, manifest_json)
         tmp.chmod(0o755)
-        check_size(tmp.stat().st_size, max_size, [])  # exact: loader and manifest included
+        size = tmp.stat().st_size + sum(p.stat().st_size for p in payloads.values()) * bool(parts)
+        check_size(size, max_size, [])  # exact: loader and manifest included
+        if split is not None and tmp.stat().st_size > split:
+            alone = " alone (its loader and manifest)" if parts else ""
+            raise UsageError(
+                f"the .pyz{alone} would be {describe_size(tmp.stat().st_size)}, over --split "
+                f"{describe_size(split)}",
+                hint="give --split a bigger size",
+            )
+        _replace_parts(folder, payloads if parts else None)
         tmp.replace(output)
     finally:
         if tmp.exists():
             tmp.unlink()
+
+
+PART_NAME = re.compile(r"layer-[0-9a-f]{16}\.zip")
+
+
+def _replace_parts(folder: Path, payloads: dict[str, Path] | None) -> None:
+    """Write a split bundle's parts folder (a new one, renamed over the old), or remove a stale
+    one an earlier `--split` build left beside the output. Never touches a folder that holds
+    anything but parts."""
+    ours = folder.is_dir() and all(PART_NAME.fullmatch(x.name) for x in folder.iterdir())
+    if folder.exists() and not ours:
+        if payloads is None:
+            return  # not ours, and not needed: leave it alone
+        raise UsageError(
+            f"{folder} already exists and isn't a parts folder bundleup wrote",
+            hint="remove it, or choose another place with -o",
+        )
+    old = folder.with_name(f".{folder.name}.old-{os.getpid()}")
+    new = folder.with_name(f".{folder.name}.tmp-{os.getpid()}")
+    try:
+        if payloads is not None:
+            new.mkdir()
+            for member, payload in payloads.items():
+                shutil.copyfile(payload, new / member)
+        if folder.exists():
+            folder.rename(old)
+        if payloads is not None:
+            new.rename(folder)
+    finally:
+        shutil.rmtree(new, ignore_errors=True)
+        shutil.rmtree(old, ignore_errors=True)
 
 
 DIR_MANIFEST = "bundleup-manifest.json"  # in a `dir` output and at the top of a Lambda zip
@@ -193,10 +239,12 @@ def write_pyz(
     progress: Progress,
     max_size: int | None = None,
     strict: bool = False,
+    split: int | None = None,
 ) -> list[Diagnostic]:
     """The default: shebang + outer zip with the loader, the manifest and the payload, or one
     payload per platform and Python version when there are several (ADR-0038). Refuses, before
-    writing, a bundle over `max_size` bytes (ADR-0039)."""
+    writing, a bundle over `max_size` bytes (ADR-0039). With `split`, a bundle that wouldn't fit
+    in one file of that size is written as a small .pyz and a folder of parts (ADR-0045)."""
     first = ps[0]
     assert first.entry is not None  # resolved for every .pyz
     name = safe_name(first.source.name)
@@ -208,9 +256,13 @@ def write_pyz(
     else:
         layers = write_layers([p.site for p in ps], stage)
     total = sum(layer.path.stat().st_size for layer in layers)
+    parts = None
+    if split is not None and total + SPLIT_ROOM > split:
+        parts = f"{output.name}.parts"
+        layers = [piece for x in layers for piece in split_layer(x, split, stage)]
     diags: list[Diagnostic] = []
     check_size(total, max_size, diags)
-    if max_size is None and total > LARGE:
+    if max_size is None and split is None and total > LARGE:
         diags.append(_large(total, ps))
         if strict:  # before anything is written, as for every other warning (fifth review)
             raise CheckFailedError(
@@ -231,7 +283,8 @@ def write_pyz(
     settings = []
     for p, own in zip(ps, mine):
         # A payload's unpacked copy is named after its contents: its layers' hashes.
-        digest = own[0].digest if len(ps) == 1 else _combined(layer.digest for layer in own)
+        one = len(ps) == 1 and len(own) == 1
+        digest = own[0].digest if one else _combined(layer.digest for layer in own)
         members = [layer.member for layer in own]
         settings.append(_loader_settings(p, members=members, dirname=f"{name}-{digest[:16]}"))
     main = settings[0]
@@ -250,6 +303,8 @@ def write_pyz(
         "MACOS": main["macos"],
         "MEMBERS": main["members"],
         "PAYLOADS": settings if len(ps) > 1 else [],
+        "PARTS": parts,
+        "SHA256": {layer.member: layer.digest for layer in layers} if parts else {},
     }
     loader, loader_pyc = stage / "__main__.py", stage / "__main__.pyc"
     loader.write_text(render_loader(config), encoding="utf-8")
@@ -264,7 +319,7 @@ def write_pyz(
         "__main__.py": _verify.record_hash(loader.read_bytes()),
         "__main__.pyc": _verify.record_hash(loader_pyc.read_bytes()),
     }
-    if len(ps) == 1:
+    if len(ps) == 1 and len(layers) == 1 and not parts:
         p, (layer,) = first, layers
         manifest_json = manifest(
             source=p.source,
@@ -283,7 +338,7 @@ def write_pyz(
             reach=p.reach,
         )
     else:
-        manifest_json = _multi_manifest(ps, layers, settings, locked, hashes)
+        manifest_json = _multi_manifest(ps, layers, settings, locked, hashes, parts)
     payloads = {layer.member: layer.path for layer in layers}
     write_bundle(
         output,
@@ -292,6 +347,8 @@ def write_pyz(
         loader_pyc=loader_pyc,
         manifest_json=manifest_json,
         max_size=max_size,
+        parts=parts,
+        split=split,
     )
     return diags
 
@@ -306,6 +363,7 @@ def _multi_manifest(
     settings: list[dict[str, object]],
     locked: list[list[_verify.LockedPackage]],
     loader: dict[str, str],
+    parts: str | None = None,
 ) -> bytes:
     """The manifest of a bundle for several platforms: the shared fields once, each layer with
     its hash and files, then each payload with its layers, target and packages (ADR-0038)."""
@@ -331,6 +389,7 @@ def _multi_manifest(
         "entry": list(first.entry) if first.entry else None,
         "format": "pyz",
         "loader": loader,
+        "parts": parts,  # --split: the folder beside the bundle that holds the layers
         "layers": {
             layer.member: {
                 "sha256": layer.digest,
@@ -416,6 +475,10 @@ def stage_lambda(p: Prepared, *, stage: Path, steps: Steps) -> Path:
     return staged
 
 
+# Room for the loader and the (compressed) manifest: a bundle whose payloads come this close to
+# --split is split, since it wouldn't fit in one file.
+SPLIT_ROOM = 10**6
+
 # GitHub refuses files over 100 MB, so a repository, or a skill installed from one, can't hold a
 # bigger bundle without Git LFS (docs.github.com, "About large files on GitHub", 2026-10-07).
 LARGE = 100 * 10**6
@@ -431,8 +494,8 @@ def _large(total: int, ps: list[Prepared]) -> Diagnostic:
         "warning",
         f"the bundle is {describe_size(total)}: hard to ship as one file (GitHub, for one, "
         "refuses files over 100 MB, so a repository needs Git LFS for it)",
-        hint=f"the largest packages{each}, unpacked: {largest}; fewer --python or "
-        "--python-platform values make it smaller, and --max-size makes a limit an error",
+        hint=f"the largest packages{each}, unpacked: {largest}; --split 100MB writes it as "
+        "files under 100 MB each; fewer --python or --python-platform values make it smaller",
     )
 
 

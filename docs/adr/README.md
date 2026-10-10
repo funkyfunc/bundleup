@@ -53,3 +53,4 @@ and change only the old one's status line.
 | [0042](0042-smoke-runs-the-bundle-once.md) | `--smoke` runs the finished bundle once before shipping | Accepted |
 | [0043](0043-check-audit-asks-pypi-about-the-lock.md) | `check --audit` asks PyPI about the locked packages | Accepted |
 | [0044](0044-destinations-as-data-files.md) | Destinations described as data files (`--against FILE`) | Accepted |
+| [0045](0045-split-a-bundle-into-parts.md) | `--split SIZE`: a big bundle as a small `.pyz` and a folder of parts | Accepted |

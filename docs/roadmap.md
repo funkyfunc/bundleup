@@ -15,11 +15,9 @@ the owner hasn't confirmed is marked *Proposed*.
 **Focus (the owner, 2026-10-09):** more kinds of projects in, more kinds of outputs out. Recipes
 for particular hosts (MCP servers and the like) are niche; don't add them.
 
-22. **Skill bundles under GitHub's 100 MB per file**: the founding skill with PyMuPDF is one
-    144 MiB `.pyz`, which a git repository can't hold without Git LFS (and LFS support in agent
-    package managers is unverified). Write layers as separate files beside a small `.pyz`, or one
-    `.pyz` per platform with a tiny launcher; pick one in an ADR the owner confirms first
-    ([fifth review](findings/2026-10-08-fifth-review.md), Rec. 5).
+22. ~~**Skill bundles under GitHub's 100 MB per file**~~ done 2026-10-09
+    ([ADR-0045](adr/0045-split-a-bundle-into-parts.md)): `--split 100MB` writes a bundle that
+    doesn't fit as a small `.pyz` and a folder of parts; CI runs a split skill on three OSes.
 23. **Measure `pex --scie eager` on the founding skill**: size, first and warm start, and whether
     files delivered by git are quarantined (Gatekeeper, SmartScreen). It brings its own CPython,
     which answers Windows machines without Python; the result decides how the executables
@@ -176,7 +174,7 @@ What [MISSION.md](../MISSION.md) defines as done:
 |---|---|---|
 | ~~**AWS Lambda**~~ done (`--format lambda`; layers not yet) | `--format lambda`: a native Lambda zip or layer (not a `.pyz`: Lambda already unzips, and only `/tmp` is writable), with a size report against the 250 MB limit | Most common serverless request; hand-built packages often ship Mac wheels ([ADR-0014](adr/0014-output-formats-and-target-presets.md), accepted) |
 | **Container images (recipe and CI test done 2026-10-09; revisit)** | The 3-line Dockerfile that copies `app.pyz` onto `python:3.x-slim` ([recipe](recipes.md)); later perhaps a daemonless image writer (base image + one layer, as `ko` and `jib` do) | Round 4 recommends against building images ourselves; the owner wants it revisited ([2026-10-08 note](findings/2026-10-08-inputs-outputs-and-transforms.md)) |
-| **Skill bundles under GitHub's 100 MB per file** (fifth review, 2026-10-08) | Layers as separate files beside a small `.pyz` (or one `.pyz` per platform and a tiny launcher), so no file is over 100 MB and no Git LFS is needed | The founding skill with PyMuPDF is 144 MiB in one file; delivery through git (agent package managers) can't take that without LFS ([review](findings/2026-10-08-fifth-review.md)) |
+| ~~**Skill bundles under GitHub's 100 MB per file**~~ done 2026-10-09 (`--split`, ADR-0045) | Layers as separate files beside a small `.pyz` (or one `.pyz` per platform and a tiny launcher), so no file is over 100 MB and no Git LFS is needed | The founding skill with PyMuPDF is 144 MiB in one file; delivery through git (agent package managers) can't take that without LFS ([review](findings/2026-10-08-fifth-review.md)) |
 | **One literal `.py` file** (proposed 2026-10-08) | `--format py`: a readable header (contents, pinned versions as a PEP 723-style block) and the bundle as base64 with a ~30-line unpacker; `python tool.py` | Goes where only `.py` files go (gists, agent tools, uploads); +33% size, so for small tools. The owner's idea; [note](findings/2026-10-08-inputs-outputs-and-transforms.md) |
 | **Standalone executables** (high value, deferred; the owner wants a deep investigation, maybe our own format) | An opt-in output that pairs the `.pyz` with a portable Python (python-build-standalone), like pex `--scie` or PyApp: one file per OS/CPU that needs **nothing** installed | Serves desktop users without Python, the one big audience a `.pyz` can't reach (round 4). Deferred, not rejected: excluded from the core by [ADR-0002](adr/0002-target-the-runtime-only-tier.md) because of code signing/notarization and size (~tens of MB per platform), so it needs its own ADR first. Build on cross-target builds; consider handing off to pex's scie tooling rather than writing a launcher. First, measure `pex --scie eager` on the founding skill (it brings its own CPython; files delivered by git may not be quarantined, so signing may matter less there; fifth review). Then a research round on Node's single executable applications, Deno/Bun `compile`, scie, PyInstaller, PyOxidizer, Nuitka, Cosmopolitan Python and PEP 711 ([note](findings/2026-10-08-inputs-outputs-and-transforms.md)) |
 | **"No Python installed"** | A tiny launcher that downloads a Python on first run, then runs the bundle | The "user has no usable Python" problem ([primer](python-primer.md) §3) |

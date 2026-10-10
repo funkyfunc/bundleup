@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import os
-from dataclasses import dataclass
+import zipfile
+from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from typing import Literal, NamedTuple
 
@@ -21,6 +23,7 @@ from ._errors import (
     NoCompatibleWheelError,
     UsageError,
 )
+from ._formats import describe_size
 from ._python import Portability, PythonRange, Target
 from ._source import APP_MAINS, Source
 from ._steps import Progress, run
@@ -208,6 +211,58 @@ def write_layers(sites: list[Path], stage: Path) -> list[Layer]:
         )
         layers.append(Layer(f"layer-{digest[:16]}.zip", staged, digest, written, who))
     return layers
+
+
+# What a zip adds per file beyond its compressed bytes: a local header (30 bytes) and a central
+# directory entry (46), each with the name, plus room for ZIP64 extras.
+PER_FILE = 30 + 46 + 40
+END = 1024  # the end-of-central-directory records, with room to spare
+
+
+def split_layer(layer: Layer, budget: int, stage: Path) -> list[Layer]:
+    """`layer` as zips of at most `budget` bytes each, cutting between files in name order, so
+    each piece is an ordinary zip the loader unpacks in turn (`--split`). A layer that fits is
+    only renamed for its hash. Raises UsageError when one file alone is over the budget."""
+    with zipfile.ZipFile(layer.path) as zf:
+        infos = zf.infolist()
+        too_big = [i for i in infos if END + _cost(i) > budget]
+        if too_big:
+            biggest = max(too_big, key=lambda i: i.compress_size)
+            raise UsageError(
+                f"{biggest.filename} is {describe_size(biggest.compress_size)} compressed, too "
+                f"big for a part of at most {describe_size(budget)} (--split)",
+                hint="a file can't be cut in two: give --split a bigger size",
+            )
+        if layer.path.stat().st_size <= budget:
+            pieces = [infos]
+        else:
+            pieces: list[list[zipfile.ZipInfo]] = [[]]
+            size = END
+            for info in infos:
+                if size + _cost(info) > budget and pieces[-1]:
+                    pieces.append([])
+                    size = END
+                pieces[-1].append(info)
+                size += _cost(info)
+        if len(pieces) == 1:
+            return [replace(layer, member=f"layer-{layer.digest[:16]}.zip")]
+        out = []
+        workers = min(8, os.cpu_count() or 1)
+        for n, piece in enumerate(pieces):
+            staged = stage / f"{layer.path.stem}-part-{n}.zip"
+            members = [
+                _zipwriter.Member(i.filename, partial(zf.read, i), i.external_attr >> 16)
+                for i in piece
+            ]
+            digest, written = _zipwriter.write_zip(
+                staged, members, level=6, workers=workers, hasher=_verify.record_hash
+            )
+            out.append(Layer(f"layer-{digest[:16]}.zip", staged, digest, written, layer.owners))
+        return out
+
+
+def _cost(info: zipfile.ZipInfo) -> int:
+    return info.compress_size + PER_FILE + 2 * len(info.filename.encode())
 
 
 def verify_payload(
