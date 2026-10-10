@@ -110,6 +110,35 @@ Check it before shipping: `bundleup check tool.py --python 3.11 --python-platfor
 x86_64-manylinux_2_28 --strict`. If a package has no wheel for the sandbox, the error names the
 platforms it does have wheels for. Not yet tested in the real sandbox (it needs an API account).
 
+## An MCP server *(CI)*
+
+An MCP server written in Python needs its SDK and pydantic, whose core is compiled per platform
+and Python version; that's why MCP bundles (`.mcpb`) added a `uv` server type that installs
+dependencies at first run, with network (MCPB PR #158). A `.pyz` carries them instead, for every
+platform you build for, and runs with the user's Python, offline:
+
+```bash
+bundleup build my-server --python 3.12 \
+  --python-platform aarch64-apple-darwin --python-platform x86_64-apple-darwin \
+  --python-platform x86_64-pc-windows-msvc --python-platform x86_64-manylinux_2_28 \
+  -o server.pyz
+```
+
+Then point the client at it, for example in Claude Desktop's `claude_desktop_config.json`:
+
+```json
+{ "mcpServers": { "my-server": { "command": "python3", "args": ["/path/to/server.pyz"] } } }
+```
+
+(`python` instead of `python3` on Windows.) The server's `[project.scripts]` entry should call
+the SDK's `run()`, which serves MCP over stdio. CI builds [a one-tool server](../gauntlet/mcp/)
+with the official SDK (mcp 2.x) on macOS for three platforms, then initializes it and calls its
+tool on Linux, Windows and macOS (jobs `mcp`, `mcp-run`).
+
+Inside an `.mcpb`, ship `server.pyz` and run it with the user's Python: in `manifest.json`,
+`"server": {"type": "python", "entry_point": "server.pyz", "mcp_config": {"command": "python3",
+"args": ["${__dirname}/server.pyz"]}}`. Not yet tested in a real client.
+
 ## An AWS Lambda function *(CI)*
 
 ```bash

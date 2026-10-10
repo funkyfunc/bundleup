@@ -49,7 +49,8 @@ the owner hasn't confirmed is marked *Proposed*.
     versions, brand-new projects, from PyPI.
 34. ~~**Describe a target environment as data**~~ done 2026-10-09 ([ADR-0044](adr/0044-destinations-as-data-files.md)): `--against FILE`;
     the Claude API sandbox and Lambda files in docs/targets/.
-35. **MCP servers** (round 7): a recipe and a CI test for an MCP server shipped as a `.pyz`.
+35. ~~**MCP servers**~~ done 2026-10-09: [recipe](recipes.md); CI builds a server with the official
+    SDK for three platforms and speaks MCP to it on each OS.
 36. **One environment, each platform's format** (round 7b): recipes for Docker, Modal and E2B
     from a `.pyz`; Docker tested in CI.
 37. **Release 0.1.0**: everything is prepared ([docs/releasing.md](releasing.md), [CHANGELOG](../CHANGELOG.md),
@@ -175,7 +176,7 @@ What [MISSION.md](../MISSION.md) defines as done:
 | **One literal `.py` file** (proposed 2026-10-08) | `--format py`: a readable header (contents, pinned versions as a PEP 723-style block) and the bundle as base64 with a ~30-line unpacker; `python tool.py` | Goes where only `.py` files go (gists, agent tools, uploads); +33% size, so for small tools. The owner's idea; [note](findings/2026-10-08-inputs-outputs-and-transforms.md) |
 | **Standalone executables** (high value, deferred; the owner wants a deep investigation, maybe our own format) | An opt-in output that pairs the `.pyz` with a portable Python (python-build-standalone), like pex `--scie` or PyApp: one file per OS/CPU that needs **nothing** installed | Serves desktop users without Python, the one big audience a `.pyz` can't reach (round 4). Deferred, not rejected: excluded from the core by [ADR-0002](adr/0002-target-the-runtime-only-tier.md) because of code signing/notarization and size (~tens of MB per platform), so it needs its own ADR first. Build on cross-target builds; consider handing off to pex's scie tooling rather than writing a launcher. First, measure `pex --scie eager` on the founding skill (it brings its own CPython; files delivered by git may not be quarantined, so signing may matter less there; fifth review). Then a research round on Node's single executable applications, Deno/Bun `compile`, scie, PyInstaller, PyOxidizer, Nuitka, Cosmopolitan Python and PEP 711 ([note](findings/2026-10-08-inputs-outputs-and-transforms.md)) |
 | **"No Python installed"** | A tiny launcher that downloads a Python on first run, then runs the bundle | The "user has no usable Python" problem ([primer](python-primer.md) §3) |
-| **MCP servers (deferred)** | A bundled MCP server that starts with `python server.pyz` | Only for offline or single-platform cases: MCPB already moved Python to a host-side `uv` server type, and compiled deps (pydantic) can't be bundled portably for unknown desktops |
+| ~~**MCP servers**~~ recipe and CI test done 2026-10-09 | A bundled MCP server that starts with `python server.pyz` ([recipe](recipes.md)) | MCPB moved Python to a `uv` server type because vendored compiled dependencies broke per version; a multi-platform `.pyz` covers that offline (rounds 6 and 7) |
 | **Agents as operators (hypothesis)** | A bundleup skill so an agent can bundle a script it wrote (build where there's network, run in an offline sandbox) | Plausible and unserved, but no evidence of demand found yet; validate with users first |
 | **Notebooks (docs only)** | Document the recipe: `nbconvert` → PEP 723 script → bundleup | Magics and display calls break automatic conversion; a recipe is enough |
 
