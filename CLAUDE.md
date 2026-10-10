@@ -60,7 +60,10 @@ and git.
   version, each file stored once (ADR-0038). `--entry python` makes a bundle that runs the
   scripts it's given, one for all of a skill's scripts (ADR-0040). Packages come from the lock's
   own files and index, hash-checked (a company index works). A stale lock is an error (ADR-0033). Every build checks the code
-  and, for other platforms, wheel coverage from the lock (ADR-0024, ADR-0031).
+  and, for other platforms, wheel coverage from the lock (ADR-0024, ADR-0031). `--smoke` runs the
+  finished bundle once, offline, in a fresh home (ADR-0042); `check --audit` asks PyPI about the
+  locked packages (ADR-0043); `--against FILE` applies a destination described as data,
+  docs/targets/ (ADR-0044). Recipes tested in CI: skills, MCP servers, Docker, Lambda, Claude API.
 - **Runtime:** unpacks once to a content-addressed cache; checks Python version, platform, CPU,
   C library, macOS version; isolates from the machine's packages; children of the bundle's own
   interpreter see its packages, other Pythons don't (ADR-0027).
