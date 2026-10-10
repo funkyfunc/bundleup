@@ -77,6 +77,19 @@ def test_windows_line_endings_still_run_and_damage_is_reported(app: Path, tmp_pa
         verify(cut)
 
 
+def test_piped_to_python_it_says_to_save_it_first(app: Path, tmp_path: Path) -> None:
+    """`curl ... | python3 -` can't work (the packages are read from the file): one sentence,
+    not a traceback or, on the wrong Python, an exit 0 that did nothing (seventh review)."""
+    out = tmp_path / "tool.py"
+    build(BuildOptions(path=app, output=out, python=HERE, format="py"))
+    env = {"BUNDLEUP_CACHE": str(tmp_path / "cache"), "PATH": "", "SYSTEMROOT": "C:\\Windows"}
+    r = subprocess.run(
+        [sys.executable, "-"], input=out.read_text(), capture_output=True, text=True, env=env
+    )
+    assert r.returncode == 1 and "has to be saved as a file" in r.stderr, r.stderr
+    assert "Traceback" not in r.stderr
+
+
 def test_entry_python_and_several_platforms(app: Path, tmp_path: Path) -> None:
     other = "linux" if sys.platform == "win32" else "windows"
     out = tmp_path / "deps.py"

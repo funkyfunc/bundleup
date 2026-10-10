@@ -63,7 +63,9 @@ provide, so a missing dependency shows up before your users find it.
   (or `split = "100MB"` under `[tool.bundleup]`): a bundle that doesn't fit becomes a small
   `deps.pyz` and a `deps.pyz.parts/` folder beside it, no file over 100 MB, so no Git LFS
   ([ADR-0045](adr/0045-split-a-bundle-into-parts.md)). Commit both; SKILL.md's command doesn't
-  change. A missing or mismatched part is refused by name. CI builds the skill with `--split 20MB`
+  change. Each rebuild with new contents commits new parts, and git keeps the old ones: ten
+  rebuilds of a 144 MiB bundle pass GitHub's recommended 1 GB per repository, so rebuild the
+  committed bundle when dependencies change, not on every edit. A missing or mismatched part is refused by name. CI builds the skill with `--split 20MB`
   and runs it on all three OSes.
 - **Python must be installed** for a `.pyz`. macOS has one (Apple's 3.9, if the developer tools
   are installed); many Windows machines don't, and `python` there may be the Microsoft Store
@@ -238,7 +240,7 @@ work too:
 Tested: a script locked against a private index (a flat folder) builds and runs from it
 (`tests/test_index.py`).
 
-## A machine without Python *(CI)*
+## A machine without Python *(CI; experimental)*
 
 Build an executable that carries its own interpreter, one per OS and CPU, from any machine
 ([ADR-0047](adr/0047-standalone-executables.md)):
@@ -315,8 +317,9 @@ Diagnostics have stable codes (`syntax-error`, `data-files`, `pth-not-run`, `lam
 
 ## Many machines starting the same bundle (HPC, shared filesystems)
 
-A bundle unpacks once per machine into a cache. Point the cache at fast local storage, and clean
-it up later:
+A bundle unpacks once per machine into a cache. Point the cache at fast local storage (when
+`BUNDLEUP_CACHE` is set it's the only place a bundle looks, so a copy in a home folder on NFS
+can't win; ADR-0048), and clean it up later:
 
 ```bash
 BUNDLEUP_CACHE=/local/scratch/$USER python app.pyz

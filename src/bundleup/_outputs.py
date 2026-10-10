@@ -226,6 +226,7 @@ def _loader_settings(p: Prepared, *, members: list[str], dirname: str) -> dict[s
         "abiflags": target.abiflags if native else None,
         "target": target.describe(native, p.pythons, p.reach),
         "pth": pth_files(p.site),
+        "tag": target.cache_tag,
         "libc": needs.libc if native else None,
         "macos": needs.macos if native else None,
     }
@@ -242,6 +243,7 @@ def write_pyz(
     strict: bool = False,
     split: int | None = None,
     fmt: Format = "pyz",
+    warn_large: bool = True,
 ) -> list[Diagnostic]:
     """The default: shebang + outer zip with the loader, the manifest and the payload, or one
     payload per platform and Python version when there are several (ADR-0038). Refuses, before
@@ -262,9 +264,15 @@ def write_pyz(
     if split is not None and total + SPLIT_ROOM > split:
         parts = f"{output.name}.parts"
         layers = [piece for x in layers for piece in split_layer(x, split, stage)]
+        over = [x.member for x in layers if x.path.stat().st_size > split]
+        if over:  # the cut works from estimates: check what was written (seventh review)
+            raise BundleupError(
+                f"{over[0]} came out bigger than --split {describe_size(split)}",
+                hint="this is a bug in bundleup; a slightly smaller --split avoids it",
+            )
     diags: list[Diagnostic] = []
     check_size(total, max_size, diags)
-    if max_size is None and split is None and total > LARGE:
+    if warn_large and max_size is None and split is None and total > LARGE:
         diags.append(_large(total, ps))
         if strict:  # before anything is written, as for every other warning (fifth review)
             raise CheckFailedError(
@@ -299,6 +307,7 @@ def write_pyz(
         "MACHINE": main["machine"],
         "ABIFLAGS": main["abiflags"],
         "TARGET": main["target"],
+        "TAG": main["tag"],
         "ENTRY": tuple(first.entry),  # a plain tuple: the loader reads its repr
         "PTH": main["pth"],
         "LIBC": main["libc"],
@@ -349,7 +358,9 @@ def write_pyz(
         manifest_json = _multi_manifest(ps, layers, settings, locked, hashes, parts, fmt)
     payloads = {layer.member: layer.path for layer in layers}
     if fmt == "py":
-        write_py(output, code, payloads, manifest_json, stage=stage, max_size=max_size)
+        diags += write_py(
+            output, code, payloads, manifest_json, stage=stage, max_size=max_size, strict=strict
+        )
         return diags
     write_bundle(
         output,
@@ -372,7 +383,9 @@ def py_header(ps: list[Prepared], locked: list[list[_verify.LockedPackage]], nam
     syntax, which tools that read `script` blocks ignore, so nothing installs these packages),
     then how to run and check it."""
     first = ps[0]
-    packages = sorted({f"{x.name}=={x.version}" for each in locked for x in each})
+    packages = sorted(  # the project itself may have no version (a script, a folder)
+        {f"{x.name}=={x.version}" if x.version else x.name for each in locked for x in each}
+    )
     runs_on = "; ".join(p.target.describe(p.native, p.pythons, p.reach) for p in ps)
     fields = {
         "name": first.source.name,
@@ -403,9 +416,11 @@ def write_py(
     *,
     stage: Path,
     max_size: int | None,
-) -> None:
+    strict: bool = False,
+) -> list[Diagnostic]:
     """A .py bundle: `code`, then the zip a .pyz would carry (payloads and manifest, without the
-    loader), in base64 comment lines, so Python skips it at the cost of reading it (ADR-0046)."""
+    loader), in base64 comment lines, so Python skips it at the cost of reading it (ADR-0046).
+    Warns when that reading makes every start noticeably slower."""
     from ._loader import DATA_END, DATA_START
 
     inner = stage / "embedded.zip"
@@ -422,7 +437,25 @@ def write_py(
         zf.writestr(info, manifest_json)
     # 4/3 of the zip, plus a `#` and a line end per 76 characters.
     size = len(code.encode()) + len(DATA_START) + len(DATA_END) + inner.stat().st_size * 4 // 3
-    check_size(size + size // 76 * 2, max_size, [])
+    size += size // 76 * 2
+    check_size(size, max_size, [])
+    diags = []
+    if size > SLOW_PY:
+        diags.append(
+            Diagnostic(
+                "slow-start",
+                "warning",
+                f"the .py is {describe_size(size)}, and Python reads all of it on every start: "
+                f"about {size * 1.8 / 10**9:.2f} s more each time than the .pyz",
+                hint="a .py suits small tools; ship a .pyz (or --split it) where it can go",
+            )
+        )
+        if strict:  # before anything is written, as for every other warning
+            raise CheckFailedError(
+                "found 1 warning, so nothing was written",
+                diagnostics=diags,
+                hint="--strict makes warnings fail too; build without it to allow them",
+            )
     output.parent.mkdir(parents=True, exist_ok=True)
     tmp = output.with_name(f".{output.name}.tmp-{os.getpid()}")
     try:
@@ -437,6 +470,11 @@ def write_py(
     finally:
         if tmp.exists():
             tmp.unlink()
+    return diags
+
+
+# About 1.8 ms per MB on every start (ADR-0046): from 10 MB, +18 ms and more.
+SLOW_PY = 10 * 10**6
 
 
 def _combined(digests: Iterable[str]) -> str:

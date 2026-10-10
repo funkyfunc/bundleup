@@ -28,6 +28,9 @@ bundleup build --smoke          # then run it once: fresh home folder, no networ
 bundleup check --audit          # ask PyPI: vulnerable, yanked or brand-new dependencies?
 bundleup build --max-size 30MB # fail, writing nothing, if the bundle is bigger
 bundleup build --format dir     # a plain directory, for apps that load packages from one
+bundleup build --format py      # one plain-text .py file (for small tools: gists, uploads)
+bundleup build --split 100MB    # no file over 100 MB: a small .pyz and a folder of parts
+bundleup build --format exe     # experimental: an executable with its own Python, unsigned
 bundleup verify dist/app.pyz    # bundle and unpacked copy vs its manifest (corruption; not a signature)
 bundleup cache clean            # remove unpacked bundles not used for 30 days
 python dist/<name>.pyz          # run it: no install, no network
@@ -66,7 +69,7 @@ Python has three ways to hand a program to someone else, and the middle one is m
 
 | Ship as | The other machine needs | Problem |
 |---|---|---|
-| Standalone executable | Nothing | Per-OS builds, code signing, antivirus |
+| Standalone executable | Nothing | Per-OS builds, code signing, antivirus (bundleup can wrap a bundle as one, unsigned: `--format exe`) |
 | Source + `pip install` / `uv sync` | Python, an installer, network | The install step is where things break |
 | **One file that runs on the user's Python** | **Python** | **No easy, reliable tool. That's bundleup** |
 

@@ -39,9 +39,13 @@ A bundler in the spirit of esbuild: **one fast command, sensible defaults, one a
 - **Out:** one `.pyz`. Runs with `python app.pyz`; when it's pure Python, on every Python version
   the lock allows and on any OS ([ADR-0034](docs/adr/0034-pure-python-bundles-run-on-any-os.md));
   with compiled code, one `.pyz` can carry a payload per platform and Python version
-  ([ADR-0038](docs/adr/0038-one-pyz-for-several-platforms.md)). No install, no network. Thin variants from the same resolved
-  files: a plain directory for host apps and an AWS Lambda zip
-  ([ADR-0025](docs/adr/0025-dir-and-lambda-formats-and-presets.md)). Destinations are tested
+  ([ADR-0038](docs/adr/0038-one-pyz-for-several-platforms.md)). No install, no network. Other
+  outputs from the same resolved files: a plain directory for host apps and an AWS Lambda zip
+  ([ADR-0025](docs/adr/0025-dir-and-lambda-formats-and-presets.md)); the bundle as one plain-text
+  `.py` ([ADR-0046](docs/adr/0046-one-py-file-output.md)); a `.pyz` cut into parts under a size
+  ([ADR-0045](docs/adr/0045-split-a-bundle-into-parts.md)); and, for machines without Python, an
+  unsigned executable that carries its own interpreter
+  ([ADR-0047](docs/adr/0047-standalone-executables.md)). Destinations are tested
   recipes of ordinary flags, not named targets
   ([ADR-0039](docs/adr/0039-recipes-instead-of-target-presets.md)).
 - **Check:** a report of what will break once packed, *before* you ship: targets with no matching
@@ -57,8 +61,8 @@ A bundler in the spirit of esbuild: **one fast command, sensible defaults, one a
 
 | Not this | Why |
 |---|---|
-| A standalone executable | Reintroduces code signing. If needed later, hand off to `pex --scie` |
-| A single `.py` file that inlines everything | stickytape tried it. Breaks native code, data files and metadata |
+| A *signed* standalone executable | Code signing and notarization need a launcher of our own. `--format exe` builds unsigned ones (ADR-0047, changed 2026-10-09) |
+| A single `.py` file that inlines everything | stickytape tried it. Breaks native code, data files and metadata. `--format py` carries the bundle as data instead (ADR-0046) |
 | An in-memory importer | PyOxidizer tried it and died at the edges |
 | Tree-shaking or minification | Unsafe in Python (imports run code). Size is dominated by native wheels anyway |
 | A syntax downleveler (`--target` that rewrites code) | Little demand. We *check* the minimum version instead |

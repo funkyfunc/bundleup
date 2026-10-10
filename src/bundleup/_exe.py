@@ -22,14 +22,14 @@ import os
 import shutil
 import struct
 import subprocess
-import sys
 import tarfile
 import urllib.request
 from pathlib import Path
 
 from ._bytecode import cache_dir
-from ._errors import BundleupError, UsageError
-from ._outputs import check_size
+from ._errors import BundleupError, CheckFailedError, Diagnostic, UsageError
+from ._formats import describe_size
+from ._outputs import LARGE, check_size
 from ._platforms import Platform
 from ._python import Target
 from ._steps import Progress, ProgressEvent, run
@@ -70,15 +70,20 @@ UV_OS = {"darwin": "macos", "linux": "linux", "win32": "windows"}
 TIMEOUT = 60.0  # seconds per download read
 
 
-def host_platform() -> Platform:
-    """This machine as a build target, for an executable built without --python-platform."""
-    import platform
+CPUS = {"arm64": "aarch64", "amd64": "x86_64", "x64": "x86_64"}  # as Pythons report them -> uv's
 
-    arch = {"arm64": "aarch64", "amd64": "x86_64", "x64": "x86_64"}.get(
-        platform.machine().lower(), platform.machine().lower()
-    )
-    musl = sys.platform == "linux" and not os.confstr("CS_GNU_LIBC_VERSION")
-    return Platform(name="host", sys_platform=sys.platform, arch=arch, musl=musl)
+
+def host_platform(target: Target) -> Platform:
+    """The platform of the interpreter a build without --python-platform used (seventh review:
+    not bundleup's own process, which may run under Rosetta or be another CPU's Python)."""
+    arch = CPUS.get(target.machine.lower(), target.machine.lower())
+    musl = False
+    if target.platform == "linux":
+        try:
+            musl = not os.confstr("CS_GNU_LIBC_VERSION")
+        except (AttributeError, ValueError, OSError):  # not glibc: musl's confstr has no such name
+            musl = True
+    return Platform(name="host", sys_platform=target.platform, arch=arch, musl=musl)
 
 
 def exe_cache() -> Path:
@@ -97,7 +102,8 @@ def write_exe(
     stage: Path,
     progress: Progress,
     max_size: int | None = None,
-) -> None:
+    strict: bool = False,
+) -> tuple[str, list[Diagnostic]]:
     """The executable for `platform`: its launcher, an interpreter of the target's Python version
     with its standard library precompiled, and `pyz`, written next to `output` then renamed."""
     jump = fetch_jump(platform, progress)
@@ -136,11 +142,32 @@ def write_exe(
                     shutil.copyfileobj(src, out, 1 << 20)
             out.write(b"\n" + json.dumps(manifest, separators=(",", ":")).encode() + b"\n")
         tmp.chmod(0o755)
-        check_size(tmp.stat().st_size, max_size, [])
+        size = tmp.stat().st_size
+        check_size(size, max_size, [])
+        diags = [] if max_size is not None or size <= LARGE else [_large(size, python, pyz)]
+        if diags and strict:  # before replacing anything, as for every other warning
+            raise CheckFailedError(
+                "found 1 warning, so nothing was written",
+                diagnostics=diags,
+                hint="--strict makes warnings fail too; build without it to allow them",
+            )
         tmp.replace(output)
     finally:
         if tmp.exists():
             tmp.unlink()
+    return ".".join(map(str, _patch(python))), diags
+
+
+def _large(size: int, python: Path, pyz: Path) -> Diagnostic:
+    return Diagnostic(
+        "large-bundle",
+        "warning",
+        f"the executable is {describe_size(size)}: hard to ship as one file (GitHub, for one, "
+        "refuses files over 100 MB)",
+        hint=f"its Python is {describe_size(python.stat().st_size)} and the bundle "
+        f"{describe_size(pyz.stat().st_size)}; where Python is installed, a .pyz carries only "
+        "the bundle (and --split can cut it into parts)",
+    )
 
 
 def _file(path: Path, *, key: str, kind: str, name: str | None = None) -> dict[str, object]:
@@ -216,11 +243,18 @@ def fetch_python(
     it installs into a throwaway folder and the archive is taken from its download cache."""
     libc = ("musl" if platform.musl else "gnu") if platform.sys_platform == "linux" else "none"
     version = f"{target.version[0]}.{target.version[1]}"
-    key = f"cpython-{version}-{UV_OS[platform.sys_platform]}-{platform.arch}-{libc}"
-    folder = exe_cache() / "python" / key
-    found = sorted(folder.glob("*.tar.gz"))
+    where = f"{UV_OS[platform.sys_platform]}-{platform.arch}-{libc}"
+    folder = exe_cache() / "python" / f"cpython-{version}-{where}"
+    # The newest patch release uv knows, so security fixes arrive (seventh review); offline, the
+    # newest one kept here.
+    newest = _newest(uv, f"cpython-{version}-{where}", platform, libc, stage) or version
+    wanted = tuple(int(x) for x in newest.split("."))
+    found = sorted(
+        (x for x in folder.glob("*.tar.gz") if _patch(x)[: len(wanted)] == wanted), key=_patch
+    )
     if found:
         return found[-1]
+    key = f"cpython-{newest}-{where}"
     progress(
         ProgressEvent(
             "note",
@@ -248,6 +282,36 @@ def fetch_python(
     (folder / f".{name}.part").replace(folder / name)
     shutil.rmtree(installed, ignore_errors=True)
     return folder / name
+
+
+def _newest(uv: str, key: str, platform: Platform, libc: str, stage: Path) -> str | None:
+    """The newest patch version uv can download for `key` ("3.12.15"), or None if uv can't say
+    (offline lists still work: uv's list of downloads is built in)."""
+    command = [uv, "python", "list", key, "--only-downloads", "--all-platforms", "--all-arches"]
+    try:
+        out = subprocess.run(
+            [*command, "--output-format", "json"], capture_output=True, text=True, cwd=stage
+        )
+        found = json.loads(out.stdout) if out.returncode == 0 else []
+    except (OSError, ValueError):
+        return None
+    versions = [
+        tuple(entry["version_parts"][k] for k in ("major", "minor", "patch"))
+        for entry in found
+        if entry.get("arch") == platform.arch
+        and entry.get("libc") == libc
+        and entry.get("variant") == "default"
+        and entry.get("implementation") == "cpython"
+    ]
+    return ".".join(map(str, max(versions))) if versions else None
+
+
+def _patch(archive: Path) -> tuple[int, ...]:
+    """(3, 12, 15) from `cpython-3.12.15-20261003-...tar.gz`, for sorting and reporting."""
+    try:
+        return tuple(int(x) for x in archive.name.split("-")[1].split("+")[0].split("."))
+    except (IndexError, ValueError):
+        return ()
 
 
 def precompiled(archive: Path, target: Target, stage: Path) -> Path:
@@ -287,8 +351,13 @@ def precompiled(archive: Path, target: Target, stage: Path) -> Path:
     # The recorded source path without this build's temporary folder (Python replaces it with
     # the real one on import): the same bytes from any build.
     compile_all += ["--invalidation-mode", "unchecked-hash", "-s", str(tree), str(tree)]
-    # Some test data in the stdlib doesn't compile on purpose; compileall reports and goes on.
-    subprocess.run(compile_all, capture_output=True, check=False)
+    done = subprocess.run(compile_all, capture_output=True, text=True, check=False)
+    if done.returncode:  # the stdlib compiles cleanly (checked on 3.12's): a failure is real
+        raise BundleupError(
+            f"couldn't compile the standard library of {archive.name}",
+            detail=(done.stdout + done.stderr)[-2000:],
+            hint=f"{target.executable} compiled it; this is a bug, please report it",
+        )
     part = out.with_name(f".{out.name}.{os.getpid()}.part")
     try:
         # No time or name in gzip's header, so a rebuilt cache gives the same bytes.

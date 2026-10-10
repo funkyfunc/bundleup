@@ -18,7 +18,7 @@ and change only the old one's status line.
 | [0007](0007-gauntlet-is-the-contract.md) | The gauntlet is the acceptance test, and claims must be measured | Accepted |
 | [0008](0008-prototype-in-python.md) | Build in Python first, with a measured path to Rust | Accepted |
 | [0009](0009-name-bundleup.md) | Name the project `bundleup` | Accepted |
-| [0010](0010-bundle-format-and-loader.md) | Bundle format, loader and cache layout | Accepted (compression level superseded by 0020; child processes by 0027; one Python version, for pure-Python bundles, by 0030) |
+| [0010](0010-bundle-format-and-loader.md) | Bundle format, loader and cache layout | Accepted (compression level superseded by 0020; child processes by 0027; one Python version, for pure-Python bundles, by 0030; an explicit `BUNDLEUP_CACHE` by 0048) |
 | [0011](0011-cli-and-build-pipeline.md) | CLI shape and build pipeline | Accepted (pipeline); CLI superseded by 0016 |
 | [0012](0012-lead-with-what-it-does.md) | Describe bundleup by what it does, with use cases as examples | Accepted |
 | [0013](0013-agent-sandboxes-as-headline-use-case.md) | Agent sandboxes as the headline use case, served by target profiles and skill output | Accepted (positioning); features Proposed |
@@ -56,3 +56,4 @@ and change only the old one's status line.
 | [0045](0045-split-a-bundle-into-parts.md) | `--split SIZE`: a big bundle as a small `.pyz` and a folder of parts | Accepted |
 | [0046](0046-one-py-file-output.md) | `--format py`: the bundle as one plain-text `.py` file | Accepted |
 | [0047](0047-standalone-executables.md) | `--format exe`: a standalone executable that brings its own Python | Accepted |
+| [0048](0048-an-explicit-cache-is-the-only-cache.md) | An explicit `BUNDLEUP_CACHE` is the only cache folder | Accepted |

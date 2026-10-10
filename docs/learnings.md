@@ -6,6 +6,11 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-10** · review · When one output wraps another (an executable around a `.pyz`), every
+  report has to describe the outer one: the seventh review found the executable's target, smoke
+  test and size check all describing the `.pyz` inside. And a "first place to look" cache setting
+  isn't an override: a copy elsewhere won, which also hid a crash from this session's own manual
+  test (now ADR-0048). Evidence: [seventh review](findings/2026-10-10-seventh-review.md).
 - **2026-10-09** · executables · python-build-standalone ships no stdlib bytecode for macOS and
   Linux (3 of 1,090 modules), so an executable built on it compiles the stdlib on every run under
   `PYTHONDONTWRITEBYTECODE` (181 ms warm instead of 62): compile it at build time. Unpacking the

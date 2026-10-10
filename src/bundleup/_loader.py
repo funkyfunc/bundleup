@@ -29,6 +29,7 @@ PLATFORM = "darwin"  # type: str | None  # None: any OS (a pure bundle, ADR-0034
 MACHINE = None  # type: str | None  # set when the bundle contains native code
 ABIFLAGS = None  # type: str | None  # set when the bundle contains native code (POSIX only)
 TARGET = "Python 3.12 on macOS"
+TAG = "cpython-312"  # the cache tag of the interpreter the payload's bytecode was compiled for
 # ("call", module, attr) | ("module", module, "") | ("script", path inside the payload, "")
 # | ("python", "", ""): the bundle runs whatever it's given, as python does (`--entry python`)
 ENTRY = ("call", "app", "main")
@@ -53,8 +54,10 @@ SHA256 = {}  # type: dict[str, str]
 EMBEDDED = False
 # --- end config ---
 
-# The bundle file: the .pyz this runs from (as its __main__.py), or this .py itself.
-_ARCHIVE = os.path.abspath(__file__) if EMBEDDED else os.path.dirname(os.path.abspath(__file__))
+# The bundle file: the .pyz this runs from (as its __main__.py), or this .py itself. A .py piped
+# to Python (`curl ... | python3 -`) has no file: checked in _check.
+_FILE = os.path.abspath(globals().get("__file__") or "<none>")
+_ARCHIVE = _FILE if EMBEDDED else os.path.dirname(_FILE)
 # The lines around a .py bundle's data (found from the end: these constants come first).
 DATA_START = b"# --- bundleup data: base64 of a zip, read by the code above ---"
 DATA_END = b"# --- end of bundleup data ---"
@@ -158,6 +161,13 @@ def _machine() -> str:
 
 
 def _check() -> None:
+    if EMBEDDED and not os.path.isfile(_ARCHIVE):
+        # Piped (`curl ... | python3 -`) or run with -c: the data at the end of the file can't be
+        # read again, and a re-run with another Python would get an empty stdin (seventh review).
+        _fail(
+            "this bundle has to be saved as a file to run: its packages are read from the file "
+            "itself.\nSave it (for example as %s.py), then run python3 %s.py" % (NAME, NAME)
+        )
     rerun = os.environ.pop(RERUN, None)  # never left for the app's own children
     here = sys.version_info[:2]
     if here < PYTHON or (PYTHON_MAX is not None and here > PYTHON_MAX):
@@ -287,7 +297,7 @@ def _select() -> None:
     this platform but another Python version still gets picked, so _check explains (or re-runs
     with a matching Python); nothing for this platform at all is reported here."""
     global DIRNAME, PYTHON, PYTHON_MAX, PLATFORM, MACHINE, ABIFLAGS, TARGET, PTH, LIBC, MACOS
-    global MEMBERS
+    global MEMBERS, TAG
     if not PAYLOADS:
         return
     here = sys.version_info[:2]
@@ -316,6 +326,7 @@ def _select() -> None:
     PYTHON_MAX = tuple(chosen["python_max"]) if chosen["python_max"] else None
     PLATFORM, MACHINE, ABIFLAGS = chosen["platform"], chosen["machine"], chosen["abiflags"]
     LIBC, MACOS = chosen["libc"], chosen["macos"]
+    TAG = chosen.get("tag", TAG)
 
 
 def _check_system() -> None:
@@ -347,10 +358,10 @@ def _roots(archive: str) -> "list[tuple[str, bool]]":
 
     Never the working directory.
     """
-    roots = []
     explicit = os.environ.get("BUNDLEUP_CACHE")
-    if explicit:
-        roots.append((os.path.abspath(explicit), False))
+    if explicit:  # the only place, when set: a copy elsewhere must not win (ADR-0048)
+        return [(os.path.abspath(explicit), False)]
+    roots = []
     home = os.path.expanduser("~")
     user_cache = None
     if sys.platform == "win32":
@@ -731,6 +742,28 @@ def _extract() -> str:
     )
 
 
+def _bytecode_for_here(site: str) -> None:
+    """With PYTHONDONTWRITEBYTECODE, Python never caches what it compiles, so a payload run by
+    another version than the one it was compiled for (a range, ADR-0030; a re-run on the Mac)
+    would compile every module it imports on every start: 85 ms instead of 27 (seventh review).
+    Compile the payload once for this interpreter instead, then leave a mark. One stat on the warm
+    path, and only when the variable is set; nothing in a cache we can't write to."""
+    tag = getattr(sys.implementation, "cache_tag", None)
+    if not sys.dont_write_bytecode or not tag or tag == TAG:
+        return
+    marker = os.path.join(site, "__bundleup__", ".compiled-" + tag)
+    if os.path.exists(marker) or not os.access(site, os.W_OK):
+        return
+    import compileall
+
+    compileall.compile_dir(site, quiet=2)  # writes even under PYTHONDONTWRITEBYTECODE
+    try:
+        with open(marker, "w"):
+            pass
+    except OSError:
+        pass  # marked or not, the bytecode is there
+
+
 def _activate(site: str) -> None:
     """Put the payload on sys.path (where a venv's site-packages would be) and set up child
     processes: the payload's own runtime module does both (ADR-0027), so the loader and the
@@ -857,6 +890,7 @@ if __name__ == "__main__":
     _select()
     _check()
     _site = _find() or _extract()
+    _bytecode_for_here(_site)
     _hold(_site)
     _activate(_site)
     _run(_site)

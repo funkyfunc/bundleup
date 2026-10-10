@@ -3,7 +3,8 @@
 - **Status:** Accepted (2026-10-05); the payload's compression level is superseded by
   [ADR-0020](0020-parallel-zip-and-bytecode-cache.md); `PYTHONPATH` for child processes by
   [ADR-0027](0027-children-see-the-bundle-only-from-its-own-python.md); one Python version, for
-  bundles without compiled code, by [ADR-0030](0030-pure-python-bundles-run-on-a-range.md)
+  bundles without compiled code, by [ADR-0030](0030-pure-python-bundles-run-on-a-range.md); an
+  explicit `BUNDLEUP_CACHE` as the only root, by [ADR-0048](0048-an-explicit-cache-is-the-only-cache.md)
 - **Date:** 2026-10-04
 - **Deciders:** an agent (milestone 1); accepted as written by the user, including
   `PYTHONPATH` for child processes on by default

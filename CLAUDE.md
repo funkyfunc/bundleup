@@ -82,13 +82,13 @@ and git.
 - **Speed** ([findings](docs/findings/2026-10-07-speed-vs-pex-best.md)): against pex's fastest
   configuration, builds 1.1-2.4× faster; warm start equals a venv; first runs 2.3-15× faster.
 - **Not yet:** a PyPI release (0.0.1 is a placeholder; [docs/releasing.md](docs/releasing.md)).
-- **ADR status:** all accepted (the owner accepted 0023-0026, 0033-0038 and 0040 on
+- **ADR status:** all accepted (0045-0048 on the owner's request, designs unreviewed; the owner accepted 0023-0026, 0033-0038 and 0040 on
   2026-10-08, on the agent's summary); only 0013's features are still Proposed. 0027-0032 are
   accepted fixes the owner asked for, with designs the owner hasn't reviewed.
-  Six independent reviews: [first](docs/findings/2026-10-07-independent-review.md),
+  Seven independent reviews: [first](docs/findings/2026-10-07-independent-review.md),
   [second](docs/findings/2026-10-07-second-review.md), [third](docs/findings/2026-10-07-third-review.md),
   [fourth](docs/findings/2026-10-08-fourth-review.md), [fifth](docs/findings/2026-10-08-fifth-review.md),
-  [sixth](docs/findings/2026-10-08-sixth-review.md);
+  [sixth](docs/findings/2026-10-08-sixth-review.md), [seventh](docs/findings/2026-10-10-seventh-review.md);
   the brief is [review-brief.md](docs/findings/review-brief.md).
 - bundleup depends on the `uv` package (bundled binary) but prefers a uv ≥ 0.9 on `PATH`
   (ADR-0011). Rust stays reserved for a future scanner (ADR-0008).

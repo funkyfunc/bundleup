@@ -120,13 +120,18 @@ Examples, not the definition (from [round 4 research](research/round-4-synthesis
 - **Also built (2026-10):** builds for other platforms from one machine, AWS Lambda zips
   (`--format lambda`), plain directories for apps with Python built in such as Splunk and QGIS
   (`--format dir`). See [ADR-0025](adr/0025-dir-and-lambda-formats-and-presets.md).
-- **Not for:** desktop apps for people who don't have Python, Cloudflare Workers/Pyodide, Python in
-  Excel, projects that depend on system libraries or CUDA.
+- **Also built (2026-10-09):** one plain-text `.py` (`--format py`), a `.pyz` cut into files under
+  a size (`--split`), and unsigned executables that bring their own Python for machines without
+  one (`--format exe`, delivered through git or a package manager; ADR-0047).
+- **Not for:** desktop apps downloaded from a browser by people who don't have Python (an unsigned
+  executable meets Gatekeeper and SmartScreen), Cloudflare Workers/Pyodide, Python in Excel,
+  projects that depend on system libraries or CUDA.
 
 ## What we're not
 
 - **Not a replacement for uv.** uv builds the environment; we pack it. Ideally uv could call us.
-- **Not an executable builder.** That would bring code signing back.
+- **Not a signed-executable builder.** `--format exe` wraps the bundle with an interpreter, unsigned
+  (ADR-0047); signing and notarization would need a launcher of our own.
 - **Not a Docker replacement** for big services, and not meant for multi-gigabyte ML stacks. Those
   get a size warning, not a promise.
 

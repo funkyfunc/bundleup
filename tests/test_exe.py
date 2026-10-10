@@ -56,9 +56,20 @@ def test_it_builds_for_another_os_from_here(
     app: Path, tmp_path: Path, platform: str, head: str
 ) -> None:
     out = tmp_path / "tool"
-    build(BuildOptions(path=app, output=out, python=HERE, format="exe", python_platform=platform))
+    result = build(
+        BuildOptions(path=app, output=out, python=HERE, format="exe", python_platform=platform,
+                     smoke=())
+    )  # fmt: skip
     assert out.read_bytes()[:4].startswith(HEADS[head])
     assert verify(out).ok
+    # Described as what it is, not as the pure .pyz inside, which runs anywhere; and not run
+    # here (seventh review: --smoke tried to run a Windows .exe on macOS).
+    target = result.to_json_dict()["target"]
+    assert isinstance(target, dict) and target["any_os"] is False
+    assert target["python_range"] == {"min": HERE, "max": HERE}
+    if head != ("windows" if WINDOWS else "linux" if sys.platform == "linux" else "macos"):
+        assert result.smoke is None
+        assert "smoke-skipped" in [d.code for d in result.diagnostics]
 
 
 def test_one_platform_and_no_split(app: Path, tmp_path: Path) -> None:

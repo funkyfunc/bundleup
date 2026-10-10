@@ -174,6 +174,12 @@ jobs:
           $build --python-platform aarch64-apple-darwin -o skill/exe/macos/skill
           $build --python-platform x86_64-manylinux_2_28 -o skill/exe/linux/skill
           $build --python-platform x86_64-pc-windows-msvc -o skill/exe/windows/skill.exe
+      - name: Builds are reproducible (seventh review)
+        run: |
+          uv run bundleup build gauntlet/skill --entry python --python 3.12 --python-platform aarch64-apple-darwin --python-platform x86_64-pc-windows-msvc --split 20MB -o again/split/deps.pyz -q
+          uv run bundleup build gauntlet/skill --entry python --python 3.12 --format exe --python-platform aarch64-apple-darwin -o again/skill -q
+          uv run bundleup build gauntlet/skill --entry python --python 3.12 --python-platform aarch64-apple-darwin --python-platform x86_64-pc-windows-msvc --split 20MB -o again/split2/deps.pyz -q
+          diff -r again/split again/split2 && cmp again/skill skill/exe/macos/skill
       - uses: actions/upload-artifact@v7
         with:
           name: skill

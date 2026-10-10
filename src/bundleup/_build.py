@@ -257,19 +257,33 @@ def build(
                 max_size=None if fmt == "exe" else options.max_size,
                 strict=options.strict,
                 split=options.split,
+                warn_large=fmt != "exe",  # an executable's own size is checked below
             )
             if fmt == "exe":
                 steps.start("interpreter")
-                write_exe(
+                platform = p.target.python_platform or host_platform(p.target)
+                version, found = write_exe(
                     pyz,
                     output,
                     uv=find_uv(),
                     target=p.target,
-                    platform=p.target.python_platform or host_platform(),
+                    platform=platform,
                     stage=stage,
                     progress=report,
                     max_size=options.max_size,
+                    strict=options.strict,
                 )
+                diagnostics += found
+                # Reported as what the file is (seventh review): this OS and CPU, the Python it
+                # carries, nothing else; the .pyz inside may run more widely.
+                p = replace(
+                    p,
+                    target=replace(p.target, full_version=version or p.target.full_version),
+                    native=True,
+                    pythons=PythonRange(p.target.version, p.target.version),
+                    reach=Portability(any_os=False, any_cpu=False),
+                )
+                prepared = [p]
             if options.smoke is not None:
                 steps.start("smoke")
                 smoked, skipped = _smoke_run(prepared, output, options.smoke, exe=fmt == "exe")
