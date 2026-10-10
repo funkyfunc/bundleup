@@ -176,6 +176,33 @@ Known limits: Lambda doesn't run `.pth` files from `/var/task` (bundleup warns,
 `pth-not-run`), and has no `/dev/shm`, so `multiprocessing.Pool` and `Queue` don't work there
 (an AWS limitation; the emulator CI uses has it, so this isn't tested).
 
+## A container, or a sandbox built from an image *(Docker: CI)*
+
+A `.pyz` is one file, so an image only needs a Python of the version it was built for:
+
+```dockerfile
+FROM python:3.12-slim
+COPY dist/app.pyz /app/app.pyz
+ENTRYPOINT ["python", "/app/app.pyz"]
+```
+
+Build the bundle for the image's platform (`--python 3.12 --python-platform
+x86_64-manylinux_2_28`, or `aarch64-…`). On first start it unpacks into the user's cache; in a
+read-only container give it a writable place, and if the bundle has compiled code, one where
+code can run: `docker run --read-only --tmpfs /tmp:exec …`. Docker's plain `--tmpfs` is mounted
+noexec, and a bundle with compiled code refuses it with that reason rather than failing on import.
+Tested in CI: a bundle with a compiled extension runs in `python:3.12-slim` as is, read-only
+with `/tmp:exec`, and refuses clearly with a noexec `/tmp` (job `docker`).
+
+The same file goes into sandboxes built from images (not yet tested there):
+
+- **E2B:** use the Dockerfile above as the template's `e2b.Dockerfile`, then run
+  `python /app/app.pyz` in the sandbox.
+- **Modal:** `modal.Image.debian_slim(python_version="3.12").add_local_file("dist/app.pyz",
+  "/app/app.pyz")`, then run `python /app/app.pyz` in a Sandbox or Function.
+- **A setup script** (Codex cloud and the like): copy the `.pyz` into the repository; nothing to
+  install, so it also works in the phase without network.
+
 ## Coming from pip, requirements.txt or setup.py
 
 bundleup takes Python projects as they are ([ADR-0041](adr/0041-input-without-a-lock.md)); you
