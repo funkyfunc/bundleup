@@ -251,13 +251,18 @@ def private_pythons() -> Path:
 
 
 def fetch_interpreter(uv: str, version: str, *, cwd: Path, progress: Progress) -> str | None:
-    """An interpreter of `version`: an installed one, or one installed into bundleup's private
-    directory. None if that's impossible (offline, or UV_PYTHON_DOWNLOADS=never)."""
+    """An interpreter of `version`: an installed one, one bundleup installed before, or one
+    installed now into bundleup's private directory. None if that's impossible (offline, or
+    UV_PYTHON_DOWNLOADS=never)."""
     found = find_interpreter(uv, version, cwd=cwd, progress=progress)
     if found:
         return found
     env = {**os.environ, "UV_PYTHON_INSTALL_DIR": str(private_pythons())}
-    install = [uv, "python", "install", version, "--no-bin", "--no-registry"]
+    find = [uv, "python", "find", version, "--managed-python"]
+    try:  # installed by an earlier build: no download, nothing to say
+        return _real(run(find, cwd=cwd, what="uv python find", progress=progress, env=env))
+    except UvError:
+        pass
     # Said, not done silently (the owner, accepting ADR-0035): a build that downloads something
     # should tell you, and how to stop it.
     progress(
@@ -267,19 +272,18 @@ def fetch_interpreter(uv: str, version: str, *, cwd: Path, progress: Progress) -
             "UV_PYTHON_DOWNLOADS=never turns this off",
         )
     )
+    install = [uv, "python", "install", version, "--no-bin", "--no-registry"]
     try:
         run(install, cwd=cwd, what="uv python install", progress=progress, env=env)
-        found = run(
-            [uv, "python", "find", version, "--managed-python"],
-            cwd=cwd,
-            what="uv python find",
-            progress=progress,
-            env=env,
-        ).strip()
+        return _real(run(find, cwd=cwd, what="uv python find", progress=progress, env=env))
     except UvError:
         return None
-    # The real path: uv's per-minor-version link can be repointed by a later install while this
-    # interpreter is in use (on Windows that broke a running Python in the gauntlet).
+
+
+def _real(found: str) -> str | None:
+    """The real path: uv's per-minor-version link can be repointed by a later install while this
+    interpreter is in use (on Windows that broke a running Python in the gauntlet)."""
+    found = found.strip()
     return os.path.realpath(found) if found else None
 
 

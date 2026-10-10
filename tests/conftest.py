@@ -11,6 +11,27 @@ from pathlib import Path
 import pytest
 
 
+@pytest.fixture(scope="session", autouse=True)
+def oldest_python(tmp_path_factory: pytest.TempPathFactory) -> None:
+    """Fetch Python 3.9 into the session's build cache once, before any test runs: a build that
+    has to download it prints a note (ADR-0035), which would otherwise land in whichever test's
+    output came first. A no-op where 3.9 is installed; offline it's skipped."""
+    import os
+
+    from bundleup._python import fetch_interpreter
+    from bundleup._uv import find_uv
+
+    saved = os.environ.get("BUNDLEUP_BUILD_CACHE")
+    os.environ["BUNDLEUP_BUILD_CACHE"] = str(tmp_path_factory.getbasetemp() / "build-cache")
+    try:
+        fetch_interpreter(find_uv(), "3.9", cwd=tmp_path_factory.getbasetemp(), progress=print)
+    finally:
+        if saved is None:
+            del os.environ["BUNDLEUP_BUILD_CACHE"]
+        else:
+            os.environ["BUNDLEUP_BUILD_CACHE"] = saved
+
+
 @pytest.fixture(autouse=True)
 def isolated_build_cache(
     tmp_path_factory: pytest.TempPathFactory, monkeypatch: pytest.MonkeyPatch
