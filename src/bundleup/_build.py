@@ -17,7 +17,7 @@ from typing import Callable, Literal
 from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
 
-from . import _check, _config, _coverage, _imports, _platforms, _smoke
+from . import _audit, _check, _config, _coverage, _imports, _platforms, _smoke, _verify
 from . import _toml as tomllib
 from ._check import CheckReport
 from ._errors import (
@@ -306,6 +306,13 @@ def _smoke_run(
             hint="run the smoke test on a machine it's built for (CI, say)",
         )
     ]
+
+
+def _audit_lock(pylock: Path, target: Target) -> list[Diagnostic]:
+    """`check --audit`: the locked packages for this target that come from PyPI, checked there."""
+    text = pylock.read_text(encoding="utf-8")
+    selected = {canonicalize_name(p.name) for p in _verify.locked_packages(text, target.markers)}
+    return _audit.audit(_audit.from_pypi(text, selected))
 
 
 def _lowest(combinations: list[BuildOptions]) -> tuple[int, int] | None:
@@ -684,13 +691,15 @@ def check(
     progress: Callable[[ProgressEvent], None] | None = None,
     also_platforms: Sequence[str] = (),
     matrix: bool = False,
+    audit: bool = False,
 ) -> CheckReport:
     """Install, compile and analyze like `build`, without writing anything: what won't survive
     bundling (for `options.format`), and how big each package is. Findings are in the report
     (`ok` is False when there are errors); raises a BundleupError subclass only when the build
     itself fails. `options.output` and `options.strict` are ignored. `also_platforms`: more uv
     platform names to check from the lock alone (ADR-0031), for the same Python version.
-    `matrix`: wheel coverage for every platform and Python version (`report.matrix`)."""
+    `matrix`: wheel coverage for every platform and Python version (`report.matrix`).
+    `audit`: supply-chain checks on the locked packages, from PyPI (needs the network)."""
     options, fmt = _settle(options)
     if options.more_pythons or options.more_python_platforms:
         raise UsageError(
@@ -704,6 +713,9 @@ def check(
         p = _prepare(options, fmt=fmt, stage=Path(tmp), steps=steps, progress=report)
         extra = _also_platforms(p.pylock, p.target, others)
         cells = _matrix(p.pylock, p.source) if matrix else []
+        if audit:
+            steps.start("audit")
+            extra += _audit_lock(p.pylock, p.target)
         steps.finish()
     return CheckReport(
         name=p.source.name,

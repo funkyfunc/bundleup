@@ -19,6 +19,9 @@ The first working release. From a project with `uv.lock` or `pylock.toml`, or a 
 - `--entry python`: a `.pyz` that runs the scripts it's given (`python deps.pyz tool.py`), so
   one bundle serves every script of a skill. A bundle for several platforms stores each file
   once. Over 100 MB (GitHub's file limit), a build warns (`large-bundle`).
+- `check --audit` asks PyPI about the locked packages: known vulnerabilities, yanked versions,
+  brand-new projects (ADR-0043). Bundles with compiled code skip cache folders on noexec
+  filesystems.
 - `--smoke [ARGS]` runs the finished bundle once in a fresh home folder with the network blocked
   (macOS, Linux), failing the build if it fails (ADR-0042).
 - Projects without a lock build too (ADR-0041): a `pyproject.toml` installed with pip, a

@@ -74,7 +74,7 @@ examples:
 ```
 usage: bundleup check [-h] [--format FORMAT] [--python VERSION] [--entry NAME]
                       [--python-platform OS] [--locked | --frozen] [--strict] [--also-platform OS]
-                      [--matrix] [--json] [-q] [-v] [--color WHEN]
+                      [--matrix] [--audit] [--json] [-q] [-v] [--color WHEN]
                       [path]
 
 Install and compile like `build`, then report what won't work in a bundle and how big each package is. Every build runs the same checks.
@@ -93,6 +93,7 @@ options:
   --strict              warnings fail too (errors always do)
   --also-platform OS    also check, from the lock alone, that every package has a wheel there
   --matrix              show which OS, CPU and Python versions the lock's wheels cover
+  --audit               ask PyPI about the locked packages: vulnerabilities, yanked, brand-new
   --json                print one JSON document on stdout
   -q, --quiet           -q: warnings and errors only; -qq: errors
   -v, --verbose         -v: every package's size; -vv: commands run

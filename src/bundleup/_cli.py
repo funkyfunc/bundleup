@@ -130,6 +130,11 @@ def parsers() -> dict[str, argparse.ArgumentParser]:
         action="store_true",
         help="show which OS, CPU and Python versions the lock's wheels cover",
     )
+    check.add_argument(
+        "--audit",
+        action="store_true",
+        help="ask PyPI about the locked packages: vulnerabilities, yanked, brand-new",
+    )
     _add_output_options(check, verbose="-v: every package's size; -vv: commands run")
     verify = commands.add_parser(
         "verify",
@@ -532,7 +537,11 @@ def _run_check(opts: argparse.Namespace) -> ExitCode:
     try:
         options = _expanded(opts, style)
         report = check(
-            options, progress=on_progress, also_platforms=opts.also_platform, matrix=opts.matrix
+            options,
+            progress=on_progress,
+            also_platforms=opts.also_platform,
+            matrix=opts.matrix,
+            audit=opts.audit,
         )
     except BundleupError as e:
         status.clear()

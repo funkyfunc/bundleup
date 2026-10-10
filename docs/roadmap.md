@@ -43,10 +43,10 @@ the owner hasn't confirmed is marked *Proposed*.
     yes, as uv does, but announced, and off with `UV_PYTHON_DOWNLOADS=never` (ADR-0035).
 30. ~~**Decide CI's shape**~~ decided 2026-10-08: the full matrix stays on every push (it's free
     for a public repository and caught real bugs); agents push in batches instead.
-32. **A noexec cache** (rounds 6 and 7): pex scies fail where `/tmp` is noexec (ComfyUI-Docker
-    #170). Skip cache folders where code can't be loaded, and test it in the gauntlet.
-33. **`check --audit`: supply-chain checks on the locked packages** (round 7): known
-    vulnerabilities of the locked versions and very new projects, from PyPI, opt-in (network).
+32. ~~**A noexec cache**~~ done 2026-10-09: native bundles skip noexec cache folders; Linux CI's
+    gauntlet mounts one (`noexec-cache`).
+33. ~~**`check --audit`**~~ done 2026-10-09 ([ADR-0043](adr/0043-check-audit-asks-pypi-about-the-lock.md)): vulnerabilities, yanked
+    versions, brand-new projects, from PyPI.
 34. **Describe a target environment as data** (round 7's largest gap): a TOML file with a
     destination's Python, platform, size limit and facts (network, installs), used with
     `--against FILE`; a few published as recipes. Data, not named presets (ADR-0039).

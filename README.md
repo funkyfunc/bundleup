@@ -25,6 +25,7 @@ bundleup check                  # what won't survive bundling, and each package'
 bundleup check --also-platform windows   # which packages lack a wheel for another OS
 bundleup check --matrix         # which OS, CPU and Python versions the lock's wheels cover
 bundleup build --smoke          # then run it once: fresh home folder, no network
+bundleup check --audit          # ask PyPI: vulnerable, yanked or brand-new dependencies?
 bundleup build --max-size 30MB # fail, writing nothing, if the bundle is bigger
 bundleup build --format dir     # a plain directory, for apps that load packages from one
 bundleup verify dist/app.pyz    # bundle and unpacked copy vs its manifest (corruption; not a signature)

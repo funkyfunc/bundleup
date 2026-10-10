@@ -62,6 +62,7 @@ STEPS = {
     "verify": "verifying",
     "write": "writing",
     "smoke": "running it once (--smoke)",
+    "audit": "auditing the locked packages on PyPI",
 }
 
 
