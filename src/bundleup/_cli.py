@@ -50,13 +50,11 @@ bugs: {ISSUES_URL}"""
 BUILD_EXAMPLES = """\
 examples:
   bundleup build                    bundle the project here into dist/<name>.pyz
-  bundleup build --python 3.11 --python-platform linux   build for Linux x86_64
   bundleup build --python-platform linux --python-platform windows   one .pyz for both"""
 
 CHECK_EXAMPLES = f"""\
 examples:
-  bundleup check                    check the project here for this machine's Python
-  bundleup check --also-platform windows --also-platform linux   wheels for other platforms too
+  bundleup check --audit --also-platform windows   also ask PyPI, and check Windows wheels
 
 docs: {DOCS_URL}"""
 
@@ -232,6 +230,12 @@ def _add_build_options(command: argparse.ArgumentParser, *, output: bool) -> Non
             "a script name, module:function, module or python",
             "BUNDLEUP_ENTRY",
         ),
+    )
+    command.add_argument(
+        "--against",
+        type=Path,
+        metavar="FILE",
+        help="a destination described in a TOML file (docs/targets/)",
     )
     command.add_argument(
         "--python-platform",
@@ -425,6 +429,7 @@ def _options(opts: argparse.Namespace) -> BuildOptions:
         format=opts.format,
         max_size=getattr(opts, "max_size", None),
         smoke=_smoke_args(getattr(opts, "smoke", None)),
+        against=opts.against,
     )
 
 
@@ -432,7 +437,17 @@ def _expanded(opts: argparse.Namespace, style: Style) -> BuildOptions:
     """The options with [tool.bundleup] filled in; -v says what it set (rule 7)."""
     from ._config import apply as apply_config
 
-    options, configured = apply_config(_options(opts))
+    options = _options(opts)
+    if options.against is not None:  # say what it stands for (rule 7)
+        from ._target_files import apply, load
+
+        target = load(options.against)
+        options = apply(options, target)  # before [tool.bundleup], which it outranks
+        if not opts.json and opts.quiet == 0:
+            facts = f"; {target.facts()}" if target.facts() else ""
+            line = f"Against {target.name} (checked {target.checked}): {' '.join(target.flags())}"
+            print(style.dim(line + facts), file=sys.stderr)
+    options, configured = apply_config(options)
     if configured and not opts.json and opts.verbose >= 1:
         print(style.dim(f"Using [tool.bundleup]: {', '.join(configured)}"), file=sys.stderr)
     return options

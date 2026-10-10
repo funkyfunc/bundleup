@@ -208,6 +208,13 @@
                   }
                 }
               }
+            },
+            "against": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "description": "The --against file, if one was given (added within version 1, ADR-0044): its file, name, source, checked date, network and installs facts, and the flags it stood for"
             }
           }
         }

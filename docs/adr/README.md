@@ -52,3 +52,4 @@ and change only the old one's status line.
 | [0041](0041-input-without-a-lock.md) | Input without a lock builds, resolved at build time, with a warning | Accepted |
 | [0042](0042-smoke-runs-the-bundle-once.md) | `--smoke` runs the finished bundle once before shipping | Accepted |
 | [0043](0043-check-audit-asks-pypi-about-the-lock.md) | `check --audit` asks PyPI about the locked packages | Accepted |
+| [0044](0044-destinations-as-data-files.md) | Destinations described as data files (`--against FILE`) | Accepted |

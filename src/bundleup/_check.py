@@ -33,6 +33,7 @@ from ._text import listing, plural
 
 if TYPE_CHECKING:
     from ._python import Target
+    from ._target_files import TargetFile
 
 # Runs on the target interpreter: why each listed file doesn't compile (paths relative to argv[1]).
 # argv[3], if given, is an older minor version ("9") to check against with this interpreter:
@@ -95,6 +96,7 @@ class CheckReport:
     pythons: PythonRange | None = None  # the versions a bundle would run on (ADR-0030)
     matrix: list[MatrixCell] = field(default_factory=list)  # `check --matrix` (ADR-0031)
     reach: Portability | None = None  # whether it would run on any OS / CPU (ADR-0034)
+    against: TargetFile | None = None  # the --against file, if one was given (ADR-0044)
 
     @property
     def errors(self) -> list[Diagnostic]:
@@ -125,6 +127,7 @@ class CheckReport:
             "packages": [p.to_json_dict() for p in self.packages],
             "duration_s": round(self.duration_s, 3),
             "matrix": [cell.to_json_dict() for cell in self.matrix],
+            "against": self.against.to_json_dict() if self.against else None,
         }
 
 

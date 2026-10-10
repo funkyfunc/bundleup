@@ -47,9 +47,8 @@ the owner hasn't confirmed is marked *Proposed*.
     gauntlet mounts one (`noexec-cache`).
 33. ~~**`check --audit`**~~ done 2026-10-09 ([ADR-0043](adr/0043-check-audit-asks-pypi-about-the-lock.md)): vulnerabilities, yanked
     versions, brand-new projects, from PyPI.
-34. **Describe a target environment as data** (round 7's largest gap): a TOML file with a
-    destination's Python, platform, size limit and facts (network, installs), used with
-    `--against FILE`; a few published as recipes. Data, not named presets (ADR-0039).
+34. ~~**Describe a target environment as data**~~ done 2026-10-09 ([ADR-0044](adr/0044-destinations-as-data-files.md)): `--against FILE`;
+    the Claude API sandbox and Lambda files in docs/targets/.
 35. **MCP servers** (round 7): a recipe and a CI test for an MCP server shipped as a `.pyz`.
 36. **One environment, each platform's format** (round 7b): recipes for Docker, Modal and E2B
     from a `.pyz`; Docker tested in CI.

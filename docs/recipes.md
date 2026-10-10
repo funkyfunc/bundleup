@@ -79,9 +79,11 @@ anything outside the standard library and the preinstalled libraries can't run t
 `uv run` the Agent Skills guide recommends needs the network. A bundle carries its dependencies:
 
 ```bash
-bundleup build tool.py --python 3.11 --python-platform x86_64-manylinux_2_28 --max-size 30MB \
-  -o my-skill/scripts/tool.pyz
+bundleup build tool.py --against docs/targets/claude-api.toml -o my-skill/scripts/tool.pyz
 ```
+
+[`docs/targets/claude-api.toml`](targets/claude-api.toml) describes the sandbox, with its source
+and the date it was checked ([ADR-0044](adr/0044-destinations-as-data-files.md)); it stands for:
 
 - `--python 3.11 --python-platform x86_64-manylinux_2_28`: the sandbox's Python and platform.
   Its exact glibc isn't documented; 2.28 (2018) is the oldest level that many packages, Pillow 12
@@ -111,10 +113,13 @@ platforms it does have wheels for. Not yet tested in the real sandbox (it needs 
 ## An AWS Lambda function *(CI)*
 
 ```bash
-bundleup build --format lambda --python 3.13 --python-platform x86_64-manylinux_2_34 --entry app:handler
-bundleup build --format lambda --python 3.13 --python-platform aarch64-manylinux_2_34  # Graviton
-bundleup build handler.py --format lambda --python 3.13 --python-platform x86_64-manylinux_2_34
+bundleup build --against docs/targets/aws-lambda-python3.13-x86_64.toml --entry app:handler
+bundleup build --against docs/targets/aws-lambda-python3.13-arm64.toml   # Graviton
+bundleup build handler.py --format lambda --python 3.12 --python-platform x86_64-manylinux_2_34
 ```
+
+The [target files](targets/) stand for `--format lambda --python 3.13 --python-platform
+x86_64-manylinux_2_34` (or `aarch64-…`); for another runtime, copy one or pass the flags.
 
 Pick the platform from the function's runtime
 ([AWS's table](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html), checked

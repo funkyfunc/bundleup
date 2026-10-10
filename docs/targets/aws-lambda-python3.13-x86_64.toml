@@ -1,0 +1,11 @@
+# AWS Lambda, Python 3.13 runtime on x86_64 (ADR-0044). Python 3.12+ runs on Amazon Linux 2023
+# (glibc 2.34). Lambda's own size limits are checked by --format lambda.
+# Use: bundleup build --against docs/targets/aws-lambda-python3.13-x86_64.toml --entry app:handler
+name = "AWS Lambda, python3.13, x86_64"
+source = "https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html"
+checked = "2026-10-06"
+format = "lambda"
+python = "3.13"
+python-platform = "x86_64-manylinux_2_34"
+network = true
+installs = false

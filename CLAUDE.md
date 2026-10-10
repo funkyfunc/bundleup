@@ -98,10 +98,12 @@ pyproject.toml, src/bundleup/  the package (ADR-0018): __init__.py (public API),
                         _loader.py (the bundle's __main__), _runtime.py + _sitecustomize.py
                         (copied into each payload, ADR-0027), _platforms.py, _formats.py
                         (Format, sizes), _imports.py (imports, stdlib by version), _smoke.py
-                        (--smoke), _zipwriter.py, _bytecode.py, _cache.py, _errors.py,
+                        (--smoke), _audit.py (check --audit), _target_files.py (--against),
+                        _zipwriter.py, _bytecode.py, _cache.py, _errors.py,
                         _term.py, _text.py
 tests/snapshots/        CLI output and API snapshots; docs/cli-reference.md is generated too
 docs/schema/            JSON Schemas of each command's `--json` (build, check, verify, cache)
+docs/targets/           destinations described as data, for --against (ADR-0044)
 tests/                  pytest: loader/CLI edge cases the gauntlet doesn't reach
 docs/roadmap.md         "Next up" work list, then possible future directions
 docs/python-for-js-reviewers.md  code style rules + review guide for the JS-fluent owner

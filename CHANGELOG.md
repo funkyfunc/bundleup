@@ -19,6 +19,9 @@ The first working release. From a project with `uv.lock` or `pylock.toml`, or a 
 - `--entry python`: a `.pyz` that runs the scripts it's given (`python deps.pyz tool.py`), so
   one bundle serves every script of a skill. A bundle for several platforms stores each file
   once. Over 100 MB (GitHub's file limit), a build warns (`large-bundle`).
+- `--against FILE` builds or checks for a destination described in a TOML file (its Python,
+  platform, size limit, network and installs, with source and date); the Claude API sandbox and
+  AWS Lambda are in docs/targets/ (ADR-0044).
 - `check --audit` asks PyPI about the locked packages: known vulnerabilities, yanked versions,
   brand-new projects (ADR-0043). Bundles with compiled code skip cache folders on noexec
   filesystems.

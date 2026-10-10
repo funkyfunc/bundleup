@@ -36,8 +36,8 @@ bugs: https://github.com/funkyfunc/bundleup/issues
 
 ```
 usage: bundleup build [-h] [-o FILE] [--format FORMAT] [--python VERSION] [--entry NAME]
-                      [--python-platform OS] [--locked | --frozen] [--strict] [--max-size SIZE]
-                      [--smoke [ARGS]] [--json] [-q] [-v] [--color WHEN]
+                      [--against FILE] [--python-platform OS] [--locked | --frozen] [--strict]
+                      [--max-size SIZE] [--smoke [ARGS]] [--json] [-q] [-v] [--color WHEN]
                       [path]
 
 Bundle a project, a folder of modules or a script; locked or not.
@@ -52,6 +52,7 @@ options:
   --format FORMAT       pyz (default), dir (a directory) or lambda (an AWS Lambda .zip)
   --python VERSION      a version (3.12) or a path; repeatable; default: uv's [env: BUNDLEUP_PYTHON]
   --entry NAME          a script name, module:function, module or python [env: BUNDLEUP_ENTRY]
+  --against FILE        a destination described in a TOML file (docs/targets/)
   --python-platform OS  an OS/CPU, uv's names (linux); repeatable [env: BUNDLEUP_PYTHON_PLATFORM]
   --locked              fail if the lock is out of date (as in uv; the default when there is one)
   --frozen              bundle the lock as it is, without checking it (as in uv)
@@ -65,14 +66,13 @@ options:
 
 examples:
   bundleup build                    bundle the project here into dist/<name>.pyz
-  bundleup build --python 3.11 --python-platform linux   build for Linux x86_64
   bundleup build --python-platform linux --python-platform windows   one .pyz for both
 ```
 
 ## `bundleup check`
 
 ```
-usage: bundleup check [-h] [--format FORMAT] [--python VERSION] [--entry NAME]
+usage: bundleup check [-h] [--format FORMAT] [--python VERSION] [--entry NAME] [--against FILE]
                       [--python-platform OS] [--locked | --frozen] [--strict] [--also-platform OS]
                       [--matrix] [--audit] [--json] [-q] [-v] [--color WHEN]
                       [path]
@@ -87,6 +87,7 @@ options:
   --format FORMAT       pyz (default), dir (a directory) or lambda (an AWS Lambda .zip)
   --python VERSION      a version (3.12) or a path; repeatable; default: uv's [env: BUNDLEUP_PYTHON]
   --entry NAME          a script name, module:function, module or python [env: BUNDLEUP_ENTRY]
+  --against FILE        a destination described in a TOML file (docs/targets/)
   --python-platform OS  an OS/CPU, uv's names (linux); repeatable [env: BUNDLEUP_PYTHON_PLATFORM]
   --locked              fail if the lock is out of date (as in uv; the default when there is one)
   --frozen              bundle the lock as it is, without checking it (as in uv)
@@ -100,8 +101,7 @@ options:
   --color WHEN          auto, always or never (default: auto; also NO_COLOR, FORCE_COLOR)
 
 examples:
-  bundleup check                    check the project here for this machine's Python
-  bundleup check --also-platform windows --also-platform linux   wheels for other platforms too
+  bundleup check --audit --also-platform windows   also ask PyPI, and check Windows wheels
 
 docs: https://github.com/funkyfunc/bundleup
 ```

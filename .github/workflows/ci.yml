@@ -242,6 +242,6 @@ jobs:
         shell: bash
         run: |
           build() { uv run bundleup build gauntlet/projects/14-real-world-pptx --entry g14_pptx:main "$@"; }
-          build --python 3.11 --python-platform x86_64-manylinux_2_28 --max-size 30MB -o recipes/claude-api.pyz
-          build --format lambda --python 3.13 --python-platform x86_64-manylinux_2_34 -o recipes/lambda.zip
-          build --format lambda --python 3.13 --python-platform aarch64-manylinux_2_34 -o recipes/lambda-arm64.zip
+          build --against docs/targets/claude-api.toml -o recipes/claude-api.pyz
+          build --against docs/targets/aws-lambda-python3.13-x86_64.toml -o recipes/lambda.zip
+          build --against docs/targets/aws-lambda-python3.13-arm64.toml -o recipes/lambda-arm64.zip

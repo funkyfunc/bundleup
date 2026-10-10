@@ -17,7 +17,17 @@ from typing import Callable, Literal
 from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
 
-from . import _audit, _check, _config, _coverage, _imports, _platforms, _smoke, _verify
+from . import (
+    _audit,
+    _check,
+    _config,
+    _coverage,
+    _imports,
+    _platforms,
+    _smoke,
+    _target_files,
+    _verify,
+)
 from . import _toml as tomllib
 from ._check import CheckReport
 from ._errors import (
@@ -69,6 +79,7 @@ from ._source import (
     script_path,
 )
 from ._steps import Progress, ProgressEvent, Steps, ignore, run
+from ._target_files import TargetFile
 from ._text import findings, plural
 from ._uv import add_runtime, export, find_uv, install
 
@@ -89,6 +100,9 @@ class BuildOptions:
     format: Format | None = None
     # The most the output may be, in bytes: over it is an error, before writing (ADR-0039).
     max_size: int | None = None
+    # A destination described as data (`--against FILE`, ADR-0044): its settings fill what isn't
+    # set, and the result reports its facts.
+    against: Path | None = None
     # Run the finished .pyz once with these arguments, in a fresh home folder with no network
     # (`--smoke`); None: don't; (): the default, `--help`.
     smoke: tuple[str, ...] | None = None
@@ -121,6 +135,7 @@ class BuildResult:
     # A bundle for several platforms: each payload's target, as in `target` (ADR-0038).
     payloads: list[dict[str, object]] = field(default_factory=list)
     smoke: SmokeResult | None = None  # what --smoke ran, if it did
+    against: TargetFile | None = None  # the --against file, if one was given
 
     @property
     def handler(self) -> str | None:
@@ -151,6 +166,7 @@ class BuildResult:
             "entry": self.entry,
             "payloads": self.payloads,
             "smoke": self.smoke.to_json_dict() if self.smoke else None,
+            "against": self.against.to_json_dict() if self.against else None,
         }
 
 
@@ -255,6 +271,7 @@ def build(
         pythons=p.pythons,
         reach=p.reach,
         smoke=smoked,
+        against=_target_files.load(options.against) if options.against else None,
         payloads=[
             x.target.to_json_dict(native=x.native, pythons=x.pythons, reach=x.reach)
             for x in prepared
@@ -364,8 +381,10 @@ _STRICT_HINT = "--strict makes warnings fail too; build without it to allow them
 
 
 def _settle(options: BuildOptions) -> tuple[BuildOptions, Format]:
-    """What `build` and `check` start from: [tool.bundleup] filled in (ADR-0032), the format
-    checked."""
+    """What `build` and `check` start from: the --against file's settings (ADR-0044), then
+    [tool.bundleup] (ADR-0032) filled in, the format checked."""
+    if options.against is not None:
+        options = _target_files.apply(options, _target_files.load(options.against))
     options, _configured = _config.apply(options)
     if options.smoke is not None and (options.format or "pyz") != "pyz":
         raise UsageError(
@@ -728,6 +747,7 @@ def check(
         pythons=p.pythons,
         reach=p.reach,
         matrix=cells,
+        against=_target_files.load(options.against) if options.against else None,
     )
 
 

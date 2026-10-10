@@ -1,0 +1,13 @@
+# Claude API code execution and Agent Skills (ADR-0044): what the sandbox is, from Anthropic's docs.
+# Use: bundleup build tool.py --against docs/targets/claude-api.toml -o my-skill/scripts/tool.pyz
+name = "Claude API code execution and Skills"
+source = "https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool"
+checked = "2026-10-09"
+python = "3.11"
+# The sandbox's glibc isn't documented; 2.28 (2018) is the oldest level many packages still publish.
+python-platform = "x86_64-manylinux_2_28"
+# "Total upload size must be under 30 MB (uncompressed)" for a Skill.
+max-size = "30MB"
+network = false
+installs = false
+notes = "5 GiB RAM and disk, 1 CPU; preinstalled: pandas, numpy, scipy, scikit-learn, python-docx, python-pptx and PDF libraries (round 7b research)"
