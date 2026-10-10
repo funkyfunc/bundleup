@@ -75,7 +75,7 @@ jobs:
           echo "BUNDLEUP_GAUNTLET_NOEXEC=/mnt/noexec" >> "$GITHUB_ENV"
       - name: Run the gauntlet
         run: >
-          uv run gauntlet/run_bundlers.py --tool bundleup --conditions --check
+          uv run gauntlet/run_bundlers.py --tool bundleup --tool bundleup-py --conditions --check
           --python ${{ matrix.python }} --out ci
       - name: Keep the results
         if: ${{ always() }}

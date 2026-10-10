@@ -21,9 +21,11 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import base64
 import concurrent.futures as cf
 import functools
 import getpass
+import io
 import json
 import os
 import re
@@ -54,7 +56,9 @@ TOOLS: dict[str, str | None] = {
     "zipapps": "zipapps==2026.4.17",
     "zipapp-naive": None,
     "bundleup": None,
+    "bundleup-py": None,  # the same, written as one .py file (--format py, ADR-0046)
 }
+OURS = ("bundleup", "bundleup-py")  # built from the project itself, with bundleup-only checks
 WINDOWS = sys.platform == "win32"
 # This repo's bundleup, installed by `uv sync`.
 BUNDLEUP = ROOT.parent / ".venv" / ("Scripts/bundleup.exe" if WINDOWS else "bin/bundleup")
@@ -333,10 +337,10 @@ def one(tool: str, project: Path, version: str, conditions: bool) -> list[Result
     py = python_path(version)
     stage = WORK / tool / meta["id"] / version
     shutil.rmtree(stage, ignore_errors=True)
-    out = stage / ("app.pex" if tool == "pex" else "app.pyz")
+    out = stage / {"pex": "app.pex", "bundleup-py": "app.py"}.get(tool, "app.pyz")
 
     inputs = None
-    if tool != "bundleup":
+    if tool not in OURS:
         try:
             inputs = prepare(project, meta, stage / "inputs")
         except subprocess.CalledProcessError as e:
@@ -347,7 +351,8 @@ def one(tool: str, project: Path, version: str, conditions: bool) -> list[Result
     try:
         if inputs is None:  # bundleup reads the project itself
             src = project / meta["script"] if "script" in meta else project
-            b = sh([str(BUNDLEUP), "build", str(src), "--python", py, "-o", str(out), "--quiet"])
+            fmt = ["--format", "py"] if tool == "bundleup-py" else []
+            b = sh([str(BUNDLEUP), "build", str(src), "--python", py, "-o", str(out), "-q", *fmt])
         elif tool == "zipapp-naive":
             b = build_naive(py, inputs=inputs, entry=meta["entry"], out=out, stage=stage)
         else:
@@ -379,8 +384,12 @@ def one(tool: str, project: Path, version: str, conditions: bool) -> list[Result
     results = [res]
     if conditions and res.outcome == "pass":
         results += hostile(tool, meta, py=py, version=version, bundle=out, stage=stage)
-        if tool == "bundleup":
-            results.append(matches_venv(project, meta, py=py, version=version, stage=stage))
+        if tool in OURS:
+            results.append(
+                matches_venv(
+                    project, meta, py=py, version=version, stage=stage, tool=tool, bundle=out
+                )
+            )
     return results
 
 
@@ -419,10 +428,19 @@ def install_normally(project: Path, meta: Meta, *, py: str, venv: Path) -> None:
         sh(install, env=env).check_returncode()
 
 
-def matches_venv(project: Path, meta: Meta, *, py: str, version: str, stage: Path) -> Result:
+def matches_venv(
+    project: Path,
+    meta: Meta,
+    *,
+    py: str,
+    version: str,
+    stage: Path,
+    tool: str = "bundleup",
+    bundle: Path | None = None,
+) -> Result:
     """Compare the bundle's packages with a normal install: same distributions and versions, same
     entry points, and the same top-level modules import (docs/testing-strategy.md)."""
-    res = Result("bundleup", meta["id"], version, condition="matches-venv")
+    res = Result(tool, meta["id"], version, condition="matches-venv")
     res.network_blocked = network_blocker() is not None
     try:
         venv = stage / "venv"
@@ -433,7 +451,7 @@ def matches_venv(project: Path, meta: Meta, *, py: str, version: str, stage: Pat
         cache = stage / "venv-cache"
         home, cwd = fresh_dirs(stage, "venv-compare")
         extra = {"BUNDLEUP_CACHE": str(cache)}
-        bundle = stage / "app.pyz"
+        bundle = bundle or stage / "app.pyz"
         run_bundle(py, bundle, args=meta.get("args", []), home=home, cwd=cwd, extra_env=extra)
         extracted = next(p for p in cache.iterdir() if not p.name.startswith("."))
         bundled = sh([py, "-S", str(SNAPSHOT), str(extracted), "--as-bundle"])
@@ -466,12 +484,24 @@ def compare_snapshots(normal: dict[str, Any], bundled: dict[str, Any]) -> list[s
     return differences
 
 
+def read_manifest(bundle: Path) -> Meta:
+    """A bundleup bundle's manifest: in a .pyz's zip, or in a .py bundle's base64 data."""
+    try:
+        with zipfile.ZipFile(bundle) as zf:
+            return json.loads(zf.read("manifest.json"))
+    except zipfile.BadZipFile:
+        text = bundle.read_bytes()
+        data = text[text.rindex(b"\n# --- bundleup data") + 1 : text.rindex(b"\n# --- end of")]
+        data = data[data.index(b"\n") :]  # after the marker line
+        with zipfile.ZipFile(io.BytesIO(base64.b64decode(data))) as zf:
+            return json.loads(zf.read("manifest.json"))
+
+
 def plant_shadows(py: str, bundle: Path, home: Path) -> None:
     """Put a broken copy of each of the bundle's top-level modules in the user's site-packages."""
     where = sh([py, "-c", "import site; print(site.getusersitepackages())"], env=run_env(home))
     user_site = Path(where.stdout.strip())
-    with zipfile.ZipFile(bundle) as zf:
-        files = json.loads(zf.read("manifest.json"))["files"]
+    files = read_manifest(bundle)["files"]
     names = {
         name.split("/")[0].split(".")[0]
         for name in files
@@ -492,8 +522,7 @@ OTHER_PYTHONS = ["3.9", "3.10", "3.11", "3.12", "3.13"]
 
 def in_range_pythons(bundle: Path, built_for: str) -> list[str]:
     """Other installed Pythons a bundleup bundle's manifest says it runs on."""
-    with zipfile.ZipFile(bundle) as zf:
-        span = json.loads(zf.read("manifest.json"))["target"].get("python_range") or {}
+    span = read_manifest(bundle)["target"].get("python_range") or {}
     if not span:
         return []
 
@@ -553,7 +582,7 @@ def hostile(
     # `pip install --user`: the bundle must not see it (ADR-0021). Not tested with
     # BUNDLEUP_INHERIT_PATH=1: there, a stale *regular* package beats a bundle's namespace
     # package (PEP 420), whatever the order (gauntlet 08 shows it).
-    if tool == "bundleup":
+    if tool in OURS:
         home, cwd = fresh_dirs(stage, "usersite")
         plant_shadows(py, bundle, home)
         record("user-site-conflict", run_bundle(py, bundle, args=args, home=home, cwd=cwd))
@@ -623,7 +652,7 @@ def main() -> int:
             continue
         projects.append(p)
 
-    if "bundleup" in (opts.tool or TOOLS):
+    if any(t in OURS for t in (opts.tool or TOOLS)):
         sh(["uv", "sync", "--quiet"], cwd=ROOT.parent).check_returncode()
     jobs = [
         (t, p, v)

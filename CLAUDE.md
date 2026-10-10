@@ -52,7 +52,8 @@ and git.
   `pylock.toml`, or no lock: resolved at build time with a warning, ADR-0041), a folder of
   modules with `requirements.txt`, or a script (PEP 723, `requirements.txt` beside it, or
   standard library only). Outputs: a
-  `.pyz` (default), `--format dir`, `--format lambda`; `--max-size`. No named targets: each
+  `.pyz` (default), `--format py` (one plain-text `.py`, ADR-0046), `--format dir`, `--format
+  lambda`; `--max-size`; `--split SIZE` (a small `.pyz` and a parts folder, ADR-0045). No named targets: each
   destination is a tested recipe in docs/recipes.md (ADR-0039). Builds for this machine or another
   platform. Pure-Python bundles run on every
   Python version their lock allows (ADR-0030) and on any OS when the lock agrees (ADR-0034);
@@ -70,7 +71,7 @@ and git.
   C library, macOS version; isolates from the machine's packages; children of the bundle's own
   interpreter see its packages, other Pythons don't (ADR-0027).
 - **Evidence:** the gauntlet (24 projects, every hostile condition, plus running pure bundles on
-  every other installed Python) passes locally; in CI on Linux x64/arm64, macOS arm64 and Windows,
+  every other installed Python), as `.pyz` and as `.py` (`--tool bundleup-py`), passes locally; in CI on Linux x64/arm64, macOS arm64 and Windows,
   23 of them (`20-heavy-ml` runs only with `--heavy`, which CI doesn't pass). CI results live in
   the runs' artifacts, not in gauntlet/results/. Lambda zips run in AWS's Lambda image; the skill
   recipe runs end to end (CI `skill`). Nightly: top-200 PyPI smoke test and a 22-program corpus

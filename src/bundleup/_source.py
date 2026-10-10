@@ -13,7 +13,7 @@ from packaging.utils import canonicalize_name
 from . import _toml as tomllib
 from . import _verify
 from ._errors import ProjectError
-from ._formats import Format
+from ._formats import LOADED, Format
 from ._imports import imports_of, stdlib_ever, top_level_modules
 
 PEP723 = re.compile(r"(?m)^# /// (?P<type>[a-zA-Z0-9-]+)$\s(?P<content>(^#(| .*)$\s)+)^# ///$")
@@ -311,11 +311,12 @@ def script_metadata(text: str) -> dict[str, Any]:  # Any: TOML values have no fi
 
 
 def script_path(source: Source, fmt: Format) -> str | None:
-    """Where a PEP 723 script goes in the payload: out of the way in a .pyz (the loader runs it),
-    at the top for `dir` and `lambda`, where it's imported as a module (a Lambda handler)."""
+    """Where a PEP 723 script goes in the payload: out of the way in a .pyz or .py (the loader
+    runs it), at the top for `dir` and `lambda`, where it's imported as a module (a Lambda
+    handler)."""
     if not source.is_script:
         return None
-    return f"{_verify.SCRIPT_DIR}/{source.path.name}" if fmt == "pyz" else source.path.name
+    return f"{_verify.SCRIPT_DIR}/{source.path.name}" if fmt in LOADED else source.path.name
 
 
 def safe_name(name: str) -> str:

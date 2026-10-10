@@ -177,6 +177,7 @@
             "format": {
               "enum": [
                 "pyz",
+                "py",
                 "dir",
                 "lambda"
               ],

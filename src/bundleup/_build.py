@@ -37,7 +37,7 @@ from ._errors import (
     NoCompatibleWheelError,
     UsageError,
 )
-from ._formats import FORMATS, Format
+from ._formats import FORMATS, LOADED, Format
 from ._outputs import (
     LAMBDA_UNZIPPED,
     LAMBDA_UPLOAD,
@@ -96,7 +96,7 @@ class BuildOptions:
     # Another OS/CPU, in uv's terms (e.g. "x86_64-manylinux_2_28"); default: this machine.
     python_platform: str | None = None
     strict: bool = False  # warnings fail the build too (errors always do)
-    # What to write (ADR-0025): "pyz" (the default), "dir" or "lambda".
+    # What to write (ADR-0025, ADR-0046): "pyz" (the default), "py", "dir" or "lambda".
     format: Format | None = None
     # The most the output may be, in bytes: over it is an error, before writing (ADR-0039).
     max_size: int | None = None
@@ -195,10 +195,10 @@ def build(
     report = progress or ignore
     steps = Steps(report)
     combinations = _combinations(options)
-    if len(combinations) > 1 and fmt != "pyz":
+    if len(combinations) > 1 and fmt not in LOADED:
         raise UsageError(
             f"a {fmt} output is for one platform and Python version",
-            hint="give one --python and one --python-platform, or build a .pyz",
+            hint="give one --python and one --python-platform, or build a .pyz or .py",
         )
     smoked: SmokeResult | None = None
     with tempfile.TemporaryDirectory(prefix="bundleup-") as tmp:
@@ -229,13 +229,16 @@ def build(
                 hint=_STRICT_HINT if not any(d.level == "error" for d in failing) else None,
             )
         name = safe_name(p.source.name)
-        default = {"pyz": f"{name}.pyz", "dir": name, "lambda": f"{name}-lambda.zip"}[fmt]
+        default = {"pyz": f"{name}.pyz", "py": f"{name}.py", "dir": name}.get(
+            fmt, f"{name}-lambda.zip"
+        )
         output = (options.output or p.source.workdir / "dist" / default).absolute()
         diagnostics = list(p_diagnostics)
-        if fmt == "pyz":
+        if fmt in LOADED:
             diagnostics += write_pyz(
                 prepared,
                 output,
+                fmt=fmt,
                 stage=stage,
                 steps=steps,
                 progress=report,
@@ -406,14 +409,14 @@ def _settle(options: BuildOptions) -> tuple[BuildOptions, Format]:
     if options.against is not None:
         options = _target_files.apply(options, _target_files.load(options.against))
     options, _configured = _config.apply(options)
-    if options.smoke is not None and (options.format or "pyz") != "pyz":
+    if options.smoke is not None and (options.format or "pyz") not in LOADED:
         raise UsageError(
-            "--smoke runs a .pyz",
+            "--smoke runs a .pyz or .py",
             hint=f"drop --smoke: a {options.format} output's host runs it",
         )
-    if options.entry == "python" and (options.format or "pyz") != "pyz":
+    if options.entry == "python" and (options.format or "pyz") not in LOADED:
         raise UsageError(
-            "--entry python makes a .pyz that runs the scripts it's given",
+            "--entry python makes a .pyz or .py that runs the scripts it's given",
             hint=f"drop --entry: a {options.format} output's host decides what runs",
         )
     if options.split is not None and (options.format or "pyz") != "pyz":
@@ -559,7 +562,7 @@ def _format_diagnostics(
     """What only matters for `dir` and `lambda` outputs, which run without bundleup's loader."""
     diags = []
     pth = pth_files(site)
-    if fmt != "pyz" and pth:
+    if fmt not in LOADED and pth:
         diags.append(
             Diagnostic(
                 "pth-not-run",
@@ -631,7 +634,7 @@ def _prepare(
         progress=progress,
     )
     check_wheel_platforms(site, target)
-    if fmt == "pyz" or options.entry or script:
+    if fmt in LOADED or options.entry or script:
         entry = resolve_entry(source, site, entry=options.entry, script=script)
     else:
         # A directory or a Lambda zip is imported, and its host decides what runs. A console
@@ -640,10 +643,10 @@ def _prepare(
         entry = None
     packages, native = inspect_site(site)
     version = project_version(site, source)
-    if fmt == "pyz":
+    if fmt in LOADED:
         add_runtime(site)
     steps.start("compile")
-    precompile(target, site, progress=progress, checked=fmt != "pyz")
+    precompile(target, site, progress=progress, checked=fmt not in LOADED)
     steps.start("check")
 
     def run_python(cmd: list[str]) -> str:

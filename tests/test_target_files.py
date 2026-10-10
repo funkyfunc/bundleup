@@ -49,7 +49,7 @@ def test_settings_facts_and_precedence(tmp_path: Path) -> None:
         (CLAUDE.replace("python-platform", "python-platfrom"), "did you mean `python-platform`"),
         (CLAUDE.replace('checked = "2026-10-09"\n', ""), "doesn't say checked"),
         (CLAUDE.replace("network = false", 'network = "no"'), "must be true or false"),
-        (CLAUDE + 'format = "exe"\n', "unknown format `exe`"),
+        (CLAUDE + 'format = "msi"\n', "unknown format `msi`"),
     ],
 )
 def test_mistakes_are_usage_errors(tmp_path: Path, text: str, message: str) -> None:

@@ -16,6 +16,7 @@ payload unpacks its layers in order.
 
 from __future__ import annotations
 
+import base64
 import hashlib
 import json
 import os
@@ -240,6 +241,7 @@ def write_pyz(
     max_size: int | None = None,
     strict: bool = False,
     split: int | None = None,
+    fmt: Format = "pyz",
 ) -> list[Diagnostic]:
     """The default: shebang + outer zip with the loader, the manifest and the payload, or one
     payload per platform and Python version when there are several (ADR-0038). Refuses, before
@@ -305,20 +307,26 @@ def write_pyz(
         "PAYLOADS": settings if len(ps) > 1 else [],
         "PARTS": parts,
         "SHA256": {layer.member: layer.digest for layer in layers} if parts else {},
+        "EMBEDDED": fmt == "py",
     }
     loader, loader_pyc = stage / "__main__.py", stage / "__main__.pyc"
-    loader.write_text(render_loader(config), encoding="utf-8")
-    run(
-        [first.target.executable, "-I", "-c", COMPILE_LOADER, str(loader), str(loader_pyc)],
-        what="compiling the loader",
-        progress=progress,
-        error=BundleupError,
-        env=COMPILE_ENV,
-    )
-    hashes = {
-        "__main__.py": _verify.record_hash(loader.read_bytes()),
-        "__main__.pyc": _verify.record_hash(loader_pyc.read_bytes()),
-    }
+    code = ""
+    if fmt == "py":  # the header and the loader are the file's code, checked as one
+        code = py_header(ps, locked, output.name) + render_loader(config)
+        hashes = {PY_CODE: _verify.record_hash(code.encode("utf-8"))}
+    else:
+        loader.write_text(render_loader(config), encoding="utf-8")
+        run(
+            [first.target.executable, "-I", "-c", COMPILE_LOADER, str(loader), str(loader_pyc)],
+            what="compiling the loader",
+            progress=progress,
+            error=BundleupError,
+            env=COMPILE_ENV,
+        )
+        hashes = {
+            "__main__.py": _verify.record_hash(loader.read_bytes()),
+            "__main__.pyc": _verify.record_hash(loader_pyc.read_bytes()),
+        }
     if len(ps) == 1 and len(layers) == 1 and not parts:
         p, (layer,) = first, layers
         manifest_json = manifest(
@@ -328,7 +336,7 @@ def write_pyz(
             native=p.native,
             entry=p.entry,
             cache_dir=str(main["dirname"]),
-            fmt="pyz",
+            fmt=fmt,
             payload=layer.path,
             payload_sha256=layer.digest,
             locked=locked[0],
@@ -338,8 +346,11 @@ def write_pyz(
             reach=p.reach,
         )
     else:
-        manifest_json = _multi_manifest(ps, layers, settings, locked, hashes, parts)
+        manifest_json = _multi_manifest(ps, layers, settings, locked, hashes, parts, fmt)
     payloads = {layer.member: layer.path for layer in layers}
+    if fmt == "py":
+        write_py(output, code, payloads, manifest_json, stage=stage, max_size=max_size)
+        return diags
     write_bundle(
         output,
         payloads=payloads,
@@ -353,6 +364,81 @@ def write_pyz(
     return diags
 
 
+PY_CODE = "code"  # a .py bundle's manifest: the hash of everything before its data
+
+
+def py_header(ps: list[Prepared], locked: list[list[_verify.LockedPackage]], name: str) -> str:
+    """The top of a .py bundle (ADR-0046): what it is, in a `# /// bundleup` block (PEP 723's
+    syntax, which tools that read `script` blocks ignore, so nothing installs these packages),
+    then how to run and check it."""
+    first = ps[0]
+    packages = sorted({f"{x.name}=={x.version}" for each in locked for x in each})
+    runs_on = "; ".join(p.target.describe(p.native, p.pythons, p.reach) for p in ps)
+    fields = {
+        "name": first.source.name,
+        "version": first.version,
+        "bundled-by": f"bundleup {__version__}",
+        "runs-on": runs_on,
+        "entry": str(first.entry) if first.entry else None,
+    }
+    lines = ["#!/usr/bin/env python3", "# /// bundleup"]
+    lines += [f"# {k} = {json.dumps(v)}" for k, v in fields.items() if v is not None]
+    lines += ["# packages = ["] + [f"#     {json.dumps(x)}," for x in packages] + ["# ]", "# ///"]
+    lines += [
+        "#",
+        f"# One file with its packages inside: run it with Python (python3 {name} ...); nothing",
+        "# to install. The packages are a zip in base64 at the end of this file, unpacked into a",
+        "# cache on the first run; the code below is bundleup's loader, which does that. Check",
+        f"# the file against its manifest with `bundleup verify {name}`.",
+        "",
+    ]
+    return "\n".join(lines) + "\n"
+
+
+def write_py(
+    output: Path,
+    code: str,
+    payloads: dict[str, Path],
+    manifest_json: bytes,
+    *,
+    stage: Path,
+    max_size: int | None,
+) -> None:
+    """A .py bundle: `code`, then the zip a .pyz would carry (payloads and manifest, without the
+    loader), in base64 comment lines, so Python skips it at the cost of reading it (ADR-0046)."""
+    from ._loader import DATA_END, DATA_START
+
+    inner = stage / "embedded.zip"
+    with zipfile.ZipFile(inner, "w", zipfile.ZIP_STORED) as zf:
+        for member, payload in sorted(payloads.items()):
+            info = zipfile.ZipInfo(member, FIXED_TIME)
+            info.external_attr = 0o100644 << 16
+            big = payload.stat().st_size > 0x7FFFFFFF
+            with open(payload, "rb") as src, zf.open(info, "w", force_zip64=big) as dest:
+                shutil.copyfileobj(src, dest, 1 << 20)
+        info = zipfile.ZipInfo(MANIFEST, FIXED_TIME)
+        info.external_attr = 0o100644 << 16
+        info.compress_type = zipfile.ZIP_DEFLATED
+        zf.writestr(info, manifest_json)
+    # 4/3 of the zip, plus a `#` and a line end per 76 characters.
+    size = len(code.encode()) + len(DATA_START) + len(DATA_END) + inner.stat().st_size * 4 // 3
+    check_size(size + size // 76 * 2, max_size, [])
+    output.parent.mkdir(parents=True, exist_ok=True)
+    tmp = output.with_name(f".{output.name}.tmp-{os.getpid()}")
+    try:
+        with open(tmp, "wb") as out, open(inner, "rb") as src:
+            out.write(code.encode("utf-8") + DATA_START + b"\n")
+            for chunk in iter(lambda: src.read(57 * 4096), b""):  # 57 bytes: one 76-char line
+                out.writelines(b"#" + line + b"\n" for line in base64.encodebytes(chunk).split())
+            out.write(DATA_END + b"\n")
+        tmp.chmod(0o755)
+        check_size(tmp.stat().st_size, max_size, [])  # exact
+        tmp.replace(output)
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+
+
 def _combined(digests: Iterable[str]) -> str:
     return hashlib.sha256("".join(digests).encode()).hexdigest()
 
@@ -364,6 +450,7 @@ def _multi_manifest(
     locked: list[list[_verify.LockedPackage]],
     loader: dict[str, str],
     parts: str | None = None,
+    fmt: Format = "pyz",
 ) -> bytes:
     """The manifest of a bundle for several platforms: the shared fields once, each layer with
     its hash and files, then each payload with its layers, target and packages (ADR-0038)."""
@@ -387,7 +474,7 @@ def _multi_manifest(
         "name": first.source.name,
         "version": first.version,
         "entry": list(first.entry) if first.entry else None,
-        "format": "pyz",
+        "format": fmt,
         "loader": loader,
         "parts": parts,  # --split: the folder beside the bundle that holds the layers
         "layers": {

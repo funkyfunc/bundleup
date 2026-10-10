@@ -48,9 +48,16 @@ PAYLOADS = []  # type: list[dict[str, Any]]
 # be unpacked under this build's name).
 PARTS = None  # type: str | None
 SHA256 = {}  # type: dict[str, str]
+# `--format py` (ADR-0046): this file is a plain .py, and what a .pyz would hold (the members
+# above and the manifest) is a zip in base64 comment lines at its end.
+EMBEDDED = False
 # --- end config ---
 
-_ARCHIVE = os.path.dirname(os.path.abspath(__file__))
+# The bundle file: the .pyz this runs from (as its __main__.py), or this .py itself.
+_ARCHIVE = os.path.abspath(__file__) if EMBEDDED else os.path.dirname(os.path.abspath(__file__))
+# The lines around a .py bundle's data (found from the end: these constants come first).
+DATA_START = b"# --- bundleup data: base64 of a zip, read by the code above ---"
+DATA_END = b"# --- end of bundleup data ---"
 
 
 def _fail(message: str) -> "NoReturn":
@@ -556,7 +563,7 @@ def _unpack(dest: str, final: str) -> None:
             with zipfile.ZipFile(path) as part:
                 _unpack_zip(part, dest, final, made)
         return
-    with open(_ARCHIVE, "rb") as f:
+    with _embedded() if EMBEDDED else open(_ARCHIVE, "rb") as f:
         outer = zipfile.ZipFile(f)
         infos = [outer.getinfo(name) for name in MEMBERS]
         made = set()  # type: set[str]
@@ -572,6 +579,35 @@ def _unpack(dest: str, final: str) -> None:
                 + int.from_bytes(header[28:30], "little")
             )
             _unpack_zip(zipfile.ZipFile(_Window(f, start, info.file_size)), dest, final, made)
+
+
+_DATA = []  # type: list[bytes]  # a .py bundle's decoded zip, once read
+
+
+def _embedded() -> "BinaryIO":
+    """A .py bundle's zip, decoded from the comment lines at its end. Non-base64 characters, the
+    `#`s and line ends, are skipped, so a copy with Windows line endings still decodes. Damage is
+    reported here, before any cache folder is tried."""
+    import io
+
+    if not _DATA:
+        import binascii
+
+        with open(_ARCHIVE, "rb") as f:
+            text = f.read()
+        start, end = text.rfind(DATA_START), text.rfind(DATA_END)
+        try:
+            if start < 0 or end < start:
+                raise ValueError("no data")
+            _DATA.append(binascii.a2b_base64(text[start + len(DATA_START) : end]))
+            if _DATA[0][-22:-18] != b"PK\x05\x06":  # a zip's end record, no comment: all there
+                raise ValueError("cut short")
+        except ValueError:  # binascii.Error is one
+            _fail(
+                "the data at the end of %s is missing or damaged (was the file cut short or "
+                "edited?). Get a fresh copy of it." % os.path.basename(_ARCHIVE)
+            )
+    return io.BytesIO(_DATA[0])
 
 
 def _unpack_zip(payload: "zipfile.ZipFile", dest: str, final: str, made: "set[str]") -> None:
@@ -651,6 +687,8 @@ def _extract() -> str:
     If another process wins the race, its copy is used and ours is thrown away.
     """
     problems = []  # type: list[str]
+    if EMBEDDED:
+        _embedded()  # damaged data: say so, rather than blame every cache folder
     for root, shared in _roots(_ARCHIVE):
         if not _loads_code(root):
             problems.append("  %s: mounted noexec, so compiled modules can't load from it" % root)
@@ -697,7 +735,10 @@ def _activate(site: str) -> None:
     """Put the payload on sys.path (where a venv's site-packages would be) and set up child
     processes: the payload's own runtime module does both (ADR-0027), so the loader and the
     children's sitecustomize.py share one implementation."""
-    if sys.path and sys.path[0] and os.path.abspath(sys.path[0]) == _ARCHIVE:
+    # The bundle on sys.path (python app.pyz), or a .py bundle's folder (python app.py): the
+    # program imports from its payload, not from whatever sits beside the file.
+    here = os.path.dirname(_ARCHIVE) if EMBEDDED else _ARCHIVE
+    if sys.path and sys.path[0] and os.path.abspath(sys.path[0]) == here:
         del sys.path[0]
     sys.path.insert(0, os.path.join(site, "__bundleup__"))
     try:

@@ -1,6 +1,6 @@
 # ADR-0002: Ship a `.pyz` that needs only Python; no standalone executables
 
-- **Status:** Accepted
+- **Status:** Accepted; the single `.py` point refined by [ADR-0046](0046-one-py-file-output.md) (a `.py` that carries the bundle as data, not one that inlines it)
 - **Date:** 2026-10-03
 - **Deciders:** the user
 

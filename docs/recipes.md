@@ -238,6 +238,24 @@ work too:
 Tested: a script locked against a private index (a flat folder) builds and runs from it
 (`tests/test_index.py`).
 
+## One `.py` file: a gist, an upload, a chat *(gauntlet)*
+
+Where only a `.py` (or only text) is accepted, write the bundle as one plain-text Python file
+([ADR-0046](adr/0046-one-py-file-output.md)):
+
+```bash
+bundleup build tool.py --format py -o dist/tool.py
+python3 dist/tool.py --help
+```
+
+The top of the file says what's inside (each package and version, where it runs) in a
+`# /// bundleup` block, which nothing installs from; the loader follows, then the packages as
+base64 comment lines. It runs like the `.pyz` (any flag that works for a `.pyz` works, apart from
+`--split`), and `bundleup verify dist/tool.py` checks it. **Best for small tools:** it's a third
+bigger than the `.pyz`, and Python reads the whole file on every start, about 2 ms per MB (a
+small tool starts 3 ms slower than its `.pyz`; a 21 MB one 38 ms slower). Every gauntlet project
+also runs as a `.py` (`--tool bundleup-py`).
+
 ## Will it build for other platforms?
 
 `bundleup check --also-platform windows --also-platform linux --also-platform macos` reads the

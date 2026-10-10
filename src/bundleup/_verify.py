@@ -283,9 +283,27 @@ PAYLOAD_KEYS = ("files", "payload", "cache_dir")  # a bundle for one platform: a
 LAYERED_KEYS = ("members", "cache_dir")
 
 
+def _open(bundle: Path) -> tuple[zipfile.ZipFile, bytes | None]:
+    """The bundle's zip, and a .py bundle's code (everything before its data, ADR-0046), which
+    it checks instead of a .pyz's __main__.py and __main__.pyc. Raises BadZipFile for neither."""
+    try:
+        return zipfile.ZipFile(bundle), None
+    except zipfile.BadZipFile:
+        text = bundle.read_bytes()
+        start, end = text.rfind(_loader.DATA_START), text.rfind(_loader.DATA_END)
+        if start < 0 or end < start:
+            raise
+        try:
+            data = base64.b64decode(text[start + len(_loader.DATA_START) : end].replace(b"#", b""))
+        except ValueError:
+            raise zipfile.BadZipFile("the data at the end of the file is damaged") from None
+        return zipfile.ZipFile(io.BytesIO(data)), text[:start]
+
+
 def _read_manifest(bundle: Path) -> dict[str, Any]:  # Any: JSON
     try:
-        with zipfile.ZipFile(bundle) as outer:
+        outer, _code = _open(bundle)
+        with outer:
             manifest = json.loads(outer.read("manifest.json"))
     except (OSError, zipfile.BadZipFile, KeyError, ValueError) as e:
         raise NotABundleError(
@@ -307,17 +325,21 @@ def _read_manifest(bundle: Path) -> dict[str, Any]:  # Any: JSON
     return manifest
 
 
-def _check_loader(outer: zipfile.ZipFile, expected: dict[str, str]) -> list[str]:
-    """__main__.py and __main__.pyc run first on every start, so they're checked too."""
+def _check_loader(
+    outer: zipfile.ZipFile, expected: dict[str, str], code: bytes | None
+) -> list[str]:
+    """__main__.py and __main__.pyc (or a .py bundle's code) run first on every start, so they're
+    checked too."""
     problems = []
     for name, digest in sorted(expected.items()):
         try:
-            data = outer.read(name)
+            data = code if code is not None else outer.read(name)
         except (KeyError, zipfile.BadZipFile) as e:
             problems.append(f"corrupted: {name} can't be read ({type(e).__name__}: {e})")
             continue
         if record_hash(data) != digest:
-            problems.append(f"changed file: {name} (the loader)")
+            what = "the code before its data" if code is not None else name
+            problems.append(f"changed file: {what} (the loader)")
     return problems
 
 
@@ -368,8 +390,9 @@ def _check_bundle(bundle: Path, manifest: dict[str, Any]) -> list[str]:  # Any: 
     """The bundle file against its manifest, and a split bundle's parts folder (ADR-0045).
     Corruption is a problem to report, not a crash."""
     try:
-        with zipfile.ZipFile(bundle) as outer:
-            problems = _check_loader(outer, manifest["loader"])
+        outer, code = _open(bundle)
+        with outer:
+            problems = _check_loader(outer, manifest["loader"], code)
             parts = manifest.get("parts")
             # A split bundle's layers are files in the folder beside it.
             source = (bundle.parent / parts).joinpath if parts else None

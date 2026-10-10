@@ -6,6 +6,17 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-09** · python · Python reads and tokenizes a whole script before running it, so data
+  carried in a `.py` costs time on every start: about 1.7 ms per MB as `#` comment lines, twice
+  that in a string literal (M-series Mac, 3.12; 1, 10 and 40 MB of base64). A main script's
+  bytecode is never cached either, so an 800-line loader adds ~3 ms. And a `.py` copied with
+  Windows line endings breaks any marker that includes `\n`: match markers without line ends.
+  Evidence: [ADR-0046](adr/0046-one-py-file-output.md), tests/test_py_format.py.
+- **2026-10-09** · packaging · A zip can be cut between files into several ordinary zips that
+  unpack in turn into one folder; the compressed sizes are known after one write, so the cut
+  needs no second guess (`--split`). Hash each part before unpacking: the cache folder is named
+  after the build, so a part from another build would otherwise be unpacked under the wrong
+  name. Evidence: [ADR-0045](adr/0045-split-a-bundle-into-parts.md).
 - **2026-10-09** · ecosystem · Facts from rounds 6 and 7 worth keeping (checked by the research
   against primary sources unless noted): pip 26.0 (Jan 2026) installs a PEP 723 script's
   dependencies (`--requirements-from-script`) and 26.1 (Apr 2026) installs `pylock.toml`

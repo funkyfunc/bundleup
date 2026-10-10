@@ -28,7 +28,7 @@ SYMBOL = {
     "skipped": "·",
     "harness-error": "⚠️",
 }
-TOOL_ORDER = ["bundleup", "pex", "shiv", "zipapps", "zipapp-naive"]
+TOOL_ORDER = ["bundleup", "bundleup-py", "pex", "shiv", "zipapps", "zipapp-naive"]
 LEGEND = (
     "Legend: ✅ pass · ❌ built but failed at run time · 🔨 build failed · "
     "🛑 refused at build time (expected) · 💥 built, then failed on the user's machine where it "
