@@ -166,6 +166,7 @@
                   "zip",
                   "verify",
                   "write",
+                  "interpreter",
                   "smoke"
                 ]
               },
@@ -178,6 +179,7 @@
               "enum": [
                 "pyz",
                 "py",
+                "exe",
                 "dir",
                 "lambda"
               ],

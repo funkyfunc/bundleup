@@ -47,7 +47,7 @@ def test_flags_and_environment_win(tmp_path: Path) -> None:
         ('max-size = "big"\n', "can't read the size `big`", "a number with an optional unit"),
         ("json = true\n", "`json` is a per-run setting", "pass --json on the command line"),
         ("strict = 1\n", "`strict` must be true or false", "for example: strict = true"),
-        ('format = "msi"\n', "unknown format `msi`", "use one of pyz, py, dir, lambda"),
+        ('format = "msi"\n', "unknown format `msi`", "use one of pyz, py, exe, dir, lambda"),
     ],
 )
 def test_mistakes_are_usage_errors(tmp_path: Path, table: str, message: str, hint: str) -> None:

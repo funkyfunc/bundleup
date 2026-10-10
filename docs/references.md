@@ -15,6 +15,9 @@ licenses checked 2026-10-04.
 | [pypa/installer](https://github.com/pypa/installer) | `src/installer/_core.py` | Installing a wheel exactly to spec; small, typed, standards-first | MIT |
 | [pypa/packaging](https://github.com/pypa/packaging) | `src/packaging/tags.py` | Wheel tags and platform compatibility: the heart of cross-target builds | Apache-2.0 / BSD |
 | [astral-sh/uv](https://github.com/astral-sh/uv) docs | `uv pip install --python-platform`, `uv export` | What we delegate to (ADR-0006); how uv resolves for other platforms | MIT / Apache-2.0 |
+| [a-scie/jump](https://github.com/a-scie/jump) | `README.md` "Format", `docs/packaging.md`, `jump/src/lift.rs` | The launcher `--format exe` puts at the head of an executable; the manifest and layout rules (ADR-0047) | Apache-2.0 |
+| [astral-sh/python-build-standalone](https://github.com/astral-sh/python-build-standalone) | release assets, `install_only_stripped` | The interpreters uv installs and executables carry | MPL-2.0 |
+| [Node single executable applications](https://nodejs.org/api/single-executable-applications.html) | the blob injected into a named section | How an executable with an embedded payload stays signable, if bundleup ever needs signing | MIT |
 
 ## Pre-ship analysis (`bundleup check`)
 

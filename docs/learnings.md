@@ -6,6 +6,13 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-09** · executables · python-build-standalone ships no stdlib bytecode for macOS and
+  Linux (3 of 1,090 modules), so an executable built on it compiles the stdlib on every run under
+  `PYTHONDONTWRITEBYTECODE` (181 ms warm instead of 62): compile it at build time. Unpacking the
+  Linux archive on a Mac fails (terminfo names differ only in case); copy it entry by entry. For
+  reproducible bytecode, strip the build folder from recorded paths (`compileall -s`) and keep
+  gzip's header free of time and name. And a scie can't be signed on macOS at all (appended data).
+  Evidence: [findings](findings/2026-10-09-standalone-executables.md).
 - **2026-10-09** · python · Python reads and tokenizes a whole script before running it, so data
   carried in a `.py` costs time on every start: about 1.7 ms per MB as `#` comment lines, twice
   that in a string literal (M-series Mac, 3.12; 1, 10 and 40 MB of base64). A main script's

@@ -210,10 +210,10 @@ def _add_build_options(command: argparse.ArgumentParser, *, output: bool) -> Non
         )
     command.add_argument(
         "--format",
-        choices=["pyz", "py", "dir", "lambda"],
+        choices=["pyz", "py", "exe", "dir", "lambda"],
         metavar="FORMAT",
         default=None,
-        help="pyz (default), py (one .py file), dir (a directory), lambda (a Lambda .zip)",
+        help="pyz (default), py (one .py), exe (with its Python), dir, lambda (Lambda .zip)",
     )
     command.add_argument(
         "--python",

@@ -65,10 +65,10 @@ provide, so a missing dependency shows up before your users find it.
   ([ADR-0045](adr/0045-split-a-bundle-into-parts.md)). Commit both; SKILL.md's command doesn't
   change. A missing or mismatched part is refused by name. CI builds the skill with `--split 20MB`
   and runs it on all three OSes.
-- **Python must be installed.** A bundle needs a Python 3 on the user's machine. macOS has one
-  (Apple's 3.9, if the developer tools are installed); many Windows machines don't, and `python`
-  there may be the Microsoft Store placeholder, which isn't Python. Windows users need Python from
-  python.org or the Store first; bundles that bring their own interpreter are on the roadmap.
+- **Python must be installed** for a `.pyz`. macOS has one (Apple's 3.9, if the developer tools
+  are installed); many Windows machines don't, and `python` there may be the Microsoft Store
+  placeholder, which isn't Python. For those, ship executables that bring their own Python
+  (below, "A machine without Python"): one per platform, and SKILL.md names the one to run.
 - **No network, no index, no install step** on the user's machine; the first run unpacks into a
   cache (a second or two for this size), later runs start like an installed venv. When a new
   version of the skill unpacks, copies of older versions unused for 30 days are removed
@@ -237,6 +237,31 @@ work too:
 
 Tested: a script locked against a private index (a flat folder) builds and runs from it
 (`tests/test_index.py`).
+
+## A machine without Python *(CI)*
+
+Build an executable that carries its own interpreter, one per OS and CPU, from any machine
+([ADR-0047](adr/0047-standalone-executables.md)):
+
+```bash
+bundleup build --format exe --python 3.12 --python-platform x86_64-pc-windows-msvc -o dist/tool.exe
+bundleup build --format exe --python 3.12 --python-platform aarch64-apple-darwin -o dist/tool-macos
+bundleup build --format exe --python 3.12 --python-platform x86_64-manylinux_2_28 -o dist/tool-linux
+```
+
+The first build downloads a small launcher (scie-jump, checked against a pinned hash) and the
+interpreter for that platform (through uv), once each. Run it as `dist/tool.exe ARGS`; with
+`--entry python` it runs scripts as `python` would (`dist/tool.exe scripts/deck_edit.py`).
+
+- **Size:** the interpreter adds 22-35 MB (the skill fixture: 49 MB for macOS, 50 for Windows,
+  57 for Linux, against 16 MB as a `.pyz`). Warm starts equal the `.pyz`'s; the first run unpacks
+  the interpreter too (4.5 s for the fixture on a Mac).
+- **Unsigned.** Files delivered by git or a package manager run as they are. On macOS a file
+  downloaded in a browser is quarantined, and Gatekeeper warns about an unsigned executable;
+  these can't be signed (data appended to a Mach-O isn't covered by a signature). Windows
+  antivirus may look twice at an unknown `.exe`. Where Python exists, a `.pyz` avoids all this.
+- CI builds the skill fixture as three executables on a Mac and runs each on Linux, Windows and
+  macOS with no Python on `PATH`.
 
 ## One `.py` file: a gist, an upload, a chat *(gauntlet)*
 

@@ -61,6 +61,7 @@ STEPS = {
     "zip": "zipping",
     "verify": "verifying",
     "write": "writing",
+    "interpreter": "adding a Python (--format exe)",
     "smoke": "running it once (--smoke)",
     "audit": "auditing the locked packages on PyPI",
 }

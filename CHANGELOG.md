@@ -12,7 +12,8 @@ The first working release. From a project with `uv.lock` or `pylock.toml`, or a 
   everywhere, on any OS and CPU; one with compiled code on the version and platform it was built
   for, or, with several `--python`/`--python-platform`, one file with a payload for each. Started
   with the wrong Python, a bundle runs itself again with a matching installed one. Also `--format
-  py` (the same as one plain-text `.py` file), `--format dir` (a plain directory for host
+  py` (the same as one plain-text `.py` file), `--format exe` (an executable that brings its own
+  Python, for machines without one), `--format dir` (a plain directory for host
   applications) and `--format lambda` (an AWS Lambda zip),
   builds for other platforms (`--python-platform`), `--max-size` (refuse an output that's too
   big) and `--split` (no file over a size: a small `.pyz` and a folder of parts). Destinations such as Lambda and Claude API Skills are tested

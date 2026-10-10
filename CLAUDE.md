@@ -52,8 +52,10 @@ and git.
   `pylock.toml`, or no lock: resolved at build time with a warning, ADR-0041), a folder of
   modules with `requirements.txt`, or a script (PEP 723, `requirements.txt` beside it, or
   standard library only). Outputs: a
-  `.pyz` (default), `--format py` (one plain-text `.py`, ADR-0046), `--format dir`, `--format
-  lambda`; `--max-size`; `--split SIZE` (a small `.pyz` and a parts folder, ADR-0045). No named targets: each
+  `.pyz` (default), `--format py` (one plain-text `.py`, ADR-0046), `--format exe` (an
+  unsigned executable with its own Python, any platform from any machine, ADR-0047), `--format
+  dir`, `--format lambda`; `--max-size`; `--split SIZE` (a small `.pyz` and a parts folder,
+  ADR-0045). No named targets: each
   destination is a tested recipe in docs/recipes.md (ADR-0039). Builds for this machine or another
   platform. Pure-Python bundles run on every
   Python version their lock allows (ADR-0030) and on any OS when the lock agrees (ADR-0034);
@@ -104,7 +106,7 @@ pyproject.toml, src/bundleup/  the package (ADR-0018): __init__.py (public API),
                         _loader.py (the bundle's __main__), _runtime.py + _sitecustomize.py
                         (copied into each payload, ADR-0027), _platforms.py, _formats.py
                         (Format, sizes), _imports.py (imports, stdlib by version), _smoke.py
-                        (--smoke), _audit.py (check --audit), _target_files.py (--against),
+                        (--smoke), _audit.py (check --audit), _target_files.py (--against), _exe.py (--format exe),
                         _zipwriter.py, _bytecode.py, _cache.py, _errors.py,
                         _term.py, _text.py
 tests/snapshots/        CLI output and API snapshots; docs/cli-reference.md is generated too
@@ -157,8 +159,8 @@ UPDATE_SNAPSHOTS=1 uv run pytest -q tests/test_cli.py                       # af
 
 ## Working rules
 
-- **Scope is frozen until 0.1 has users** (third review): no new formats, named targets or nightly
-  automation. Write an ADR only for public behaviour; the owner reviews the Proposed ones.
+- **Scope is frozen until 0.1 has users** (third review): no named targets or nightly automation,
+  and new formats only when the owner asks (they asked for `--split`, `py` and `exe`, 2026-10-09). Write an ADR only for public behaviour; the owner reviews the Proposed ones.
 - **Measure, don't claim.** Speed, size and correctness claims come from gauntlet runs compared
   with pex.
 - **The control group must pass** before trusting any bundler result. A failure there is a broken

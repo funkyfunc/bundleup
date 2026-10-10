@@ -57,8 +57,9 @@ def parse_args(text: str) -> tuple[str, ...]:
     return tuple(lexer)
 
 
-def run(bundle: Path, python: str, args: tuple[str, ...]) -> SmokeResult:
-    """Run `python bundle ARGS` in a fresh home, cache and folder, offline where possible. Paths
+def run(bundle: Path, python: str | None, args: tuple[str, ...]) -> SmokeResult:
+    """Run `python bundle ARGS` (or `bundle ARGS` for an executable, `python` None) in a fresh
+    home, cache and folder, offline where possible. Paths
     in ARGS that exist from here are made absolute (the run happens elsewhere). Raises
     CheckFailedError if it fails or doesn't finish."""
     here = [str(Path(a).absolute()) if a and not a.startswith("-") and Path(a).exists() else a
@@ -72,10 +73,11 @@ def run(bundle: Path, python: str, args: tuple[str, ...]) -> SmokeResult:
             "HOME": str(root / "home"),
             "USERPROFILE": str(root / "home"),
             "BUNDLEUP_CACHE": str(root / "cache"),
+            "SCIE_BASE": str(root / "nce"),  # an executable's interpreter unpacks here
             "TMPDIR": str(root / "tmp"),
             "PYTHONNOUSERSITE": "1",
         }
-        command = [python, str(bundle), *here]
+        command = [python, str(bundle), *here] if python else [str(bundle), *here]
         wrapped, blocked = _offline(command)
         started = time.perf_counter()
         try:
@@ -93,7 +95,8 @@ def run(bundle: Path, python: str, args: tuple[str, ...]) -> SmokeResult:
         except subprocess.TimeoutExpired as e:
             code, out = -1, _text(e.stdout) + _text(e.stderr)
         result = SmokeResult(
-            ["python", bundle.name, *args], code, time.perf_counter() - started, blocked,
+            ["python", bundle.name, *args] if python else [f"./{bundle.name}", *args],
+            code, time.perf_counter() - started, blocked,
             "\n".join(out.strip().splitlines()[-15:]),
         )  # fmt: skip
     if code != 0:

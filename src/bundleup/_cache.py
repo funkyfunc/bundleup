@@ -160,8 +160,12 @@ def clean_cache(
                 unpacked = root / entry.name[len(".lock-") :]
                 if unpacked in doomed or (not unpacked.exists() and age > LEFTOVER_AGE):
                     doomed.append(Path(entry.path))
-    if build:  # compiled bytecode, and Pythons installed only to check code (ADR-0035)
-        builds = [_bytecode.cache_dir(), _bytecode.cache_dir().parent / "pythons"]
+    if build:  # bytecode, Pythons installed to check code (ADR-0035), executables' parts (0047)
+        builds = [
+            _bytecode.cache_dir(),
+            _bytecode.cache_dir().parent / "pythons",
+            _bytecode.cache_dir().parent / "exe",
+        ]
         doomed += [path for path in builds if path.exists()]
     freed = sum(_size(p) if p.is_dir() else p.stat().st_size for p in doomed)
     if not dry_run:

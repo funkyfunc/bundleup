@@ -10,7 +10,7 @@ and change only the old one's status line.
 | # | Decision | Status |
 |---|---|---|
 | [0001](0001-record-decisions-and-learnings.md) | Record decisions as ADRs and lessons in a learnings log | Accepted |
-| [0002](0002-target-the-runtime-only-tier.md) | Ship a `.pyz` that needs only Python; no standalone executables | Accepted (the `.py` point refined by 0046) |
+| [0002](0002-target-the-runtime-only-tier.md) | Ship a `.pyz` that needs only Python; no standalone executables | Accepted (the `.py` point refined by 0046; executables superseded by 0047) |
 | [0003](0003-compete-on-experience.md) | Compete on experience and speed, not on new capability | Accepted |
 | [0004](0004-lockfile-decides-contents.md) | The lockfile decides what goes in; import tracing is for diagnostics only | Accepted; refined by 0041 |
 | [0005](0005-extract-to-cache-by-default.md) | Use the standard importer and extract to a cache by default | Accepted |
@@ -55,3 +55,4 @@ and change only the old one's status line.
 | [0044](0044-destinations-as-data-files.md) | Destinations described as data files (`--against FILE`) | Accepted |
 | [0045](0045-split-a-bundle-into-parts.md) | `--split SIZE`: a big bundle as a small `.pyz` and a folder of parts | Accepted |
 | [0046](0046-one-py-file-output.md) | `--format py`: the bundle as one plain-text `.py` file | Accepted |
+| [0047](0047-standalone-executables.md) | `--format exe`: a standalone executable that brings its own Python | Accepted |

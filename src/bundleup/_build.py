@@ -37,6 +37,7 @@ from ._errors import (
     NoCompatibleWheelError,
     UsageError,
 )
+from ._exe import host_platform, write_exe
 from ._formats import FORMATS, LOADED, Format
 from ._outputs import (
     LAMBDA_UNZIPPED,
@@ -195,6 +196,11 @@ def build(
     report = progress or ignore
     steps = Steps(report)
     combinations = _combinations(options)
+    if len(combinations) > 1 and fmt == "exe":
+        raise UsageError(
+            "an executable is for one platform and Python version: it carries that interpreter",
+            hint="build one per platform, each with one --python-platform",
+        )
     if len(combinations) > 1 and fmt not in LOADED:
         raise UsageError(
             f"a {fmt} output is for one platform and Python version",
@@ -229,26 +235,44 @@ def build(
                 hint=_STRICT_HINT if not any(d.level == "error" for d in failing) else None,
             )
         name = safe_name(p.source.name)
-        default = {"pyz": f"{name}.pyz", "py": f"{name}.py", "dir": name}.get(
-            fmt, f"{name}-lambda.zip"
-        )
+        windows = p.target.platform == "win32"
+        default = {
+            "pyz": f"{name}.pyz",
+            "py": f"{name}.py",
+            "exe": f"{name}.exe" if windows else name,
+            "dir": name,
+        }.get(fmt, f"{name}-lambda.zip")
         output = (options.output or p.source.workdir / "dist" / default).absolute()
         diagnostics = list(p_diagnostics)
         if fmt in LOADED:
+            # An executable carries a .pyz (ADR-0047): written here first, then wrapped.
+            pyz = stage / "app.pyz" if fmt == "exe" else output
             diagnostics += write_pyz(
                 prepared,
-                output,
-                fmt=fmt,
+                pyz,
+                fmt="pyz" if fmt == "exe" else fmt,
                 stage=stage,
                 steps=steps,
                 progress=report,
-                max_size=options.max_size,
+                max_size=None if fmt == "exe" else options.max_size,
                 strict=options.strict,
                 split=options.split,
             )
+            if fmt == "exe":
+                steps.start("interpreter")
+                write_exe(
+                    pyz,
+                    output,
+                    uv=find_uv(),
+                    target=p.target,
+                    platform=p.target.python_platform or host_platform(),
+                    stage=stage,
+                    progress=report,
+                    max_size=options.max_size,
+                )
             if options.smoke is not None:
                 steps.start("smoke")
-                smoked, skipped = _smoke_run(prepared, output, options.smoke)
+                smoked, skipped = _smoke_run(prepared, output, options.smoke, exe=fmt == "exe")
                 diagnostics += skipped
         elif fmt == "dir":
             check_size(sum(x.size_bytes for x in p.sizes), options.max_size, diagnostics)
@@ -321,7 +345,7 @@ CPUS = {"arm64": "aarch64", "amd64": "x86_64", "x64": "x86_64"}
 
 
 def _smoke_run(
-    prepared: list[Prepared], output: Path, args: tuple[str, ...]
+    prepared: list[Prepared], output: Path, args: tuple[str, ...], *, exe: bool = False
 ) -> tuple[SmokeResult | None, list[Diagnostic]]:
     """`--smoke`: run the bundle with the interpreter of a payload that fits this machine (the
     one the build used); a bundle only for other platforms can't run here: a warning."""
@@ -337,7 +361,8 @@ def _smoke_run(
                     "--smoke needs a script to run for --entry python",
                     hint="for example: --smoke 'scripts/tool.py --help'",
                 )
-            return _smoke.run(output, p.target.executable, args or ("--help",)), []
+            python = None if exe else p.target.executable  # an executable runs itself
+            return _smoke.run(output, python, args or ("--help",)), []
     return None, [
         Diagnostic(
             "smoke-skipped",
