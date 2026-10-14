@@ -1,5 +1,10 @@
 # bundleup
 
+[![PyPI](https://img.shields.io/pypi/v/bundleup.svg)](https://pypi.org/project/bundleup/)
+[![Python](https://img.shields.io/pypi/pyversions/bundleup.svg)](https://pypi.org/project/bundleup/)
+[![CI](https://github.com/funkyfunc/bundleup/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/funkyfunc/bundleup/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/funkyfunc/bundleup/blob/main/LICENSE)
+
 **Bundle up your Python app with everything it needs.** One command turns a locked project into a
 single `.pyz` that runs on plain Python: no install step, no network, native extensions included.
 And it tells you *before* you ship what won't survive the trip.
@@ -38,7 +43,7 @@ python dist/<name>.pyz          # run it: no install, no network
 
 bundleup reads what you have: `pyproject.toml` with `uv.lock` or `pylock.toml`, a script's
 `# /// script` block, or, without a lock, a `pyproject.toml`, `setup.py` or `requirements.txt`
-(resolved at build time, with a warning; [recipes](docs/recipes.md)). It brings its own
+(resolved at build time, with a warning; [recipes](https://github.com/funkyfunc/bundleup/blob/main/docs/recipes.md)). It brings its own
 [uv](https://docs.astral.sh/uv/) for the build; the bundle needs only Python. On first run it
 unpacks to a cache (`~/Library/Caches/bundleup`, `~/.cache/bundleup`, or a temp directory if
 those aren't writable), so later runs start as fast as an installed virtualenv; unpacking a new version removes older
@@ -61,7 +66,7 @@ runs the same checks without writing a bundle and shows how big each package is;
 warnings fail too.
 
 Recipes for Claude Skills, AWS Lambda, host applications, CI and HPC:
-[docs/recipes.md](docs/recipes.md).
+[docs/recipes.md](https://github.com/funkyfunc/bundleup/blob/main/docs/recipes.md).
 
 ## Why
 

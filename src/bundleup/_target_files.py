@@ -88,10 +88,10 @@ class TargetFile:
 def load(path: Path) -> TargetFile:
     """Read and check a target file. Raises UsageError for a missing file or a mistake in it."""
     try:
-        data: dict[str, Any] = tomllib.loads(path.read_text(encoding="utf-8"))  # Any: TOML
+        data: dict[str, Any] = tomllib.loads(path.read_text(encoding="utf-8-sig"))  # Any: TOML
     except OSError as e:
         raise UsageError(f"can't read --against {path}: {e.strerror or e}") from None
-    except tomllib.TOMLDecodeError as e:
+    except (UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
         raise UsageError(f"--against {path} isn't valid TOML: {e}") from None
     for key, value in data.items():
         if key not in TEXT | FLAGS:

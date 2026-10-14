@@ -227,7 +227,7 @@ def _add_build_options(command: argparse.ArgumentParser, *, output: bool) -> Non
     command.add_argument(
         "--entry",
         metavar="NAME",
-        default=os.environ.get("BUNDLEUP_ENTRY"),
+        default=os.environ.get("BUNDLEUP_ENTRY") or None,
         help=_env_help(
             "a script name, module:function, module or python",
             "BUNDLEUP_ENTRY",
@@ -270,14 +270,14 @@ def _add_build_options(command: argparse.ArgumentParser, *, output: bool) -> Non
             "--max-size",
             type=_max_size,
             metavar="SIZE",
-            default=os.environ.get("BUNDLEUP_MAX_SIZE"),
+            default=os.environ.get("BUNDLEUP_MAX_SIZE") or None,
             help=_env_help("fail if the output is bigger (30MB)", "BUNDLEUP_MAX_SIZE"),
         )
         command.add_argument(
             "--split",
             type=_max_size,
             metavar="SIZE",
-            default=os.environ.get("BUNDLEUP_SPLIT"),
+            default=os.environ.get("BUNDLEUP_SPLIT") or None,
             help=_env_help("no file bigger: a .pyz + parts folder (100MB)", "BUNDLEUP_SPLIT"),
         )
         command.add_argument(
@@ -550,7 +550,7 @@ def _check_lines(report: CheckReport, opts: argparse.Namespace, style: Style) ->
             f"  {packages}, {_size(report.size_bytes)} unpacked {style.dot} largest: {largest}"
         )
     )
-    if opts.verbose >= 1:
+    if opts.verbose >= 1 and report.packages:
         width = max(len(p.name) for p in report.packages)
         for p in report.packages:
             native = "  native" if p.native else ""
@@ -559,17 +559,30 @@ def _check_lines(report: CheckReport, opts: argparse.Namespace, style: Style) ->
 
 
 def _run_check(opts: argparse.Namespace) -> ExitCode:
+    from dataclasses import replace
+
     from ._build import check  # deferred: --help and --version stay instant
 
     err = sys.stderr
     style = Style(err, opts.color)
     status, on_progress = _progress(opts, style)
     try:
+        raw = _options(opts)
+        if raw.more_pythons or raw.more_python_platforms:
+            raise UsageError(
+                "check looks at one Python version and platform at a time",
+                hint="--matrix shows every platform and Python version from the lock",
+            )
         options = _expanded(opts, style)
+        also = list(opts.also_platform)
+        for p in options.more_python_platforms:
+            if p != options.python_platform and p not in also:
+                also.append(p)
+        options = replace(options, more_pythons=(), more_python_platforms=())
         report = check(
             options,
             progress=on_progress,
-            also_platforms=opts.also_platform,
+            also_platforms=also,
             matrix=opts.matrix,
             audit=opts.audit,
         )
@@ -640,7 +653,7 @@ def _verify_diagnostics(report: VerifyReport) -> list[Diagnostic]:
 
 
 def _run_verify(opts: argparse.Namespace) -> ExitCode:
-    from ._verify import verify  # deferred: --help and --version stay instant
+    from ._verify import unpacks, verify  # deferred: --help and --version stay instant
 
     err = sys.stderr
     style = Style(err, opts.color)
@@ -662,8 +675,9 @@ def _run_verify(opts: argparse.Namespace) -> ExitCode:
     elif opts.quiet == 0:
         files = f"{report.files:,} files match its manifest"
         print(f"{style.bold('Verified')} {_shown(report.bundle)}: {files}", file=err)
-        cache = f"matches ({report.cache})" if report.cache else "not unpacked on this machine"
-        print(style.dim(f"  unpacked copy: {cache}"), file=err)
+        if unpacks(report.bundle):
+            cache = f"matches ({report.cache})" if report.cache else "not unpacked on this machine"
+            print(style.dim(f"  unpacked copy: {cache}"), file=err)
     return code
 
 
@@ -757,22 +771,30 @@ def _crash(error: BaseException, *, verbose: bool) -> ExitCode:
 
 def _is_build_flag(token: str, options: set[str]) -> bool:
     """Whether `token` after `--smoke` is another `bundleup build` option rather than the smoke
-    command's own flags (`--smoke "--version"`, `--smoke "--help"`)."""
-    if token in ("-h", "--help", "--smoke"):
-        return False
+    command's own flags (`--smoke "--version"`, `--smoke "-V"`)."""
     if token.split("=", 1)[0] in options:
         return True
     return len(token) > 1 and token[0] == "-" and set(token[1:]) <= {"q", "v"}
 
 
-def _join_smoke(args: list[str], options: set[str]) -> list[str]:
+def _join_smoke(args: list[str], parser: argparse.ArgumentParser) -> list[str]:
     """`argparse` treats a token starting with `-` after `nargs="?"` as one of its own options,
     so `bundleup build --smoke "--version"` (docs/recipes.md) would fail without joining `=`."""
+    actions = parser._option_string_actions
+    options = set(actions)
+    takes_value = {opt for opt, act in actions.items() if act.nargs not in (0, "?", "*")}
     out: list[str] = []
     i = 0
     while i < len(args):
-        if (
-            args[i] == "--smoke"
+        token = args[i]
+        if token == "--":
+            out.extend(args[i:])
+            break
+        if token in takes_value and i + 1 < len(args):
+            out.extend(args[i : i + 2])
+            i += 2
+        elif (
+            token == "--smoke"
             and i + 1 < len(args)
             and args[i + 1].startswith("-")
             and args[i + 1] != "--"
@@ -781,7 +803,7 @@ def _join_smoke(args: list[str], options: set[str]) -> list[str]:
             out.append(f"--smoke={args[i + 1]}")
             i += 2
         else:
-            out.append(args[i])
+            out.append(token)
             i += 1
     return out
 
@@ -793,9 +815,8 @@ def main(argv: list[str] | None = None) -> int:
     if not args:
         top.print_help(sys.stderr)
         return ExitCode.USAGE_ERROR
-    build_opts = set(all_parsers["build"]._option_string_actions)
     try:
-        opts = top.parse_args(_join_smoke(args, build_opts))
+        opts = top.parse_args(_join_smoke(args, all_parsers["build"]))
     except _UsageProblem as e:
         return _usage_error(str(e), args)
     try:

@@ -71,12 +71,16 @@ def resolve_entry(source: Source, site: Path, *, entry: str | None, script: str 
             )
         return Entry("script", script)
     scripts = console_scripts(site, source.name)
+    by_canon = {canonicalize_name(k): v for k, v in scripts.items()}
     if entry is None:
         if len(scripts) == 1:
             entry = next(iter(scripts.values()))
-        elif canonicalize_name(source.name) in scripts:
-            entry = scripts[canonicalize_name(source.name)]
+        elif canonicalize_name(source.name) in by_canon:
+            entry = by_canon[canonicalize_name(source.name)]
         elif not scripts:
+            pkg = canonicalize_name(source.name).replace("-", "_")
+            if (site / pkg / "__main__.py").is_file():
+                return Entry("module", pkg)
             raise EntryPointError(
                 f"{source.name} defines no [project.scripts], so bundleup doesn't know what to run",
                 hint="add one to pyproject.toml, pass --entry module:function, or --entry "
@@ -89,9 +93,15 @@ def resolve_entry(source: Source, site: Path, *, entry: str | None, script: str 
             )
     elif entry in scripts:
         entry = scripts[entry]
-    module, _, attr = entry.partition(":")
+    module, sep, attr = entry.partition(":")
+    module = module.strip()
     attr = attr.split("[")[0].strip()  # drop legacy "extras" syntax: "mod:func [extra]"
-    return Entry("call", module.strip(), attr) if attr else Entry("module", module.strip())
+    if not module or (sep and not attr):
+        raise UsageError(
+            f"invalid --entry {entry!r}",
+            hint="give a script name, module:function, module, or python",
+        )
+    return Entry("call", module, attr) if attr else Entry("module", module)
 
 
 def check_wheel_platforms(site: Path, target: Target) -> None:
@@ -128,15 +138,30 @@ def runtime_needs(site: Path) -> _platforms.RuntimeNeeds:
 
 
 # Set literals are stored in .pyc files in hash order, and string hashes are randomised per process,
-# so compiling twice can give different bytes. A fixed seed keeps builds reproducible.
-COMPILE_ENV = {**os.environ, "PYTHONHASHSEED": "0"}
+# so compiling twice can give different bytes. A fixed seed keeps builds reproducible; host PYTHON*
+# variables are stripped so compiling with `-s -S` (which honours PYTHONHASHSEED, unlike `-I`) is
+# still isolated from the caller's environment.
+def compile_env() -> dict[str, str]:
+    return {
+        **{k: v for k, v in os.environ.items() if not k.startswith("PYTHON")},
+        "PYTHONHASHSEED": "0",
+    }
+
+
+COMPILE_ENV = compile_env()
 
 
 def precompile(target: Target, site: Path, *, progress: Progress, checked: bool = False) -> None:
     """Compile everything with the target's interpreter, reusing cached bytecode (_bytecode)."""
 
     def compile_with(cmd: list[str]) -> None:
-        run(cmd, what="compiling bytecode", progress=progress, error=BundleupError, env=COMPILE_ENV)
+        run(
+            cmd,
+            what="compiling bytecode",
+            progress=progress,
+            error=BundleupError,
+            env=compile_env(),
+        )
 
     identity = (
         f"{_bytecode.FORMAT}-{target.implementation}-{target.full_version}-{target.cache_tag}"
@@ -362,7 +387,10 @@ def python_range(
 
     def same(minor: int) -> bool:
         full = f"3.{minor}.0"
-        if not all(spec.contains(full, prereleases=True) for spec in specs):
+        if not all(
+            any(spec.contains(f"3.{minor}.{p}", prereleases=True) for p in (0, 99))
+            for spec in specs
+        ):
             return False
         environment = {
             **target.markers,

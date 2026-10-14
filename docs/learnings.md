@@ -6,6 +6,18 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-13** · review · Three consecutive adversarial review passes after 0.1.0 caught subtle
+  cross-cutting edge cases: `compileall -f` re-compiling every cached `.pyc` on warm builds (skipping
+  already-cached `.pyc` files cuts warm compile time by ~50 ms and avoids spawning Python at all when
+  only non-code or already-cached files are present); `python -I` enabling `-s` and `-S`, which hid
+  site-installed dependencies inside `setuptools` build backends on `pylock.toml` sdist builds (use
+  `-s -S` only for bytecode/syntax subprocesses); macOS `/var` → `/private/var` symlinks causing
+  `abspath` vs `realpath` mismatches between `_loader`, `_runtime`, `_sitecustomize`, and `_verify`;
+  and PEP 263 encoding cookies (`tokenize.open`), UTF-8 BOMs (`utf-8-sig`), and non-canonical project
+  names (`My_App` vs `my-app`) across `check` and `verify`. Evidence:
+  [ninth](findings/2026-10-13-ninth-review.md), [tenth](findings/2026-10-13-tenth-review.md),
+  [eleventh](findings/2026-10-13-eleventh-review.md),
+  [UX & speed findings](findings/2026-10-13-ux-speed-and-differentiation.md).
 - **2026-10-13** · build · uv keys cached non-editable wheels of local directories on
   `pyproject.toml` alone, so a second `bundleup build` after editing `src/` re-bundled the first
   build's wheel unless `--refresh-package` is passed for every `directory` package in the lock;

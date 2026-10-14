@@ -310,3 +310,30 @@ def test_downloading_a_python_is_announced(monkeypatch: pytest.MonkeyPatch, tmp_
     events: list[ProgressEvent] = []
     assert _python.fetch_interpreter("uv", "3.8", cwd=tmp_path, progress=events.append) is None
     assert [e.kind for e in events] == ["note"] and "UV_PYTHON_DOWNLOADS=never" in events[0].text
+
+
+def test_package_main_module_fallback_and_output_validation(tmp_path: Path) -> None:
+    """Ninth review: a project without `[project.scripts]` falls back to `<pkg>/__main__.py`;
+    and `-o <existing_dir>` or `-o <input_script>` is rejected with a clear UsageError."""
+    from bundleup import UsageError
+
+    proj = tmp_path / "my-tool"
+    (proj / "src" / "my_tool").mkdir(parents=True)
+    (proj / "pyproject.toml").write_text(
+        '[project]\nname = "my-tool"\nversion = "0.1.0"\nrequires-python = ">=3.9"\n'
+        'dependencies = []\n[build-system]\nrequires = ["uv_build>=0.12,<0.13"]\n'
+        'build-backend = "uv_build"\n'
+    )
+    (proj / "src" / "my_tool" / "__init__.py").write_text("")
+    (proj / "src" / "my_tool" / "__main__.py").write_text('print("from __main__")\n')
+    res = build(BuildOptions(path=proj, output=tmp_path / "my-tool.pyz", smoke=()))
+    assert res.entry == "my_tool" and res.smoke is not None
+    assert res.smoke.output.strip() == "from __main__"
+
+    with pytest.raises(UsageError, match="is a directory"):
+        build(BuildOptions(path=proj, output=tmp_path))
+
+    script = tmp_path / "s.py"
+    script.write_text("# /// script\n# dependencies = []\n# ///\nprint(1)\n")
+    with pytest.raises(UsageError, match="would overwrite the input script"):
+        build(BuildOptions(path=script, output=script, format="py"))

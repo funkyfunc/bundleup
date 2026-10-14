@@ -55,9 +55,10 @@ EMBEDDED = False
 # --- end config ---
 
 # The bundle file: the .pyz this runs from (as its __main__.py), or this .py itself. A .py piped
-# to Python (`curl ... | python3 -`) has no file: checked in _check.
+# to Python (`curl ... | python3 -`) has no file: checked in _check. `realpath` follows symlinks so
+# a symlinked `--split` bundle finds its `.parts` folder beside the real file.
 _FILE = os.path.abspath(globals().get("__file__") or "<none>")
-_ARCHIVE = _FILE if EMBEDDED else os.path.dirname(_FILE)
+_ARCHIVE = os.path.realpath(_FILE if EMBEDDED else os.path.dirname(_FILE))
 # The lines around a .py bundle's data (found from the end: these constants come first).
 DATA_START = b"# --- bundleup data: base64 of a zip, read by the code above ---"
 DATA_END = b"# --- end of bundleup data ---"
@@ -787,7 +788,12 @@ def _activate(site: str) -> None:
     # The bundle on sys.path (python app.pyz), or a .py bundle's folder (python app.py): the
     # program imports from its payload, not from whatever sits beside the file.
     here = os.path.dirname(_ARCHIVE) if EMBEDDED else _ARCHIVE
-    if sys.path and sys.path[0] and os.path.abspath(sys.path[0]) == here:
+    raw_here = os.path.dirname(_FILE)
+    if (
+        sys.path
+        and sys.path[0]
+        and (os.path.realpath(sys.path[0]) == here or os.path.abspath(sys.path[0]) == raw_here)
+    ):
         del sys.path[0]
     sys.path.insert(0, os.path.join(site, "__bundleup__"))
     try:
@@ -826,13 +832,14 @@ def _run_python() -> None:
     `-c code`, a program on stdin (`-`, or piped), or a prompt."""
     import runpy
 
-    me = os.path.basename(_ARCHIVE)
+    me = os.path.basename(_FILE if EMBEDDED else os.path.dirname(_FILE))
     args = sys.argv[1:]
     if not args and not sys.stdin.isatty():
         args = ["-"]  # piped: run it, as python does
     if not args:
         import code
 
+        sys.path.insert(0, "")
         code.interact(banner="Python %s with %s's packages" % (sys.version.split()[0], NAME))
         return
     first = args[0]
@@ -840,11 +847,15 @@ def _run_python() -> None:
         _fail("%s needs an argument\n%s" % (first, PYTHON_USAGE % me))
     if first == "-m":
         sys.argv = args[1:]
+        cwd = os.path.abspath(os.getcwd())
+        sys.path.insert(0, cwd)  # as python -m does: the working directory
+        _add_env_path("BUNDLEUP_RUNTIME_SCRIPTS", cwd)
         runpy.run_module(args[1], run_name="__main__", alter_sys=True)
     elif first in ("-c", "-"):
         source = args[1] if first == "-c" else sys.stdin.read()
         sys.argv = [first, *args[2 if first == "-c" else 1 :]]
         sys.path.insert(0, "")  # as python -c does: the working directory
+        _add_env_path("BUNDLEUP_RUNTIME_SCRIPTS", os.path.abspath(os.getcwd()))
         _exec_main(source, "<string>" if first == "-c" else "<stdin>")
     elif first.startswith("-"):
         _fail(

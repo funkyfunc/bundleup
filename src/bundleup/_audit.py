@@ -36,17 +36,19 @@ class Locked:
     version: str
 
 
-def from_pypi(pylock_text: str, selected: Container[str]) -> list[Locked]:
-    """The locked packages (those in `selected`, canonical names) that come from pypi.org."""
+def from_pypi(pylock_text: str, selected: Container[str | tuple[str, str | None]]) -> list[Locked]:
+    """The locked packages (those in `selected`, canonical names or `(name, version)` pairs) that
+    come from pypi.org."""
     found = []
     for package in tomllib.loads(pylock_text).get("packages", []):
         name, version = str(package.get("name", "")), package.get("version")
+        canon = canonicalize_name(name)
         index = str(package.get("index", ""))
         urls = [
             str(f.get("url", "")) for f in [*package.get("wheels", []), package.get("sdist") or {}]
         ]
         on_pypi = "pypi.org" in index or any("files.pythonhosted.org" in u for u in urls)
-        if version and on_pypi and canonicalize_name(name) in selected:
+        if version and on_pypi and ((canon, str(version)) in selected or canon in selected):
             found.append(Locked(name, str(version)))
     return found
 
@@ -103,7 +105,9 @@ def _check(package: Locked, now: datetime) -> tuple[list[Diagnostic], bool]:
             project = _get(f"{PYPI}/{package.name}/json")
         except (OSError, ValueError):
             return found, True
-        first = _oldest_upload([f for files in project.get("releases", {}).values() for f in files])
+        first = _oldest_upload(
+            [f for files in (project.get("releases") or {}).values() for f in (files or [])]
+        )
         if first and (now - first).days < NEW_PROJECT_DAYS:
             found.append(
                 Diagnostic(
@@ -162,16 +166,23 @@ def _get(url: str) -> dict[str, Any]:  # Any: JSON
 
 
 def _oldest_upload(files: list[dict[str, Any]]) -> datetime | None:  # Any: JSON
-    times = [str(f["upload_time_iso_8601"]) for f in files if f.get("upload_time_iso_8601")]
-    if not times:
-        return None
-    return min(datetime.fromisoformat(t.replace("Z", "+00:00")) for t in times)
+    parsed: list[datetime] = []
+    for f in files:
+        raw = f.get("upload_time_iso_8601") if isinstance(f, dict) else None
+        if not raw:
+            continue
+        try:
+            dt = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+        except ValueError:
+            continue
+        parsed.append(dt if dt.tzinfo is not None else dt.replace(tzinfo=timezone.utc))
+    return min(parsed) if parsed else None
 
 
-def _version_key(version: str) -> tuple[int, ...] | tuple[()]:
+def _version_key(version: str) -> tuple[int, Any]:
     from packaging.version import InvalidVersion, Version
 
     try:
-        return Version(version).release
+        return (1, Version(version))
     except InvalidVersion:
-        return ()
+        return (0, version)

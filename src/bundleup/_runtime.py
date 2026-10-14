@@ -31,6 +31,32 @@ def identity() -> str:
     return repr((sys.prefix, tuple(sys.version_info[:2]), getattr(sys, "abiflags", "")))
 
 
+STDLIB_RUNNERS = ("cProfile", "doctest", "pdb", "profile", "timeit", "trace", "unittest")
+
+
+def _has_module(folder: str, top: str) -> bool:
+    if os.path.isdir(os.path.join(folder, top)) or os.path.isfile(
+        os.path.join(folder, top + ".py")
+    ):
+        return True
+    try:
+        entries = os.listdir(folder)
+    except OSError:
+        return False
+    prefix = top + "."
+    return any(n.startswith(prefix) and n.endswith((".so", ".pyd")) for n in entries)
+
+
+def _under(path: str, home: str) -> bool:
+    for fn in (os.path.abspath, os.path.realpath):
+        p = os.path.normcase(fn(path))
+        h = os.path.normcase(fn(home))
+        prefix = h if h.endswith(os.sep) else h + os.sep
+        if p.startswith(prefix):
+            return True
+    return False
+
+
 def runs_bundle_code(site: str) -> bool:
     """For a child process of the bundle's own interpreter: whether it runs the bundle's code
     (then it sees the bundle) or something else installed with that Python, such as a console
@@ -44,19 +70,20 @@ def runs_bundle_code(site: str) -> bool:
         # hands its own interpreter. (click's test suite runs `python -`; a console script, which
         # mustn't see the bundle, always has its path here.)
         return True
+    scripts = [p for p in os.environ.get(ENV_SCRIPTS, "").split(os.pathsep) if p]
     if first == "-m":
         original = getattr(sys, "orig_argv", None)  # 3.10+: the full command line
         if original and "-m" in original[:-1]:
             top = original[original.index("-m") + 1].split(".")[0]
-            return os.path.isdir(os.path.join(site, top)) or os.path.isfile(
-                os.path.join(site, top + ".py")
-            )
+            if top in STDLIB_RUNNERS:
+                return True
+            paths = [p for p in os.environ.get(ENV_PATHS, "").split(os.pathsep) if p] or [site]
+            return any(_has_module(d, top) for d in [*paths, *scripts])
         return True  # 3.9 can't tell which module: assume the bundle's own (the common case)
-    script = os.path.normcase(os.path.abspath(first))
     homes = [site]
-    if script.endswith(".py"):  # a console script (no .py) never counts, wherever it lives
-        homes += [p for p in os.environ.get(ENV_SCRIPTS, "").split(os.pathsep) if p]
-    return any(script.startswith(os.path.normcase(os.path.abspath(h)) + os.sep) for h in homes)
+    if os.path.normcase(first).endswith(".py"):  # a console script (no .py) never counts
+        homes += scripts
+    return any(_under(first, h) for h in homes)
 
 
 def site_packages_index() -> int:
@@ -68,7 +95,9 @@ def site_packages_index() -> int:
 
 
 def _same(a: str, b: str) -> bool:
-    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(
+        os.path.abspath(b)
+    ) or os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
 
 
 def activate(site: str, pth: "Optional[Sequence[str]]" = None) -> None:
@@ -84,6 +113,7 @@ def activate(site: str, pth: "Optional[Sequence[str]]" = None) -> None:
     parent_paths = [p for p in os.environ.get(ENV_PATHS, "").split(os.pathsep) if p]
     if parent and not _same(parent, site):
         sys.path[:] = [p for p in sys.path if p not in parent_paths]
+        os.environ.pop(ENV_SCRIPTS, None)
     parent_shim = os.path.join(parent, SHIM) if parent else None
     shim = os.path.join(site, SHIM)
     pythonpath = [

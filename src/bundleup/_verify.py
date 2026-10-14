@@ -22,8 +22,10 @@ import hashlib
 import io
 import json
 import os
+import stat as stat_mod
 import tempfile
 import zipfile
+import zlib
 from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -71,11 +73,15 @@ def record_hash(data: bytes) -> str:
 
 
 @functools.lru_cache(maxsize=8)
-def _lock_packages(pylock: str) -> tuple[tuple[str, str | None, str | None], ...]:
+def _lock_packages(pylock: str) -> tuple[tuple[str, str | None, Marker | None], ...]:
     """(name, version, marker) of every package in a pylock.toml, parsed once per text: the range
     and portability checks evaluate one lock for dozens of environments."""
     return tuple(
-        (package["name"], package.get("version"), package.get("marker"))
+        (
+            canonicalize_name(package["name"]),
+            package.get("version"),
+            Marker(package["marker"]) if package.get("marker") else None,
+        )
         for package in tomllib.loads(pylock).get("packages", [])
     )
 
@@ -84,9 +90,9 @@ def locked_packages(pylock: str, environment: dict[str, str]) -> list[LockedPack
     """The packages in a `uv export --format pylock.toml` that apply to this environment."""
     packages = []
     for name, version, marker in _lock_packages(pylock):
-        if marker and not Marker(marker).evaluate(environment):
+        if marker and not marker.evaluate(environment):
             continue
-        packages.append(LockedPackage(canonicalize_name(name), version))
+        packages.append(LockedPackage(name, version))
     return packages
 
 
@@ -231,8 +237,41 @@ class VerifyReport:
         }
 
 
-def _hash_file(path: Path) -> str:
-    return record_hash(path.read_bytes())
+def _walk_dir(root: Path) -> tuple[dict[str, str], set[str], list[str]]:
+    """Every regular file (rel -> full path), non-regular entry/symlink (rel), and unreadable
+    directory problem under `root`, without building a Path per entry or following symlinks."""
+    found: dict[str, str] = {}
+    special: set[str] = set()
+    errors: list[str] = []
+    prefix = str(root)
+    cut = len(prefix) + (0 if prefix.endswith(os.sep) else 1)
+
+    def on_error(e: OSError) -> None:
+        bad = os.fspath(e.filename) if e.filename else prefix
+        rel = bad[cut:].replace(os.sep, "/") if bad.startswith(prefix) else bad
+        errors.append(f"corrupted: {rel or '.'} can't be read ({type(e).__name__}: {e})")
+
+    for dirpath, dirnames, filenames in os.walk(prefix, followlinks=False, onerror=on_error):
+        dirnames.sort()
+        rel_dir = dirpath[cut:].replace(os.sep, "/")
+        for d in list(dirnames):
+            full = os.path.join(dirpath, d)
+            if os.path.islink(full):
+                special.add(f"{rel_dir}/{d}" if rel_dir else d)
+                dirnames.remove(d)
+        for name in sorted(filenames):
+            full = os.path.join(dirpath, name)
+            rel = f"{rel_dir}/{name}" if rel_dir else name
+            try:
+                mode = os.lstat(full).st_mode
+            except OSError as e:
+                errors.append(f"corrupted: {rel} can't be read ({type(e).__name__}: {e})")
+                continue
+            if stat_mod.S_ISLNK(mode) or not stat_mod.S_ISREG(mode):
+                special.add(rel)
+            else:
+                found[rel] = full
+    return found, special, errors
 
 
 DIR_MANIFEST = "bundleup-manifest.json"  # in a `dir` output and at the top of a Lambda zip
@@ -254,7 +293,7 @@ def _check_payload(
             continue
         try:
             data = payload.read(info)
-        except (OSError, zipfile.BadZipFile) as e:
+        except (OSError, zipfile.BadZipFile, zlib.error, EOFError) as e:
             problems.append(f"corrupted: {info.filename} can't be read ({type(e).__name__}: {e})")
             continue
         if record_hash(data) != expected:
@@ -265,16 +304,21 @@ def _check_payload(
 
 def _check_dir(folder: Path, files: dict[str, str]) -> list[str]:
     """Compare a `--format dir` output with its `bundleup-manifest.json`."""
-    problems = []
+    found, special, problems = _walk_dir(folder)
     for path, expected in sorted(files.items()):
-        local = folder / path
-        if not local.is_file():
-            problems.append(f"missing file: {path}")
-        elif _hash_file(local) != expected:
+        full = found.get(path)
+        if full is None:
+            problems.append(f"changed file: {path}" if path in special else f"missing file: {path}")
+            continue
+        try:
+            actual = record_hash(Path(full).read_bytes())
+        except OSError as e:
+            problems.append(f"corrupted: {path} can't be read ({type(e).__name__}: {e})")
+            continue
+        if actual != expected:
             problems.append(f"changed file: {path}")
-    for local in sorted(folder.rglob("*")):
-        rel = local.relative_to(folder).as_posix()
-        if local.is_file() and rel != DIR_MANIFEST and rel not in files:
+    for rel in sorted((set(found) | special) - set(files)):
+        if rel != DIR_MANIFEST:
             problems.append(f"extra file: {rel} isn't in the manifest")
     return problems
 
@@ -282,24 +326,31 @@ def _check_dir(folder: Path, files: dict[str, str]) -> list[str]:
 def _check_cache(cache: Path, files: dict[str, str]) -> list[str]:
     """Compare an extracted copy with the manifest. Bytecode may be missing (some Pythons keep
     it under sys.pycache_prefix instead) or rewritten by Python, so it's only checked if present."""
-    problems = []
+    found, special, problems = _walk_dir(cache)
     for path, expected in sorted(files.items()):
-        local = cache / path
-        if not local.is_file():
-            if not path.endswith(".pyc"):
+        full = found.get(path)
+        if full is None:
+            if path in special:
+                problems.append(f"changed file: {path}")
+            elif not path.endswith(".pyc"):
                 problems.append(f"missing file: {path}")
-        elif _hash_file(local) != expected:
+            continue
+        try:
+            actual = record_hash(Path(full).read_bytes())
+        except OSError as e:
+            problems.append(f"corrupted: {path} can't be read ({type(e).__name__}: {e})")
+            continue
+        if actual != expected:
             problems.append(f"changed file: {path}")
-    for local in sorted(cache.rglob("*")):
-        rel = local.relative_to(cache).as_posix()
-        if local.is_file() and rel not in files and not rel.endswith(".pyc"):
+    for rel in sorted((set(found) | special) - set(files)):
+        if not rel.endswith(".pyc") or rel in special:
             problems.append(f"extra file: {rel} isn't in the manifest")
     return problems
 
 
 def _find_cache(bundle: Path, cache_dir: str) -> Path | None:
     """This machine's extracted copy, found the way the bundle's loader finds it."""
-    for root, shared in _loader._roots(str(bundle)):
+    for root, shared in _loader._roots(os.path.realpath(bundle)):
         candidate = os.path.join(root, cache_dir)
         if os.path.isdir(candidate) and (not shared or _loader._private(root)):
             return Path(candidate)
@@ -345,13 +396,19 @@ def _is_exe(bundle: Path, outer: zipfile.ZipFile | None = None) -> bool:
     """Whether `bundle` is a `--format exe` executable (even if its head or tail was damaged)."""
     try:
         with bundle.open("rb") as f:
-            if f.read(4).startswith(EXE_HEADS):
-                return True
+            head = f.read(4)
     except OSError:
         return False
+    if head.startswith(EXE_HEADS):
+        return True
     if _read_scie_trailer(bundle) is not None:
         return True
-    return bool(outer and outer.infolist() and outer.infolist()[0].header_offset > 64)
+    return bool(
+        not head.startswith(b"#!")
+        and outer
+        and outer.infolist()
+        and outer.infolist()[0].header_offset > 64
+    )
 
 
 def _hash_span(f: IO[bytes], size: int) -> str | None:
@@ -416,15 +473,25 @@ def _open(bundle: Path) -> tuple[zipfile.ZipFile, bytes | None]:
         return zipfile.ZipFile(io.BytesIO(data)), text[:start]
 
 
+def _str_dict(value: object) -> bool:
+    return isinstance(value, dict) and all(
+        isinstance(k, str) and isinstance(v, str) for k, v in value.items()
+    )
+
+
 def _read_manifest(bundle: Path) -> dict[str, Any]:  # Any: JSON
     if bundle.is_dir():
         try:
-            manifest = json.loads((bundle / DIR_MANIFEST).read_text(encoding="utf-8"))
+            manifest = json.loads((bundle / DIR_MANIFEST).read_text(encoding="utf-8-sig"))
         except (OSError, ValueError) as e:
             raise NotABundleError(
                 f"{bundle} isn't a bundleup directory with {DIR_MANIFEST} ({type(e).__name__}: {e})"
             ) from None
-        if not isinstance(manifest, dict) or "name" not in manifest or "files" not in manifest:
+        if (
+            not isinstance(manifest, dict)
+            or not isinstance(manifest.get("name"), str)
+            or not _str_dict(manifest.get("files"))
+        ):
             raise NotABundleError(f"{bundle}'s manifest is incomplete")
         return manifest
     try:
@@ -433,7 +500,7 @@ def _read_manifest(bundle: Path) -> dict[str, Any]:  # Any: JSON
             names = set(outer.namelist())
             entry = "manifest.json" if "manifest.json" in names else DIR_MANIFEST
             manifest = json.loads(outer.read(entry))
-    except (OSError, zipfile.BadZipFile, KeyError, ValueError) as e:
+    except (OSError, zipfile.BadZipFile, zlib.error, EOFError, KeyError, ValueError) as e:
         found = _read_scie_trailer(bundle)
         if found is not None and isinstance(found[0].get("lift"), dict):
             name = str(found[0]["lift"].get("name", bundle.name))
@@ -442,22 +509,62 @@ def _read_manifest(bundle: Path) -> dict[str, Any]:  # Any: JSON
             f"{bundle} isn't a bundleup bundle with a manifest ({type(e).__name__}: {e})",
             hint="bundles carry manifest.json since bundleup's `build` command; rebuild it",
         ) from None
+    if not isinstance(manifest, dict):
+        raise NotABundleError(f"{bundle} isn't a bundleup bundle with a manifest")
     if manifest.get("format") in ("dir", "lambda"):
-        if "name" not in manifest or "files" not in manifest:
+        if not isinstance(manifest.get("name"), str) or not _str_dict(manifest.get("files")):
             raise NotABundleError(f"{bundle}'s manifest is incomplete")
         return manifest
     missing = [key for key in MANIFEST_KEYS if key not in manifest]
     if "payloads" in manifest:
-        layers = manifest.get("layers", {})
+        layers = manifest.get("layers")
+        payloads = manifest["payloads"]
+        if (
+            not isinstance(layers, dict)
+            or not isinstance(payloads, list)
+            or not all(isinstance(p, dict) for p in payloads)
+        ):
+            raise NotABundleError(f"{bundle}'s manifest is incomplete")
         missing += [] if layers else ["layers"]
-        missing += sorted({k for p in manifest["payloads"] for k in LAYERED_KEYS if k not in p})
         missing += sorted(
-            {m for p in manifest["payloads"] for m in p.get("members", [])} - set(layers)
+            {k for p in payloads if isinstance(p, dict) for k in LAYERED_KEYS if k not in p}
         )
+        if not missing and (
+            not payloads
+            or not all(
+                isinstance(p.get("cache_dir"), str)
+                and bool(p.get("cache_dir"))
+                and isinstance(p.get("members"), list)
+                and all(isinstance(m, str) for m in p["members"])
+                for p in payloads
+            )
+            or not all(
+                isinstance(layer, dict)
+                and isinstance(layer.get("sha256"), str)
+                and _str_dict(layer.get("files"))
+                for layer in layers.values()
+            )
+        ):
+            raise NotABundleError(f"{bundle}'s manifest is incomplete")
+        missing += sorted({m for p in payloads for m in p.get("members", [])} - set(layers))
     else:
         missing += [key for key in PAYLOAD_KEYS if key not in manifest]
+        if not missing and (
+            not _str_dict(manifest.get("files"))
+            or not isinstance(manifest.get("payload"), dict)
+            or not isinstance(manifest["payload"].get("sha256"), str)
+            or not (manifest.get("cache_dir") is None or isinstance(manifest.get("cache_dir"), str))
+        ):
+            raise NotABundleError(f"{bundle}'s manifest is incomplete")
     if missing:
         raise NotABundleError(f"{bundle}'s manifest is incomplete (no {', '.join(missing)})")
+    parts = manifest.get("parts")
+    if (
+        not isinstance(manifest.get("name"), str)
+        or not (manifest.get("loader") is None or _str_dict(manifest.get("loader")))
+        or not (parts is None or (isinstance(parts, str) and bool(parts)))
+    ):
+        raise NotABundleError(f"{bundle}'s manifest is incomplete")
     return manifest
 
 
@@ -467,10 +574,10 @@ def _check_loader(
     """__main__.py and __main__.pyc (or a .py bundle's code) run first on every start, so they're
     checked too."""
     problems = []
-    for name, digest in sorted(expected.items()):
+    for name, digest in sorted((expected or {}).items()):
         try:
             data = code if code is not None else outer.read(name)
-        except (KeyError, zipfile.BadZipFile) as e:
+        except (OSError, KeyError, zipfile.BadZipFile, zlib.error, EOFError) as e:
             problems.append(f"corrupted: {name} can't be read ({type(e).__name__}: {e})")
             continue
         if record_hash(data) != digest:
@@ -522,7 +629,7 @@ def _check_layer(
                 return _check_payload(payload, layer["files"])
     except FileNotFoundError:
         return [f"missing file: {member}, a part of the split bundle"]
-    except (OSError, KeyError, zipfile.BadZipFile) as e:
+    except (OSError, KeyError, zipfile.BadZipFile, zlib.error, EOFError) as e:
         return [f"corrupted: {member} can't be read ({type(e).__name__}: {e})"]
 
 
@@ -534,20 +641,30 @@ def _check_bundle(bundle: Path, manifest: dict[str, Any]) -> list[str]:  # Any: 
     try:
         outer, code = _open(bundle)
         with outer:
-            if manifest.get("format") == "lambda":
+            if manifest.get("format") in ("dir", "lambda"):
                 return _check_payload(outer, manifest["files"], ignore=(DIR_MANIFEST,))
             problems = _check_exe(bundle) if _is_exe(bundle, outer) else []
-            problems += _check_loader(outer, manifest["loader"], code)
+            problems += _check_loader(outer, manifest.get("loader") or {}, code)
             parts = manifest.get("parts")
-            # A split bundle's layers are files in the folder beside it.
-            source = (bundle.parent / parts).joinpath if parts else None
+            # A split bundle's layers are files in the folder beside the real bundle file.
+            source = (bundle.resolve().parent / parts).joinpath if parts else None
             for member, layer in sorted(_layers(manifest).items()):
                 opener = (lambda m: source(m).open("rb")) if source else outer.open
                 problems += _check_layer(opener, member, layer)
             return problems
-    except (OSError, zipfile.BadZipFile) as e:
+    except (OSError, zipfile.BadZipFile, zlib.error, EOFError) as e:
         problems = _check_exe(bundle) if _is_exe(bundle) else []
         return problems or [f"corrupted: {bundle.name} can't be read ({type(e).__name__}: {e})"]
+
+
+def unpacks(bundle: Path) -> bool:
+    """Whether `bundle` unpacks to a cache directory at run time (`dir` and `lambda` don't)."""
+    if bundle.is_dir():
+        return False
+    try:
+        return _read_manifest(bundle).get("format") not in ("dir", "lambda")
+    except NotABundleError:
+        return False
 
 
 def verify(bundle: Path) -> VerifyReport:

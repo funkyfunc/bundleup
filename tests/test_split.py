@@ -52,6 +52,15 @@ def test_a_split_bundle_runs_verifies_and_keeps_every_file_under_the_size(
     r = run(out, tmp_path / "cache")
     assert r.returncode == 0 and r.stdout.startswith("split OK"), r.stderr
     assert verify(out).ok
+    # Ninth review: a symlink in ~/bin/ pointing to the .pyz finds .parts beside the real file.
+    (tmp_path / "bin").mkdir()
+    link = tmp_path / "bin" / "app.pyz"
+    try:
+        link.symlink_to(out)
+    except OSError:
+        return
+    r = run(link, tmp_path / "cache2")
+    assert r.returncode == 0 and r.stdout.startswith("split OK"), r.stderr
 
 
 def test_a_missing_or_foreign_part_is_refused_by_name(app: Path, tmp_path: Path) -> None:

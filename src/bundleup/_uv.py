@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import contextlib
+import functools
 import json
 import os
 import re
@@ -41,18 +42,20 @@ SKIP_TOP = {".lock"}
 MIN_UV = (0, 9)  # oldest uv whose CLI we rely on (export --no-editable, python find --script)
 
 
+@functools.lru_cache(maxsize=4)
+def _uv_version_ok(path: str) -> bool:
+    try:
+        out = subprocess.run([path, "--version"], capture_output=True, text=True, timeout=10).stdout
+        return tuple(int(x) for x in out.split()[1].split(".")[:2]) >= MIN_UV
+    except (OSError, ValueError, IndexError, subprocess.TimeoutExpired):
+        return False
+
+
 def find_uv() -> str:
     """The user's own uv if it's recent enough (it wrote their uv.lock), else the bundled one."""
     on_path = shutil.which("uv")
-    if on_path:
-        try:
-            out = subprocess.run(
-                [on_path, "--version"], capture_output=True, text=True, timeout=10
-            ).stdout
-            if tuple(int(x) for x in out.split()[1].split(".")[:2]) >= MIN_UV:
-                return on_path
-        except (OSError, ValueError, IndexError, subprocess.TimeoutExpired):
-            pass
+    if on_path and _uv_version_ok(on_path):
+        return on_path
     try:
         from uv import find_uv_bin
 
@@ -74,16 +77,24 @@ def from_pylock(source: Source, stage: Path) -> tuple[list[list[str]], Path]:
     from another tool may not list the project itself; then the project is installed alongside
     and added to the copy the check reads."""
     assert source.pylock is not None
-    text = source.pylock.read_text(encoding="utf-8")
     try:
+        text = source.pylock.read_text(encoding="utf-8-sig")
         packages = tomllib.loads(text).get("packages", [])
-    except tomllib.TOMLDecodeError as e:
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
         raise ProjectError(f"{source.pylock} isn't valid TOML: {e}") from None
     me = canonicalize_name(source.name)
     mine = [p for p in packages if canonicalize_name(str(p.get("name", ""))) == me]
-    if any(p.get("directory", {}).get("editable") for p in mine):
+    editable = next(
+        (
+            str(p.get("name") or source.name)
+            for p in packages
+            if p.get("directory", {}).get("editable")
+        ),
+        None,
+    )
+    if editable is not None:
         raise ProjectError(
-            f"{source.pylock.name} installs {source.name} as editable, which would point the "
+            f"{source.pylock.name} installs {editable} as editable, which would point the "
             "bundle back at this directory",
             hint="export the lock without editable installs (uv: --no-editable)",
         )
@@ -93,8 +104,8 @@ def from_pylock(source: Source, stage: Path) -> tuple[list[list[str]], Path]:
         installs.append([str(source.path)])
         text = with_project(text, source.name)
     check.write_text(text, encoding="utf-8")
-    refresh = _refresh_local(check)
-    return [[*args, *refresh] for args in installs], check
+    extra = _refresh_local(check)
+    return [[*args, *extra] for args in installs], check
 
 
 def _refresh_local(pylock: Path) -> list[str]:
@@ -199,7 +210,12 @@ EMPTY_PYLOCK = 'lock-version = "1.0"\ncreated-by = "bundleup"\npackages = []\n'
 
 
 def resolve(
-    uv: str, source: Source, *, python: tuple[int, int], stage: Path, progress: Progress
+    uv: str,
+    source: Source,
+    *,
+    python: tuple[int, int],
+    stage: Path,
+    progress: Progress,
 ) -> Exported:
     """Without a lock (ADR-0041): resolve what `source.declared` lists (a requirements.txt, or a
     project's pyproject.toml, setup.py or setup.cfg) for every platform at once, as uv.lock
@@ -234,13 +250,13 @@ def resolve(
         installs.append([str(source.path)])
         text = with_project(text, source.name)
     check.write_text(text, encoding="utf-8")
-    refresh = _refresh_local(check)
-    return Exported([[*args, *refresh] for args in installs], check, pinned=pinned)
+    extra = _refresh_local(check)
+    return Exported([[*args, *extra] for args in installs], check, pinned=pinned)
 
 
 def _oldest_python(requires: str | None, python: tuple[int, int]) -> str:
-    """The lowest Python the resolution covers: the project's requires-python, or the target's.
-    (Resolving from the project's lowest lets a pure-Python bundle run on all of them.)"""
+    """The lowest Python the resolution covers: the project's requires-python (from 3.9, the
+    oldest Python bundles target), or the target's."""
     if requires:
         from packaging.specifiers import InvalidSpecifier, SpecifierSet
 
@@ -248,8 +264,10 @@ def _oldest_python(requires: str | None, python: tuple[int, int]) -> str:
             spec = SpecifierSet(requires)
         except InvalidSpecifier:
             spec = None
-        for minor in range(0, python[1] + 1):
-            if spec is not None and f"3.{minor}.0" in spec:
+        for minor in range(min(9, python[1]), python[1] + 1):
+            if spec is not None and any(
+                spec.contains(f"3.{minor}.{p}", prereleases=True) for p in (0, 99)
+            ):
                 return f"3.{minor}"
     return f"{python[0]}.{python[1]}"
 
@@ -266,7 +284,7 @@ def pinned_requirements(path: Path) -> tuple[dict[str, str] | None, bool]:
 
     pins: dict[str, str] = {}
     hashed = True
-    text = path.read_text(encoding="utf-8").replace("\\\n", " ")
+    text = path.read_text(encoding="utf-8-sig").replace("\\\n", " ")
     for raw in text.splitlines():
         line = raw.split(" #")[0].strip()
         if not line or line.startswith("#"):
@@ -315,7 +333,12 @@ def relocate_paths(pylock: Path, root: Path) -> None:
 
 def _is_local(path: Path) -> bool:
     """A project directory or a file uv can install from a pylock path."""
-    return path.is_file() or (path / "pyproject.toml").is_file() or (path / "setup.py").is_file()
+    return (
+        path.is_file()
+        or (path / "pyproject.toml").is_file()
+        or (path / "setup.py").is_file()
+        or (path / "setup.cfg").is_file()
+    )
 
 
 def add_runtime(site: Path) -> None:
@@ -441,8 +464,12 @@ def scripts_of(dist_info: Path) -> dict[str, str]:
 def console_scripts(site: Path, name: str) -> dict[str, str]:
     """Console and GUI scripts from the project's installed metadata."""
     want = canonicalize_name(name)
+    for dist in _verify.installed_distributions(site):
+        if dist.name == want:
+            return scripts_of(site / dist.dist_info)
     for dist_info in site.glob("*.dist-info"):
-        if canonicalize_name(dist_info.name.split("-")[0]) == want:
+        dist_name = dist_info.name.removesuffix(".dist-info").rsplit("-", 1)[0]
+        if canonicalize_name(dist_name) == want:
             return scripts_of(dist_info)
     return {}
 

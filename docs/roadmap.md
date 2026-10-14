@@ -54,9 +54,8 @@ for particular hosts (MCP servers and the like) are niche; don't add them.
     kinds of outputs.
 36. ~~**One environment, each platform's format**~~ done 2026-10-09: [recipe](recipes.md) for Docker
     (tested in CI, read-only and noexec included), E2B, Modal and setup scripts.
-37. **Release 0.1.0**: everything is prepared ([docs/releasing.md](releasing.md), [CHANGELOG](../CHANGELOG.md),
-    [release.yml](../.github/workflows/release.yml)); publishing needs the owner (trusted publishing on pypi.org, then a tag).
-    Deferred by the owner (2026-10-07) until the value proposition has been tested.
+37. ~~**Release 0.1.0**~~ done 2026-10-13 ([docs/releasing.md](releasing.md), [CHANGELOG](../CHANGELOG.md),
+    [release.yml](../.github/workflows/release.yml)): published `0.1.0` to PyPI via Trusted Publishing and tagged `v0.1.0`.
 
 
 Frozen until 0.1 has users: named targets and nightly automation; new formats only when the owner asks (they asked for `--split`, `py` and `exe` on 2026-10-09). Deferred: faster warm

@@ -98,20 +98,23 @@ def _size(path: Path) -> int:
 
 
 # How the loader names an unpacked bundle: "<name>-<first 16 hex digits of the payload's hash>".
-# Anything else in a cache root (bundleup's own `build/` cache, for one) is left alone.
-UNPACKED = re.compile(r"(?P<name>.+)-[0-9a-f]{16}")
+# Anything else in a cache root (`build/`, `.tmp-`, `.lock-`) is left alone.
+UNPACKED = re.compile(r"(?P<name>[^.].*)-[0-9a-f]{16}")
 
 
 def list_cache() -> list[CachedBundle]:
     """Every unpacked bundle in the cache roots, most recently used first."""
     found = []
     for root in cache_roots():
-        for entry in os.scandir(root):
-            match = UNPACKED.fullmatch(entry.name)
-            if match and entry.is_dir(follow_symlinks=False):
-                path = Path(entry.path)
-                mtime = entry.stat(follow_symlinks=False).st_mtime
-                found.append(CachedBundle(path, match["name"], _size(path), mtime))
+        with contextlib.suppress(OSError):
+            for entry in os.scandir(root):
+                match = UNPACKED.fullmatch(entry.name)
+                if match:
+                    with contextlib.suppress(OSError):
+                        if entry.is_dir(follow_symlinks=False):
+                            path = Path(entry.path)
+                            mtime = entry.stat(follow_symlinks=False).st_mtime
+                            found.append(CachedBundle(path, match["name"], _size(path), mtime))
     return sorted(found, key=lambda b: b.last_used, reverse=True)
 
 
@@ -155,14 +158,18 @@ def clean_cache(
         held.append(lock)
         doomed += [unpacked.path, *_bytecode_copies(unpacked.path)]
     for root in cache_roots():
-        for entry in os.scandir(root):
-            age = now - entry.stat(follow_symlinks=False).st_mtime
-            if entry.name.startswith(".tmp-") and age > LEFTOVER_AGE:
-                doomed.append(Path(entry.path))
-            elif entry.name.startswith(".lock-"):
-                unpacked = root / entry.name[len(".lock-") :]
-                if unpacked in doomed or (not unpacked.exists() and age > LEFTOVER_AGE):
+        with contextlib.suppress(OSError):
+            for entry in os.scandir(root):
+                try:
+                    age = now - entry.stat(follow_symlinks=False).st_mtime
+                except OSError:
+                    continue
+                if entry.name.startswith(".tmp-") and age > LEFTOVER_AGE:
                     doomed.append(Path(entry.path))
+                elif entry.name.startswith(".lock-"):
+                    unpacked = root / entry.name[len(".lock-") :]
+                    if unpacked in doomed or (not unpacked.exists() and age > LEFTOVER_AGE):
+                        doomed.append(Path(entry.path))
     if build:  # bytecode, Pythons installed to check code (ADR-0035), executables' parts (0047)
         builds = [
             _bytecode.cache_dir(),
@@ -170,7 +177,10 @@ def clean_cache(
             _bytecode.cache_dir().parent / "exe",
         ]
         doomed += [path for path in builds if path.exists()]
-    freed = sum(_size(p) if p.is_dir() else p.stat().st_size for p in doomed)
+    freed = 0
+    for p in doomed:
+        with contextlib.suppress(OSError):
+            freed += _size(p) if p.is_dir() else p.stat().st_size
     if not dry_run:
         for path in doomed:
             if path.is_dir():

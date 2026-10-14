@@ -89,8 +89,22 @@ def load_source(path: Path) -> Source:
 APP_MAINS = ("__main__.py", "main.py", "app.py")
 
 
+def read_python_text(path: Path) -> str:
+    """Read a Python source file using its PEP 263 encoding cookie or UTF-8 (with BOM stripped)."""
+    import tokenize
+
+    try:
+        with tokenize.open(path) as f:
+            return f.read().lstrip("\ufeff")
+    except (SyntaxError, LookupError, UnicodeDecodeError):
+        return path.read_text(encoding="utf-8-sig", errors="replace")
+
+
 def _load_script(path: Path) -> Source:
-    text = path.read_text(encoding="utf-8")
+    try:
+        text = read_python_text(path)
+    except OSError as e:
+        raise ProjectError(f"can't read {path}: {e.strerror or e}") from None
     if any(m.group("type") == "script" for m in PEP723.finditer(text)):
         meta = script_metadata(text)
         return Source(path, path.stem, meta.get("requires-python"), is_script=True)
@@ -112,11 +126,15 @@ def _load_script(path: Path) -> Source:
 
 def _load_project(path: Path, pyproject: Path) -> Source:
     try:
-        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-    except tomllib.TOMLDecodeError as e:
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
         raise ProjectError(f"{pyproject} isn't valid TOML: {e}") from None
-    project = data.get("project") or {}
-    poetry = data.get("tool", {}).get("poetry", {})
+    raw_project = data.get("project")
+    project = raw_project if isinstance(raw_project, dict) else {}
+    raw_tool = data.get("tool")
+    tool = raw_tool if isinstance(raw_tool, dict) else {}
+    raw_poetry = tool.get("poetry")
+    poetry = raw_poetry if isinstance(raw_poetry, dict) else {}
     name = project.get("name") or poetry.get("name")
     if not name and not (path / "setup.py").is_file() and not (path / "setup.cfg").is_file():
         raise ProjectError(
@@ -146,14 +164,18 @@ def _legacy_name(path: Path) -> str:
 
     cfg = configparser.ConfigParser()
     try:
-        cfg.read(path / "setup.cfg", encoding="utf-8")
+        cfg.read(path / "setup.cfg", encoding="utf-8-sig")
         if cfg.has_option("metadata", "name"):
             return cfg.get("metadata", "name")
-    except configparser.Error:
+    except (OSError, UnicodeDecodeError, configparser.Error):
         pass
     setup = path / "setup.py"
     if setup.is_file():
-        found = re.search(r"""\bname\s*=\s*["']([^"']+)["']""", setup.read_text(encoding="utf-8"))
+        try:
+            text = read_python_text(setup)
+        except OSError:
+            text = ""
+        found = re.search(r"""\bname\s*=\s*["']([^"']+)["']""", text)
         if found:
             return found.group(1)
     return safe_name(path.name)
@@ -283,10 +305,12 @@ def find_uv_lock(project: Path) -> Path | None:
 def _is_member(project: Path, root: Path) -> bool:
     """Whether `root`'s uv workspace includes `project` (its `members` globs, minus `exclude`)."""
     try:
-        data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
-    except (OSError, tomllib.TOMLDecodeError):
+        data = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
         return False
-    workspace = data.get("tool", {}).get("uv", {}).get("workspace")
+    tool = data.get("tool")
+    uv_table = tool.get("uv") if isinstance(tool, dict) else None
+    workspace = uv_table.get("workspace") if isinstance(uv_table, dict) else None
     if not isinstance(workspace, dict):
         return False
 
@@ -298,6 +322,7 @@ def _is_member(project: Path, root: Path) -> bool:
 
 def script_metadata(text: str) -> dict[str, Any]:  # Any: TOML values have no fixed type
     """The PEP 723 `script` block, parsed as TOML (empty if there is none)."""
+    text = text.lstrip("\ufeff")
     blocks = [m for m in PEP723.finditer(text) if m.group("type") == "script"]
     if len(blocks) > 1:
         raise ProjectError("the script has more than one `# /// script` block")
@@ -307,7 +332,10 @@ def script_metadata(text: str) -> dict[str, Any]:  # Any: TOML values have no fi
         line[2:] if line.startswith("# ") else line[1:]
         for line in blocks[0].group("content").splitlines(keepends=True)
     )
-    return tomllib.loads(content)
+    try:
+        return tomllib.loads(content)
+    except tomllib.TOMLDecodeError as e:
+        raise ProjectError(f"the `# /// script` block isn't valid TOML: {e}") from None
 
 
 def script_path(source: Source, fmt: Format) -> str | None:

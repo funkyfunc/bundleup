@@ -182,3 +182,142 @@ def test_an_older_interpreter_catches_what_ast_cannot(tmp_path: Path) -> None:
     )
     assert narrowed == PythonRange((3, 12), None)
     assert [d.code for d in diags] == ["python-range"]
+
+
+def test_tenth_review_check_imports_audit_and_folder_app(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Tenth review: `check -v` on a zero-package script, folder-app `own` files in `owners()` /
+    `oldest_python()`, dotted filenames in `_source_of`, `except ImportError:` fallback imports,
+    PEP 263 / UTF-8 BOM in `imports_of`, and `(name, version)` filtering in `_audit.from_pypi`."""
+    # 1. `_check_lines` with `-v` on an empty packages list doesn't crash on max()
+    import argparse
+    from dataclasses import replace
+
+    from bundleup import _audit, _cli, _imports
+    from bundleup._python import PythonRange
+    from bundleup._term import Style
+
+    empty_report = c.CheckReport(
+        name="solo",
+        version=None,
+        target=TARGET,
+        native=False,
+        packages=[],
+        diagnostics=[],
+        duration_s=0.1,
+    )
+    lines = _cli._check_lines(
+        empty_report, argparse.Namespace(verbose=1), Style(sys.stderr, "never")
+    )
+    assert any("0 packages" in line for line in lines)
+
+    # 2. _source_of preserves dots in module stems
+    assert c._source_of("pkg/__pycache__/api.v1.cpython-312.pyc") == "pkg/api.v1.py"
+    assert c._source_of("__pycache__/app.test.cpython-312.pyc") == "app.test.py"
+
+    # 3. Folder-app `own` files are attributed to the project in owners() and oldest_python()
+    import ast
+
+    site = tmp_path / "folder_site"
+    site.mkdir()
+    (site / "main.py").write_text("match 1:\n    case 1: pass\n")
+    pyc = site / _bytecode.pyc_path("main.py", TARGET.cache_tag)
+    pyc.parent.mkdir(parents=True, exist_ok=True)
+    pyc.write_bytes(b"1234")
+    owned = c.owners(site, project="my-folder-app", own=["main.py"])
+    assert owned["main.py"] == c._Owner("my-folder-app", None, False)
+    narrowed, diags = c.oldest_python(
+        site,
+        project="my-folder-app",
+        script=None,
+        own=["main.py"],
+        pythons=PythonRange((3, 9), None),
+        target=replace(TARGET, version=(3, 12)),
+        interpreters={(3, 9): None},
+        run=run,
+    )
+    assert narrowed == PythonRange((3, 12), None)
+    assert [d.code for d in diags] == ["python-range"]
+
+    # 4. `try: import tomllib except ImportError: import tomli` marks both as optional
+    imports = _imports.imports_in(
+        ast.parse("try:\n    import tomllib\nexcept ImportError:\n    import tomli\n")
+    )
+    assert imports == set()
+
+    # 5. `imports_of` handles PEP 263 latin-1 encoding cookie and UTF-8 BOM
+    latin1 = tmp_path / "latin1.py"
+    latin1.write_bytes("# -*- coding: latin-1 -*-\n# café\nimport json\n".encode("latin-1"))
+    assert _imports.imports_of(latin1) == {"json"}
+    bom = tmp_path / "bom.py"
+    bom.write_bytes("\ufeffimport os\n".encode("utf-8"))
+    assert _imports.imports_of(bom) == {"os"}
+
+    # 6. `_audit.from_pypi` filters by (name, version) and sorts PEP 440 versions
+    lock = """
+lock-version = "1.0"
+created-by = "uv"
+[[packages]]
+name = "foo"
+version = "1.0.0"
+index = "https://pypi.org/simple"
+wheels = [{ name = "foo-1.0.0-py3-none-any.whl" }]
+[[packages]]
+name = "foo"
+version = "2.0.0"
+index = "https://pypi.org/simple"
+wheels = [{ name = "foo-2.0.0-py3-none-any.whl" }]
+"""
+    assert _audit.from_pypi(lock, {("foo", "2.0.0")}) == [_audit.Locked("foo", "2.0.0")]
+    assert _audit._version_key("0.10.0") > _audit._version_key("0.9.0")
+
+
+def test_eleventh_review_canonical_project_else_imports_pth_bom_and_audit(
+    tmp_path: Path,
+) -> None:
+    """Eleventh review: canonicalized project names in owners/oldest_python/syntax_errors,
+    standalone .pyc in _source_of, try/except/else in imports_in, UTF-8 BOM in .pth files,
+    and naive/malformed timestamps in _audit._oldest_upload."""
+    import ast
+    from datetime import timezone
+
+    from bundleup import _audit, _imports
+
+    assert c._source_of("standalone.pyc") == "standalone.py"
+
+    # Non-canonical project name matches canonicalized dist-info in syntax_errors()
+    site = tmp_path / "canon_site"
+    dist = site / "My_App-1.0.dist-info"
+    dist.mkdir(parents=True)
+    (dist / "METADATA").write_text("Name: My_App\nVersion: 1.0\n")
+    (dist / "RECORD").write_text("my_app/__init__.py,,\n")
+    pkg = site / "my_app"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("def broken(:\n")
+    owned = c.owners(site, project="My_App")
+    assert owned["my_app/__init__.py"].name == "my-app"
+    diags = c.syntax_errors(site, owned, project="My_App", target=TARGET, run=run)
+    assert len(diags) == 1 and diags[0].level == "error" and diags[0].package == "my-app"
+
+    # try / except ImportError / else treats imports in `else:` as optional
+    tree = ast.parse(
+        "try:\n    import rich\nexcept ImportError:\n    pass\nelse:\n    import rich_extra\n"
+    )
+    assert _imports.imports_in(tree) == set()
+
+    # .pth with UTF-8 BOM and hidden .pth file in provided_by()
+    (site / "bom.pth").write_bytes("\ufeffsrc_sub\n".encode("utf-8"))
+    (site / "src_sub").mkdir()
+    (site / "src_sub" / "extra_mod.py").write_text("x = 1\n")
+    (site / ".hidden.pth").write_text("ghost_dir\n")
+    assert "extra_mod" in _imports.provided_by(site)
+
+    # _audit._oldest_upload handles naive ISO timestamps and malformed strings gracefully
+    dt = _audit._oldest_upload(
+        [
+            {"upload_time_iso_8601": "not-a-timestamp"},
+            {"upload_time_iso_8601": "2025-01-01T00:00:00"},
+        ]
+    )
+    assert dt is not None and dt.tzinfo == timezone.utc

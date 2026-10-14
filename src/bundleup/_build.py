@@ -23,6 +23,7 @@ from . import (
     _config,
     _coverage,
     _imports,
+    _loader,
     _platforms,
     _smoke,
     _target_files,
@@ -58,6 +59,7 @@ from ._payload import (
     pth_files,
     python_range,
     resolve_entry,
+    runtime_needs,
 )
 from ._python import (
     Portability,
@@ -75,6 +77,7 @@ from ._source import (
     looks_secret,
     project_version,
     python_files,
+    read_python_text,
     safe_name,
     script_metadata,
     script_path,
@@ -193,6 +196,15 @@ def build(
     and commands through `progress` if given.
     """
     options, fmt = _settle(options)
+    if options.output is not None:
+        if not options.output.absolute().name:
+            raise UsageError(f"-o {options.output} has no file name")
+        if fmt != "dir" and options.output.is_dir():
+            raise UsageError(
+                f"{options.output} is a directory",
+                hint=f"give a file path (for example: -o {options.output / 'app.pyz'}), "
+                "or use --format dir",
+            )
     report = progress or ignore
     steps = Steps(report)
     combinations = _combinations(options)
@@ -243,6 +255,21 @@ def build(
             "dir": name,
         }.get(fmt, f"{name}-lambda.zip")
         output = (options.output or p.source.workdir / "dist" / default).absolute()
+        if fmt != "dir" and output.is_dir():
+            raise UsageError(
+                f"{output} is a directory",
+                hint=f"give a file path (for example: -o {output / default}), or use --format dir",
+            )
+        if output.resolve() in {
+            x.resolve()
+            for x in (p.source.path, p.source.declared, p.source.pylock)
+            if x is not None
+        }:
+            what = "the input script" if p.source.is_script else "the project's own files"
+            raise UsageError(
+                f"-o {output.name} would overwrite {what}",
+                hint="choose another output path",
+            )
         diagnostics = list(p_diagnostics)
         if fmt in LOADED:
             # An executable carries a .pyz (ADR-0047): written here first, then wrapped.
@@ -369,7 +396,13 @@ def _smoke_run(
     for p in prepared:
         machine = CPUS.get(p.target.machine.lower(), p.target.machine.lower())
         same_os = p.reach.any_os or p.target.platform == sys.platform
-        if same_os and (p.reach.any_cpu or not p.native or machine == here):
+        needs = runtime_needs(p.site)
+        libc = needs.libc
+        plat = p.target.python_platform
+        if exe and plat and plat.sys_platform == "linux" and libc is None:
+            libc = ("musl", (1, 2)) if plat.musl else ("glibc", (2, 17))
+        fits_system = _loader._libc_fits(libc) and _loader._macos_fits(needs.macos)
+        if same_os and (p.reach.any_cpu or not p.native or machine == here) and fits_system:
             if p.entry is not None and p.entry.kind == "python" and not args:
                 raise UsageError(
                     "--smoke needs a script to run for --entry python",
@@ -390,7 +423,10 @@ def _smoke_run(
 def _audit_lock(pylock: Path, target: Target) -> list[Diagnostic]:
     """`check --audit`: the locked packages for this target that come from PyPI, checked there."""
     text = pylock.read_text(encoding="utf-8")
-    selected = {canonicalize_name(p.name) for p in _verify.locked_packages(text, target.markers)}
+    selected = {
+        (canonicalize_name(p.name), p.version)
+        for p in _verify.locked_packages(text, target.markers)
+    }
     return _audit.audit(_audit.from_pypi(text, selected))
 
 
@@ -562,7 +598,7 @@ def _unlocked(source: Source, *, pinned: bool) -> list[Diagnostic]:
     if pinned:
         return []
     if source.is_script and source.pep723:
-        meta = script_metadata(source.path.read_text(encoding="utf-8"))
+        meta = script_metadata(read_python_text(source.path))
         if not meta.get("dependencies"):
             return []
         name = source.path.name
@@ -692,7 +728,12 @@ def _prepare(
         return run(cmd, what="checking the code", progress=progress, error=BundleupError)
 
     diagnostics, sizes = _check.analyze(
-        site, project=canonicalize_name(source.name), target=target, run=run_python, script=script
+        site,
+        project=canonicalize_name(source.name),
+        target=target,
+        run=run_python,
+        script=script,
+        own=own,
     )
     secrets = [rel for rel in own if looks_secret(rel)]
     if secrets:
@@ -733,6 +774,7 @@ def _prepare(
         site,
         project=canonicalize_name(source.name),
         script=script,
+        own=own,
         pythons=pythons,
         target=target,
         interpreters=interpreters,
@@ -788,13 +830,29 @@ def check(
     platform names to check from the lock alone (ADR-0031), for the same Python version.
     `matrix`: wheel coverage for every platform and Python version (`report.matrix`).
     `audit`: supply-chain checks on the locked packages, from PyPI (needs the network)."""
+    asked_more = bool(options.more_pythons or options.more_python_platforms)
     options, fmt = _settle(options)
-    if options.more_pythons or options.more_python_platforms:
+    if asked_more:
         raise UsageError(
             "check looks at one Python version and platform at a time",
             hint="--matrix shows every platform and Python version from the lock",
         )
-    others = [_platforms.parse(name).name for name in also_platforms]  # bad names fail first
+    if options.more_python_platforms:
+        also_platforms = (*also_platforms, *options.more_python_platforms)
+    options = replace(options, more_pythons=(), more_python_platforms=())
+    primary = (
+        replace(_platforms.parse(options.python_platform), name="")
+        if options.python_platform
+        else None
+    )
+    seen_platforms = {primary} if primary is not None else set()
+    others: list[str] = []
+    for name in also_platforms:  # bad names fail first
+        parsed = _platforms.parse(name)
+        key = replace(parsed, name="")
+        if key not in seen_platforms:
+            seen_platforms.add(key)
+            others.append(parsed.name)
     report = progress or ignore
     steps = Steps(report)
     with tempfile.TemporaryDirectory(prefix="bundleup-") as tmp:
@@ -827,5 +885,9 @@ def _matrix(pylock: Path, source: Source) -> list[_coverage.MatrixCell]:
     text = pylock.read_text(encoding="utf-8")
     covered = tomllib.loads(text).get("requires-python") or ""
     spec = SpecifierSet(source.requires_python or "") & SpecifierSet(covered)
-    pythons = [v for v in _coverage.MATRIX_PYTHONS if spec.contains(f"{v[0]}.{v[1]}.0")]
+    pythons = [
+        v
+        for v in _coverage.MATRIX_PYTHONS
+        if any(spec.contains(f"{v[0]}.{v[1]}.{p}", prereleases=True) for p in (0, 99))
+    ]
     return _coverage.matrix(text, pythons)

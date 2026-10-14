@@ -786,3 +786,29 @@ def test_bundleup_checks_itself_cleanly() -> None:
     """Self-hosting: `bundleup check --strict .` on this repository finds no errors or warnings."""
     report = bundleup.check(BuildOptions(path=Path(__file__).parent.parent, strict=True))
     assert report.ok and report.diagnostics == []
+
+
+def test_bytecode_compilation_is_deterministic_and_cached_across_builds(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Ninth review: `-I` implied `-E` in CPython and ignored `PYTHONHASHSEED=0`, making frozen
+    frozenset constants depend on OS randomness; and non-RECORD `.py` files weren't cached."""
+    from bundleup._steps import ProgressEvent
+
+    monkeypatch.setenv("BUNDLEUP_CACHE", str(tmp_path / "cache"))
+    script = tmp_path / "app.py"
+    script.write_text(
+        "# /// script\n# dependencies = []\n# ///\n"
+        "S = frozenset({'alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta'})\n"
+        "print(sorted(S)[0])\n"
+    )
+    a = build(BuildOptions(path=script, output=tmp_path / "a.pyz")).output.read_bytes()
+    monkeypatch.setenv("BUNDLEUP_CACHE", str(tmp_path / "cache2"))
+    b = build(BuildOptions(path=script, output=tmp_path / "b.pyz")).output.read_bytes()
+    assert a == b
+
+    # Warm build with the same cache: compiling bytecode spawns no py_compile subprocess.
+    events: list[ProgressEvent] = []
+    build(BuildOptions(path=script, output=tmp_path / "c.pyz"), progress=events.append)
+    compile_cmds = [e for e in events if e.kind == "command" and "py_compile" in e.text]
+    assert compile_cmds == []

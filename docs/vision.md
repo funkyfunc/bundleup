@@ -57,7 +57,7 @@ What that means concretely:
   code, `__file__` paths and package metadata work as in a venv.
 - A pre-ship check that finds what will break (`bundleup check`).
 - Not built yet: escape hatches for the long tail (include extra files, mark a dependency
-  external) and one bundle for several platforms.
+  external).
 
 **Fast**
 - Measured, not claimed: build time compared with pex, including pex's fastest configuration

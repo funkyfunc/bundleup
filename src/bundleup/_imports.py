@@ -66,7 +66,7 @@ CONDITIONAL = (
     "os.name",
     "sys.version_info",
 )
-OPTIONAL_ERRORS = {None, "ImportError", "ModuleNotFoundError", "Exception"}
+OPTIONAL_ERRORS = {None, "ImportError", "ModuleNotFoundError", "Exception", "BaseException"}
 
 
 def imports_in(tree: ast.AST) -> set[str]:
@@ -76,11 +76,14 @@ def imports_in(tree: ast.AST) -> set[str]:
     names: set[str] = set()
 
     def visit(node: ast.AST, optional: bool) -> None:
-        if isinstance(node, ast.Try):
-            guarded = bool({_caught(h.type) for h in node.handlers} & OPTIONAL_ERRORS)
-            for child in node.body:
+        if isinstance(node, ast.Try) or type(node).__name__ == "TryStar":
+            handlers = getattr(node, "handlers", ())
+            guarded = bool({_caught(h.type) for h in handlers} & OPTIONAL_ERRORS)
+            for child in [*getattr(node, "body", ()), *getattr(node, "orelse", ())]:
                 visit(child, optional or guarded)
-            for child in [*node.handlers, *node.orelse, *node.finalbody]:
+            for handler in handlers:
+                visit(handler, optional or (_caught(handler.type) in OPTIONAL_ERRORS))
+            for child in getattr(node, "finalbody", ()):
                 visit(child, optional)
             return
         if isinstance(node, ast.If) and any(c in ast.unparse(node.test) for c in CONDITIONAL):
@@ -101,7 +104,7 @@ def imports_in(tree: ast.AST) -> set[str]:
 def imports_of(path: Path) -> set[str]:
     """What a file imports for sure; nothing if it doesn't parse (syntax-error reports that)."""
     try:
-        return imports_in(ast.parse(path.read_text(encoding="utf-8")))
+        return imports_in(ast.parse(path.read_bytes()))
     except (OSError, SyntaxError, UnicodeDecodeError, ValueError):
         return set()
 
@@ -112,7 +115,7 @@ def _caught(node: ast.expr | None) -> str | None:
         return None
     if isinstance(node, ast.Tuple):
         names = [_caught(n) for n in node.elts]
-        return next((n for n in names if n in ("ImportError", "ModuleNotFoundError")), "")
+        return next((n for n in names if n in OPTIONAL_ERRORS), "")
     if isinstance(node, ast.Name):
         return node.id
     return node.attr if isinstance(node, ast.Attribute) else ""
@@ -136,7 +139,9 @@ def provided_by(site: Path) -> set[str]:
     win32/, win32/lib), and `distutils` where setuptools' shim provides it on 3.12+."""
     names = top_level_modules(site)
     for pth in site.glob("*.pth"):
-        for line in pth.read_text(encoding="utf-8", errors="replace").splitlines():
+        if pth.name.startswith("."):
+            continue
+        for line in pth.read_text(encoding="utf-8-sig", errors="replace").splitlines():
             line = line.strip()
             if line and not line.startswith(("#", "import ", "import\t")):
                 names |= top_level_modules(site / line)

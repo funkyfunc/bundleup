@@ -235,12 +235,16 @@ work too:
 
 - **Proxy:** `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`.
 - **A proxy that inspects TLS** (a company certificate): `UV_NATIVE_TLS=1` uses the system's
-  certificate store, or `SSL_CERT_FILE=<bundle.pem>`.
+  certificate store, or `SSL_CERT_FILE=<bundle.pem>` (`REQUESTS_CA_BUNDLE` and `CURL_CA_BUNDLE`
+  are also read for `--format exe` and `check --audit`).
 - **Credentials:** `~/.netrc`, keyring, or `UV_INDEX_<NAME>_USERNAME` / `_PASSWORD` for a named
   index. A lock never stores them. (Not yet tested against an index that needs a login.)
-- **Python downloads:** to check the oldest Python a pure-Python bundle supports, bundleup may
-  download that Python (into its own cache, from GitHub); `UV_PYTHON_INSTALL_MIRROR` points it
-  at a mirror. If the download fails, the build still works and says the range is approximate.
+- **Python and launcher downloads:** to check the oldest Python a pure-Python bundle supports (or
+  to pack an interpreter into `--format exe`), bundleup may download that Python (into its own
+  cache, through uv); `UV_PYTHON_INSTALL_MIRROR` points it at a mirror, and
+  `BUNDLEUP_JUMP_MIRROR` points `--format exe`'s `scie-jump` launcher download at a mirror or
+  `file://` folder (still checked against its pinned SHA-256 hash). If the range-check download
+  fails, the build still works and says the range is approximate.
 
 Tested: a script locked against a private index (a flat folder) builds and runs from it
 (`tests/test_index.py`).
@@ -256,9 +260,11 @@ bundleup build --format exe --python 3.12 --python-platform aarch64-apple-darwin
 bundleup build --format exe --python 3.12 --python-platform x86_64-manylinux_2_28 -o dist/tool-linux
 ```
 
-The first build downloads a small launcher (scie-jump, checked against a pinned hash) and the
-interpreter for that platform (through uv), once each. Run it as `dist/tool.exe ARGS`; with
-`--entry python` it runs scripts as `python` would (`dist/tool.exe scripts/deck_edit.py`).
+The first build downloads a small launcher (scie-jump, checked against a pinned hash; mirrorable
+via `BUNDLEUP_JUMP_MIRROR`) and the interpreter for that platform (through uv; mirrorable via
+`UV_PYTHON_INSTALL_MIRROR`), once each. Run it as `dist/tool.exe ARGS`; with `--entry python` it
+runs scripts as `python` would (`dist/tool.exe scripts/deck_edit.py`), and `bundleup verify
+dist/tool.exe` checks the launcher, bundled Python archive, trailer, and inner `.pyz`.
 
 - **Size:** the interpreter adds 22-35 MB (the skill fixture: 49 MB for macOS, 50 for Windows,
   57 for Linux, against 16 MB as a `.pyz`). Warm starts equal the `.pyz`'s; the first run unpacks

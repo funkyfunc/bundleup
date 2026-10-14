@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import os
 from collections import defaultdict
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -141,9 +141,18 @@ class _Owner:
     native: bool
 
 
-def owners(site: Path, *, project: str, script: str | None = None) -> dict[str, _Owner]:
+def owners(
+    site: Path,
+    *,
+    project: str,
+    script: str | None = None,
+    own: Sequence[str] = (),
+) -> dict[str, _Owner]:
     """Each payload path (as RECORD lists it) -> the distribution that installed it. A PEP 723
-    script (at `script`) belongs to `project`."""
+    script (at `script`) or a folder app's files (`own`) belong to `project`."""
+    from packaging.utils import canonicalize_name
+
+    project = canonicalize_name(project)
     found: dict[str, _Owner] = {}
     for dist in _verify.installed_distributions(site):
         dist_info = site / dist.dist_info
@@ -154,13 +163,16 @@ def owners(site: Path, *, project: str, script: str | None = None) -> dict[str, 
             found[path] = owner
     if script:
         found[script] = _Owner(project, None, False)
+    for rel in own:
+        found.setdefault(rel, _Owner(project, None, False))
     return found
 
 
 def _source_of(pyc: str) -> str:
     """pkg/__pycache__/mod.cpython-312.pyc -> pkg/mod.py"""
-    head, _, name = pyc.rpartition("__pycache__/")
-    return f"{head}{name.split('.', 1)[0]}.py"
+    head, sep, name = pyc.rpartition("__pycache__/")
+    stem = name.rsplit(".", 2)[0] if sep else name.removesuffix(".pyc")
+    return f"{head}{stem}.py"
 
 
 def package_sizes(site: Path, owner: dict[str, _Owner]) -> list[PackageSize]:
@@ -199,6 +211,7 @@ def oldest_python(
     target: Target,
     interpreters: dict[tuple[int, int], str | None],
     run: Callable[[list[str]], str],
+    own: Sequence[str] = (),
 ) -> tuple[PythonRange, list[Diagnostic]]:
     """A pure-Python bundle claims every version its requires-python allows (ADR-0030). Check
     that the project's own code compiles on the versions below the target, using whichever of
@@ -206,10 +219,13 @@ def oldest_python(
     the oldest one that compiles. A version that isn't installed is checked by the target's
     interpreter with `ast.parse(feature_version=)`, so no claim goes unchecked (second review,
     2026-10-07; ADR-0035)."""
+    from packaging.utils import canonicalize_name
+
+    project = canonicalize_name(project)
     below = sorted(v for v in interpreters if pythons.min <= v < target.version)
     if not below:
         return pythons, []
-    mine = owners(site, project=project, script=script)
+    mine = owners(site, project=project, script=script, own=own)
     files = sorted(
         path
         for path, who in mine.items()
@@ -253,7 +269,8 @@ def oldest_python(
     # Claim only from the oldest version that compiled, or the target's.
     narrowed = PythonRange(verified or target.version, pythons.max)
     path, line, message = failure
-    where = f"{str(path).removeprefix(_verify.SCRIPT_DIR + '/')}{f':{line}' if line else ''}"
+    lineno = line if isinstance(line, int) and not isinstance(line, bool) and line >= 1 else None
+    where = f"{str(path).removeprefix(_verify.SCRIPT_DIR + '/')}{f':{lineno}' if lineno else ''}"
     return narrowed, [
         Diagnostic(
             "python-range",
@@ -263,7 +280,7 @@ def oldest_python(
             hint="raise requires-python to the oldest Python the code works on",
             package=project,
             file=str(path),
-            line=line if isinstance(line, int) else None,
+            line=lineno,
         )
     ]
 
@@ -283,6 +300,9 @@ def syntax_errors(
     """Python files the target interpreter couldn't compile. The build compiled everything
     already, so a source without its bytecode is a candidate; the target interpreter confirms
     each one and says why."""
+    from packaging.utils import canonicalize_name
+
+    project = canonicalize_name(project)
     candidates = [
         rel
         for rel, _path in _bytecode.walk_files(site)
@@ -297,7 +317,7 @@ def syntax_errors(
     first: dict[_Owner, tuple[str, int | None]] = {}
     for path, line, message in found:
         assert isinstance(path, str) and isinstance(message, str)
-        line = line if isinstance(line, int) else None
+        line = line if isinstance(line, int) and not isinstance(line, bool) and line >= 1 else None
         who = owner.get(path) or _Owner(project, None, False)
         where = f"{path.removeprefix(_verify.SCRIPT_DIR + '/')}{f':{line}' if line else ''}"
         if who.name == project:
@@ -369,11 +389,12 @@ def analyze(
     target: Target,
     run: Callable[[list[str]], str],
     script: str | None = None,
+    own: Sequence[str] = (),
 ) -> tuple[list[Diagnostic], list[PackageSize]]:
     """Everything `bundleup check` reports about an installed, compiled payload: the
     diagnostics (errors first) and each package's size. `project` is the canonical name of the
     project (or script, installed at `script`) being bundled."""
-    owner = owners(site, project=project, script=script)
+    owner = owners(site, project=project, script=script, own=own)
     diags = syntax_errors(site, owner, project=project, target=target, run=run)
     diags += data_files(site, owner)
     diags.sort(key=lambda d: d.level != "error")  # stable: errors first, then in found order

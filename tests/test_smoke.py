@@ -77,7 +77,8 @@ def test_cli_smoke_accepts_flag_arguments(
     tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     """`bundleup build --smoke "--version"` (docs/recipes.md) passes `--version` to the bundle,
-    not to argparse, while `bundleup build --smoke --json` still treats `--json` as build's own."""
+    not to argparse, while `bundleup build --smoke --json` and `bundleup build --smoke --help`
+    still treat `--json` and `--help` as build's own."""
     import json
 
     from bundleup import _cli
@@ -85,10 +86,16 @@ def test_cli_smoke_accepts_flag_arguments(
     script = tmp_path / "tool.py"
     script.write_text(SCRIPT)
     out = tmp_path / "t.pyz"
-    for flag in ("--version", "--help", "-v --check"):
+    for flag in ("--version", "-V", "-v --check"):
         assert _cli.main(["build", str(script), "-o", str(out), "--smoke", flag, "--json"]) == 0
         doc = json.loads(capsys.readouterr().out)
         assert doc["result"]["smoke"]["command"] == ["python", "t.pyz", *flag.split()]
     assert _cli.main(["build", str(script), "-o", str(out), "--smoke", "--json"]) == 0
     doc = json.loads(capsys.readouterr().out)
     assert doc["result"]["smoke"]["command"] == ["python", "t.pyz", "--help"]
+    with pytest.raises(SystemExit) as e:
+        _cli.main(["build", str(script), "--smoke", "--help"])
+    assert e.value.code == 0 and "usage: bundleup build" in capsys.readouterr().out
+    assert _cli._join_smoke(
+        ["build", "--entry", "--smoke", "--strict"], _cli.parsers()["build"]
+    ) == ["build", "--entry", "--smoke", "--strict"]

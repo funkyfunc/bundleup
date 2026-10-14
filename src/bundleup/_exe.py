@@ -30,6 +30,7 @@ from ._bytecode import cache_dir
 from ._errors import BundleupError, CheckFailedError, Diagnostic, UsageError
 from ._formats import describe_size
 from ._outputs import LARGE, check_size
+from ._payload import compile_env
 from ._platforms import Platform
 from ._python import Target
 from ._steps import Progress, ProgressEvent, run
@@ -125,7 +126,13 @@ def write_exe(
                             "exe": "{python}/" + exe,
                             "args": ["{app}"],
                             # The bundle's own interpreter, whatever the machine has set.
-                            "env": {"PYTHONHOME": None, "PYTHONPATH": None},
+                            "env": {
+                                "PYTHONHOME": None,
+                                "PYTHONPATH": None,
+                                "PYTHONSTARTUP": None,
+                                "PYTHONUSERBASE": None,
+                                "PYTHONNOUSERSITE": "1",
+                            },
                         }
                     }
                 },
@@ -227,8 +234,7 @@ def fetch_jump(platform: Platform, progress: Progress) -> Path:
         return path
     mirror = os.environ.get("BUNDLEUP_JUMP_MIRROR", "").rstrip("/")
     if mirror and not mirror.startswith(("https://", "http://", "file://")):
-        local = Path(mirror) / asset
-        url = local.resolve().as_uri() if local.is_file() else f"file://{local}"
+        url = (Path(mirror) / asset).resolve().as_uri()
     elif mirror:
         url = f"{mirror}/{asset}"
     else:
@@ -313,9 +319,13 @@ def fetch_python(
         )
     folder.mkdir(parents=True, exist_ok=True)
     name = archives[-1].name.split("-", 1)[1]  # without uv's hash prefix
-    shutil.copyfile(archives[-1], folder / f".{name}.part")
-    (folder / f".{name}.part").replace(folder / name)
-    shutil.rmtree(installed, ignore_errors=True)
+    part = folder / f".{name}.{os.getpid()}.part"
+    try:
+        shutil.copyfile(archives[-1], part)
+        part.replace(folder / name)
+    finally:
+        part.unlink(missing_ok=True)
+        shutil.rmtree(installed, ignore_errors=True)
     return folder / name
 
 
@@ -386,11 +396,13 @@ def precompiled(archive: Path, target: Target, stage: Path) -> Path:
                 path.write_bytes(src.extractfile(m).read())  # type: ignore[union-attr]  # a file
     # One process, so the same bytes every time: marshal's output depends on what the process
     # compiled before (shared objects), which parallel workers split differently on each run.
-    compile_all = [target.executable, "-I", "-m", "compileall", "-q"]
+    compile_all = [target.executable, "-s", "-S", "-m", "compileall", "-q"]
     # The recorded source path without this build's temporary folder (Python replaces it with
     # the real one on import): the same bytes from any build.
     compile_all += ["--invalidation-mode", "unchecked-hash", "-s", str(tree), str(tree)]
-    done = subprocess.run(compile_all, capture_output=True, text=True, check=False)
+    done = subprocess.run(
+        compile_all, capture_output=True, text=True, check=False, env=compile_env()
+    )
     if done.returncode:  # the stdlib compiles cleanly (checked on 3.12's): a failure is real
         raise BundleupError(
             f"couldn't compile the standard library of {archive.name}",

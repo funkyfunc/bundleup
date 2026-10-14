@@ -13,13 +13,19 @@ import os
 import sys
 
 
+def _same(a: str, b: str) -> bool:
+    for norm in (os.path.abspath, os.path.realpath):
+        if os.path.normcase(norm(a)) == os.path.normcase(norm(b)):
+            return True
+    return False
+
+
 def _bundleup_child() -> None:
     here = os.path.dirname(os.path.abspath(__file__))
-    norm = os.path.normcase(here)
-    sys.path[:] = [p for p in sys.path if os.path.normcase(os.path.abspath(p or ".")) != norm]
+    sys.path[:] = [p for p in sys.path if not _same(p or ".", here)]
     site = os.path.dirname(here)
     active = os.environ.get("BUNDLEUP_RUNTIME_SITE", "")
-    if active and os.path.normcase(os.path.abspath(active)) == os.path.normcase(site):
+    if active and _same(active, site):
         sys.path.insert(0, here)
         try:
             _bundleup_runtime = __import__("_bundleup_runtime")
@@ -35,8 +41,7 @@ def _chain(here: str) -> None:
     """Import the sitecustomize this file shadows, as Python would have without the bundle: with
     a plain import (this directory is already off sys.path), so the child loads the same modules
     as plain Python (Ubuntu's own sitecustomize, say), and importlib only if that one does."""
-    norm = os.path.normcase(here)
-    paths = [p for p in sys.path if os.path.normcase(os.path.abspath(p or ".")) != norm]
+    paths = [p for p in sys.path if not _same(p or ".", here)]
     if not any(_may_have_sitecustomize(p) for p in paths):
         return  # the usual case: nothing to chain to
     ours = sys.modules.pop("sitecustomize", None)

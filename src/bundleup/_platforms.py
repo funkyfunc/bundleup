@@ -99,6 +99,7 @@ class Platform:
             for legacy, level in LEGACY_MANYLINUX.items()
             if level <= (major, minor)
         ]
+        found.append(f"linux_{self.arch}")
         return found
 
     def accepts(self, tag: str) -> bool:
@@ -123,7 +124,8 @@ class Platform:
 
 def parse(name: str) -> Platform:
     """Read a uv platform name. Raises UsageError for names bundleup can't target."""
-    full = ALIASES.get(name, name).lower()
+    clean = name.strip()
+    full = ALIASES.get(clean.lower(), clean).lower()
     arch = full.split("-", 1)[0]
     if "windows" in full:
         sys_platform = "win32"
@@ -153,11 +155,11 @@ def _level(full: str) -> tuple[int, int] | None:
             return (int(wanted[0]), int(wanted[1]) if len(wanted) > 1 else 0)
         except ValueError:
             return (13, 0)
-    if "musl" in full:
-        return (1, 2)
-    explicit = re.search(r"manylinux_(\d+)_(\d+)", full)
+    explicit = re.search(r"(?:manylinux|musllinux)_(\d+)_(\d+)", full)
     if explicit:
         return (int(explicit[1]), int(explicit[2]))
+    if "musl" in full:
+        return (1, 2)
     legacy = next((v for k, v in LEGACY_MANYLINUX.items() if k in full), None)
     return legacy or (2, 28)
 

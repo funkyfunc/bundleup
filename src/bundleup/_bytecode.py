@@ -43,8 +43,8 @@ else:
         list(pool.map(compileall.compile_file, *args, *rest, chunksize=32))
 """
 # Part of every cache key: bump it when the way bytecode is compiled changes, so older cache
-# entries are never reused (v2: compiled with PYTHONHASHSEED=0).
-FORMAT = "v2"
+# entries are never reused (v3: -s -S instead of -I so PYTHONHASHSEED=0 is honoured).
+FORMAT = "v3"
 # In .py files. Below this, starting worker interpreters costs more than they save.
 PARALLEL_FROM = 300
 
@@ -107,6 +107,24 @@ def distributions(site: Path, *, python_identity: str) -> list[Distribution]:
     return found
 
 
+def _extra_distribution(
+    site: Path, covered: set[str], *, python_identity: str
+) -> Distribution | None:
+    """Files no wheel RECORD lists (the runtime shim, a PEP 723 script, or a folder app's files),
+    keyed by their paths and contents so warm builds restore their bytecode from the cache too."""
+    extra = [
+        (rel, path) for rel, path in walk_files(site) if rel.endswith(".py") and rel not in covered
+    ]
+    if not extra:
+        return None
+    digest = hashlib.sha256(python_identity.encode())
+    for rel, path in extra:
+        digest.update(rel.encode("utf-8") + b"\0")
+        with open(path, "rb") as f:
+            digest.update(hashlib.sha256(f.read()).digest())
+    return Distribution("__extra__", digest.hexdigest()[:32], [rel for rel, _ in extra])
+
+
 def _restore(dist: Distribution, cache: Path, site: Path) -> bool:
     """Copy a distribution's cached bytecode into `site`. False if there's none."""
     cached = cache / dist.key
@@ -162,16 +180,17 @@ def precompile(
     cache = cache_dir()
     dists = distributions(site, python_identity=python_identity)
     covered = {source for dist in dists for source in dist.sources}
-    restored = [dist for dist in dists if _restore(dist, cache, site)]
-    fresh = [dist for dist in dists if dist not in restored]
-    # Files no RECORD lists (a PEP 723 script) are always compiled.
-    extra = [rel for rel, _ in walk_files(site) if rel.endswith(".py") and rel not in covered]
-    todo = [source for dist in fresh for source in dist.sources] + extra
+    extra = _extra_distribution(site, covered, python_identity=python_identity)
+    all_dists = [*dists, extra] if extra is not None else dists
+    restored = [dist for dist in all_dists if _restore(dist, cache, site)]
+    fresh = [dist for dist in all_dists if dist not in restored]
+    todo = [source for dist in fresh for source in dist.sources]
     if todo:
         listing = site.parent / "compile-list.txt"
         listing.write_text("\n".join(todo), encoding="utf-8")
         workers = 0 if len(todo) >= PARALLEL_FROM else 1
-        run([python, "-I", "-c", COMPILE_FILES, str(site), str(listing), str(workers), mode])
+        # -s -S instead of -I: -I implies -E, which ignores PYTHONHASHSEED=0 in COMPILE_ENV.
+        run([python, "-s", "-S", "-c", COMPILE_FILES, str(site), str(listing), str(workers), mode])
     for dist in fresh:
         _store(dist, cache, site, cache_tag)
-    return len(todo), len(restored)
+    return len(todo), sum(1 for d in restored if d.name != "__extra__")

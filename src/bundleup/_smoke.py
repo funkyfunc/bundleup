@@ -51,10 +51,15 @@ def parse_args(text: str) -> tuple[str, ...]:
     """`--smoke "scripts/tool.py --help"` -> its arguments, split as a shell would: quotes group
     words, and backslashes stay as they are, so Windows paths survive (shlex's Windows mode kept
     the quotes; CI, 2026-10-09)."""
+    from ._errors import UsageError
+
     lexer = shlex.shlex(text, posix=True)
     lexer.whitespace_split = True
     lexer.escape = ""
-    return tuple(lexer)
+    try:
+        return tuple(lexer)
+    except ValueError as e:
+        raise UsageError(f"--smoke {text!r}: {e}", hint="close any open quotes") from None
 
 
 def run(bundle: Path, python: str | None, args: tuple[str, ...]) -> SmokeResult:

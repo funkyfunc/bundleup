@@ -43,20 +43,29 @@ PER_RUN = {"json", "quiet", "verbose", "color", "dry-run", "locked", "frozen"}
 def read(path: Path) -> tuple[dict[str, Any], Path | None]:
     """The [tool.bundleup] table for a project directory or PEP 723 script, and the file it came
     from (None when there's none). Any: TOML values, validated by `apply`."""
-    from ._source import script_metadata  # imported here: _source is heavier than this module
+    from ._source import (
+        read_python_text,
+        script_metadata,
+    )  # imported here: _source is heavier than this module
 
     path = path.resolve()
     if path.is_file() and path.suffix == ".py":
-        table = script_metadata(path.read_text(encoding="utf-8")).get("tool", {}).get("bundleup")
+        try:
+            text = read_python_text(path)
+            tool = script_metadata(text).get("tool")
+            table = tool.get("bundleup") if isinstance(tool, dict) else None
+        except (OSError, ProjectError):
+            return {}, None  # reported when the script is loaded
         return (table or {}), (path if table else None)
     pyproject = path / "pyproject.toml"
     if not pyproject.is_file():
         return {}, None
     try:
-        data = tomllib.loads(pyproject.read_text(encoding="utf-8"))
-    except tomllib.TOMLDecodeError:
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
         return {}, None  # reported, with its line, when the project is loaded
-    table = data.get("tool", {}).get("bundleup")
+    tool = data.get("tool")
+    table = tool.get("bundleup") if isinstance(tool, dict) else None
     return (table or {}), (pyproject if table else None)
 
 

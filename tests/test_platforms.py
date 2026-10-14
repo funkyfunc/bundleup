@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from bundleup import UsageError
@@ -119,3 +121,78 @@ def test_the_windows_cpu_is_the_interpreters(
     monkeypatch.setattr(_loader.sys, "version", version)
     monkeypatch.setenv("PROCESSOR_ARCHITEW6432", "AMD64")  # what a 32-bit process sees on x64
     assert _loader._machine() == machine
+
+
+def test_tenth_review_musllinux_level_linux_tags_and_runtime_under() -> None:
+    """Tenth review: explicit musllinux_1_1 level, linux_{arch} in supported_tags, patch specifiers
+    in _oldest_python, hyphenated dist-info in console_scripts, and root path in _runtime._under."""
+    import os
+    from pathlib import Path
+
+    from bundleup import _runtime, _uv
+
+    p_musl = parse("x86_64-musllinux_1_1")
+    assert p_musl.level == (1, 1)
+    assert "musllinux_1_1_x86_64" in p_musl._platform_tags()
+    assert "musllinux_1_2_x86_64" not in p_musl._platform_tags()
+
+    p_gnu = parse("x86_64-unknown-linux-gnu")
+    assert "linux_x86_64" in p_gnu._platform_tags()
+
+    assert _uv._oldest_python(">=3.12.1", (3, 13)) == "3.12"
+    assert _runtime._under("/app.py", "/") is True
+    if os.name == "posix":
+        assert _runtime._under("/tmp/sub/app.py", "/tmp") is True
+        assert _runtime._under("/tmp2/app.py", "/tmp") is False
+
+    # Activate clears inherited BUNDLEUP_RUNTIME_SCRIPTS when switching to a different bundle
+    old_site = os.environ.get(_runtime.ENV_SITE)
+    old_scripts = os.environ.get(_runtime.ENV_SCRIPTS)
+    try:
+        os.environ[_runtime.ENV_SITE] = "/tmp/bundle-a"
+        os.environ[_runtime.ENV_SCRIPTS] = "/tmp/bundle-a-scripts"
+        site_b = Path("/tmp/bundle-b-test")
+        site_b.mkdir(exist_ok=True)
+        try:
+            _runtime.activate(str(site_b), pth=[])
+            assert _runtime.ENV_SCRIPTS not in os.environ
+        finally:
+            if str(site_b) in _runtime.sys.path:
+                _runtime.sys.path.remove(str(site_b))
+            site_b.rmdir()
+    finally:
+        if old_site is None:
+            os.environ.pop(_runtime.ENV_SITE, None)
+        else:
+            os.environ[_runtime.ENV_SITE] = old_site
+        if old_scripts is None:
+            os.environ.pop(_runtime.ENV_SCRIPTS, None)
+        else:
+            os.environ[_runtime.ENV_SCRIPTS] = old_scripts
+
+
+def test_eleventh_review_oldest_python_floor_aliases_entry_and_smoke(tmp_path: Path) -> None:
+    """Eleventh review: _oldest_python floors at 3.9 for '>=3', parse() accepts uppercase aliases,
+    resolve_entry rejects empty module/attr, smoke.parse_args catches unclosed quotes, and
+    _cache.UNPACKED ignores dot-prefixed temp directories."""
+    from dataclasses import replace
+
+    from bundleup import _cache, _payload, _smoke, _uv
+    from bundleup._errors import UsageError
+
+    assert _uv._oldest_python(">=3", (3, 12)) == "3.9"
+    assert replace(parse("LINUX"), name="") == replace(parse("linux"), name="")
+    assert replace(parse("MacOS"), name="") == replace(parse("macos"), name="")
+
+    from bundleup._source import Source
+
+    src = Source(tmp_path, "app", None, is_script=False)
+    with pytest.raises(UsageError, match="invalid --entry"):
+        _payload.resolve_entry(src, tmp_path, entry=":main", script=None)
+    with pytest.raises(UsageError, match="invalid --entry"):
+        _payload.resolve_entry(src, tmp_path, entry="pkg:", script=None)
+    with pytest.raises(UsageError, match="--smoke"):
+        _smoke.parse_args("'unclosed quote")
+
+    assert _cache.UNPACKED.fullmatch(".tmp-0123456789abcdef") is None
+    assert _cache.UNPACKED.fullmatch("app-0123456789abcdef") is not None
