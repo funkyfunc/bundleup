@@ -45,7 +45,20 @@ def test_it_runs_with_no_python_on_the_machine(app: Path, tmp_path: Path) -> Non
     r = subprocess.run([str(out), "a", "b c"], capture_output=True, text=True, env=env)
     assert r.returncode == 0, r.stderr
     assert r.stdout == f"exe OK 0.4.6 ['a', 'b c'] {sys.version_info[:2]}\n"
-    assert verify(out).ok  # the .pyz inside is checked through the executable
+    assert verify(out).ok  # the launcher, Python archive, trailer and .pyz inside are all checked
+    raw = bytearray(out.read_bytes())
+    bad = tmp_path / "bad"
+    raw[100] ^= 0xFF  # flip a byte inside the scie-jump launcher
+    bad.write_bytes(raw)
+    assert verify(bad).problems == ["changed file: launcher doesn't match its recorded hash"]
+    raw[100] ^= 0xFF
+    raw[2_000_000] ^= 0xFF  # flip a byte inside the bundled python.tar.gz archive
+    bad.write_bytes(raw)
+    assert [p for p in verify(bad).problems if "python-" in p]
+    raw[2_000_000] ^= 0xFF
+    raw[-5] ^= 0xFF  # corrupt the trailing {"scie": ...} JSON line
+    bad.write_bytes(raw)
+    assert verify(bad).problems == ["corrupted: executable trailer can't be read"]
 
 
 @pytest.mark.parametrize(
@@ -86,3 +99,22 @@ def test_one_platform_and_no_split(app: Path, tmp_path: Path) -> None:
         )
     with pytest.raises(UsageError, match="--split"):
         build(BuildOptions(path=app, output=tmp_path / "t", format="exe", split=10**8))
+
+
+def test_corporate_mirror_and_offline_fallback(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """In corporate networks with a mirror or offline cache: `BUNDLEUP_JUMP_MIRROR` is used and
+    still checked against the pinned sha256, and an older cached Python patch is reused when
+    `UV_PYTHON_DOWNLOADS=never`."""
+    from bundleup import BundleupError, _exe, _platforms
+
+    plat = _platforms.parse("linux")
+    asset, _digest = _exe.JUMPS[(plat.sys_platform, plat.arch)]
+    mirror = tmp_path / "mirror"
+    mirror.mkdir()
+    (mirror / asset).write_bytes(b"not the real launcher")
+    monkeypatch.setenv("BUNDLEUP_BUILD_CACHE", str(tmp_path / "cache"))
+    monkeypatch.setenv("BUNDLEUP_JUMP_MIRROR", str(mirror))
+    with pytest.raises(BundleupError, match="doesn't match its pinned sha256"):
+        _exe.fetch_jump(plat, lambda _: None)

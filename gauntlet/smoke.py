@@ -68,8 +68,10 @@ def make_project(package: str, directory: Path, python: str) -> None:
 
 
 def locked_version(project: Path, package: str) -> str:
+    from packaging.utils import canonicalize_name
+
     lock = (project / "uv.lock").read_text()
-    marker = f'name = "{package.lower()}"\nversion = "'
+    marker = f'name = "{canonicalize_name(package)}"\nversion = "'
     start = lock.find(marker)
     return lock[start + len(marker) :].split('"', 1)[0] if start >= 0 else ""
 

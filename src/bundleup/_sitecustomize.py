@@ -22,7 +22,7 @@ def _bundleup_child() -> None:
     if active and os.path.normcase(os.path.abspath(active)) == os.path.normcase(site):
         sys.path.insert(0, here)
         try:
-            import _bundleup_runtime  # type: ignore[import-not-found]  # payload module
+            _bundleup_runtime = __import__("_bundleup_runtime")
         finally:
             del sys.path[0]
         same_python = _bundleup_runtime.identity() == os.environ.get(_bundleup_runtime.ENV_PYTHON)

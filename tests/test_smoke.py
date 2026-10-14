@@ -71,3 +71,24 @@ def test_what_smoke_refuses_or_skips(tmp_path: Path) -> None:
                      output=tmp_path / "n.pyz")
     )  # fmt: skip
     assert "smoke-skipped" in [d.code for d in result.diagnostics] and result.smoke is None
+
+
+def test_cli_smoke_accepts_flag_arguments(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """`bundleup build --smoke "--version"` (docs/recipes.md) passes `--version` to the bundle,
+    not to argparse, while `bundleup build --smoke --json` still treats `--json` as build's own."""
+    import json
+
+    from bundleup import _cli
+
+    script = tmp_path / "tool.py"
+    script.write_text(SCRIPT)
+    out = tmp_path / "t.pyz"
+    for flag in ("--version", "--help", "-v --check"):
+        assert _cli.main(["build", str(script), "-o", str(out), "--smoke", flag, "--json"]) == 0
+        doc = json.loads(capsys.readouterr().out)
+        assert doc["result"]["smoke"]["command"] == ["python", "t.pyz", *flag.split()]
+    assert _cli.main(["build", str(script), "-o", str(out), "--smoke", "--json"]) == 0
+    doc = json.loads(capsys.readouterr().out)
+    assert doc["result"]["smoke"]["command"] == ["python", "t.pyz", "--help"]

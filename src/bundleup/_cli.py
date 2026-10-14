@@ -755,14 +755,47 @@ def _crash(error: BaseException, *, verbose: bool) -> ExitCode:
     return ExitCode.INTERNAL_ERROR
 
 
+def _is_build_flag(token: str, options: set[str]) -> bool:
+    """Whether `token` after `--smoke` is another `bundleup build` option rather than the smoke
+    command's own flags (`--smoke "--version"`, `--smoke "--help"`)."""
+    if token in ("-h", "--help", "--smoke"):
+        return False
+    if token.split("=", 1)[0] in options:
+        return True
+    return len(token) > 1 and token[0] == "-" and set(token[1:]) <= {"q", "v"}
+
+
+def _join_smoke(args: list[str], options: set[str]) -> list[str]:
+    """`argparse` treats a token starting with `-` after `nargs="?"` as one of its own options,
+    so `bundleup build --smoke "--version"` (docs/recipes.md) would fail without joining `=`."""
+    out: list[str] = []
+    i = 0
+    while i < len(args):
+        if (
+            args[i] == "--smoke"
+            and i + 1 < len(args)
+            and args[i + 1].startswith("-")
+            and args[i + 1] != "--"
+            and not _is_build_flag(args[i + 1], options)
+        ):
+            out.append(f"--smoke={args[i + 1]}")
+            i += 2
+        else:
+            out.append(args[i])
+            i += 1
+    return out
+
+
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
-    top = parser()
+    all_parsers = parsers()
+    top = all_parsers["bundleup"]
     if not args:
         top.print_help(sys.stderr)
         return ExitCode.USAGE_ERROR
+    build_opts = set(all_parsers["build"]._option_string_actions)
     try:
-        opts = top.parse_args(args)
+        opts = top.parse_args(_join_smoke(args, build_opts))
     except _UsageProblem as e:
         return _usage_error(str(e), args)
     try:

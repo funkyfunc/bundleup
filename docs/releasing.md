@@ -12,9 +12,10 @@ ones. Only the owner publishes.
 ## Each release
 
 1. Check `main` is green in CI and the latest nightly runs passed (or their issues are understood).
-2. Set the version in both `pyproject.toml` and `src/bundleup/__init__.py` (`__version__`), move
-   the "Unreleased" notes in [CHANGELOG.md](../CHANGELOG.md) under the version, and update the
-   README's status line and the classifier (`Development Status :: 3 - Alpha` for 0.1).
+2. Set the version in both `pyproject.toml` and `src/bundleup/__init__.py` (`__version__`), run
+   `uv lock` so `uv.lock` records the new version, move the "Unreleased" notes in
+   [CHANGELOG.md](../CHANGELOG.md) under the version, and update the README's status line and the
+   classifier (`Development Status :: 3 - Alpha` for 0.1).
 3. `uv run pytest -q tests` (the API snapshot and `--version` test change with the version), commit,
    push.
 4. `git tag v0.1.0 && git push origin v0.1.0`. [release.yml](../.github/workflows/release.yml)

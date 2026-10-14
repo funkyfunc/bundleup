@@ -1,7 +1,7 @@
 [project]
 name = "bundleup"
-version = "0.0.1"
-description = "Bundle up your Python app with everything it needs: one .pyz that runs on plain Python, no install step. Pre-alpha."
+version = "0.1.0"
+description = "Bundle up your Python app with everything it needs: one .pyz that runs on plain Python, no install step."
 readme = "README.md"
 license = "MIT"
 license-files = ["LICENSE"]
@@ -9,7 +9,7 @@ requires-python = ">=3.9"
 authors = [{ name = "funkyfunc" }]
 keywords = ["bundler", "pyz", "zipapp", "packaging", "distribution", "cli"]
 classifiers = [
-    "Development Status :: 1 - Planning",
+    "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",

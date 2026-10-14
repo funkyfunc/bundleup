@@ -93,7 +93,20 @@ def from_pylock(source: Source, stage: Path) -> tuple[list[list[str]], Path]:
         installs.append([str(source.path)])
         text = with_project(text, source.name)
     check.write_text(text, encoding="utf-8")
-    return installs, check
+    refresh = _refresh_local(check)
+    return [[*args, *refresh] for args in installs], check
+
+
+def _refresh_local(pylock: Path) -> list[str]:
+    """`--refresh-package` for every directory package in `pylock`: uv keys cached builds of local
+    folders on pyproject.toml alone, so without this an edit to `src/` re-bundles the old wheel."""
+    packages = tomllib.loads(pylock.read_text(encoding="utf-8")).get("packages", [])
+    return [
+        arg
+        for p in packages
+        if "directory" in p and p.get("name")
+        for arg in ("--refresh-package", str(p["name"]))
+    ]
 
 
 def with_project(pylock: str, name: str) -> str:
@@ -179,7 +192,7 @@ def export(
         raise
     lock = None if source.is_script else find_uv_lock(source.path)
     relocate_paths(pylock, lock.parent if lock else source.workdir)
-    return Exported([["-r", str(pylock)]], pylock, pinned=mode is not None)
+    return Exported([["-r", str(pylock), *_refresh_local(pylock)]], pylock, pinned=mode is not None)
 
 
 EMPTY_PYLOCK = 'lock-version = "1.0"\ncreated-by = "bundleup"\npackages = []\n'
@@ -221,7 +234,8 @@ def resolve(
         installs.append([str(source.path)])
         text = with_project(text, source.name)
     check.write_text(text, encoding="utf-8")
-    return Exported(installs, check, pinned=pinned)
+    refresh = _refresh_local(check)
+    return Exported([[*args, *refresh] for args in installs], check, pinned=pinned)
 
 
 def _oldest_python(requires: str | None, python: tuple[int, int]) -> str:

@@ -6,11 +6,11 @@ And it tells you *before* you ship what won't survive the trip.
 
 Dead simple to use, but also powerful and fast: esbuild's experience, for Python.
 
-> **Status: pre-alpha.** Builds for this machine or another platform (Linux, macOS, Windows;
+> **Status: alpha (0.1.0).** Builds for this machine or another platform (Linux, macOS, Windows;
 > x86_64 and arm64), passes the [gauntlet](https://github.com/funkyfunc/bundleup/blob/main/gauntlet/README.md)
 > on all four in CI, and the own test suites of click, packaging, markupsafe and itsdangerous give
-> the same results from a bundle as from a venv (nightly). Not yet released: the PyPI package (0.0.1) is a placeholder; run it from a
-> checkout for now.
+> the same results from a bundle as from a venv (nightly). Try it without installing via
+> `uvx bundleup build`, or install with `uv tool install bundleup` / `pip install bundleup`.
 
 ## Usage
 

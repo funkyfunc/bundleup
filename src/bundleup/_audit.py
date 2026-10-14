@@ -154,8 +154,10 @@ def _missing(package: Locked) -> Diagnostic:
 
 
 def _get(url: str) -> dict[str, Any]:  # Any: JSON
+    from ._exe import ssl_context
+
     request = urllib.request.Request(url, headers={"Accept": "application/json"})
-    with urllib.request.urlopen(request, timeout=TIMEOUT) as response:  # fixed https URL
+    with urllib.request.urlopen(request, timeout=TIMEOUT, context=ssl_context()) as response:  # type: ignore[arg-type]
         return json.loads(response.read())
 
 

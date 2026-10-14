@@ -3,7 +3,7 @@
 Versions follow uv's scheme until 1.0: a minor version may break things
 ([style guide](docs/cli-style-guide.md) rule 37).
 
-## Unreleased (0.1.0)
+## 0.1.0 (2026-10-13)
 
 The first working release. From a project with `uv.lock` or `pylock.toml`, or a PEP 723 script:
 
@@ -39,7 +39,8 @@ The first working release. From a project with `uv.lock` or `pylock.toml`, or a 
   the target Python, packages without a wheel for a platform (from the lock alone, for any number
   of platforms with `--also-platform`, or as a grid with `--matrix`), data files outside packages,
   Lambda's size limits; package sizes. Every build runs the same checks; `--strict` makes warnings fail.
-- `bundleup verify`: a bundle (and its unpacked copy) against its manifest of file hashes.
+- `bundleup verify`: checks a bundle (`.pyz`, `.py`, `exe`, `dir` or `lambda`) and its unpacked
+  copy against its manifest of file hashes.
 - `bundleup cache list|clean`.
 - Every build is checked against the lock and every wheel's `RECORD`, and is reproducible.
 - Bundles unpack once to a cache, start as fast as an installed venv, check the Python version,

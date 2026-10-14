@@ -141,3 +141,23 @@ def test_cli_exit_codes_and_json(
     document = json.loads(capsys.readouterr().out)
     jsonschema.validate(document, SCHEMA)
     assert [d["code"] for d in document["diagnostics"]] == ["cache-mismatch"]
+
+
+def test_dir_and_lambda_outputs_are_verified(tmp_path: Path) -> None:
+    """`--format dir` and `--format lambda` write `bundleup-manifest.json`; `verify` checks both."""
+    script = tmp_path / "app.py"
+    script.write_text(SCRIPT)
+    folder = tmp_path / "dir_out"
+    bundleup.build(bundleup.BuildOptions(path=script, format="dir", output=folder))
+    assert bundleup.verify(folder).ok and bundleup.verify(folder).files > 0
+    (folder / "app.py").write_text("print('changed')\n")
+    assert bundleup.verify(folder).problems == ["changed file: app.py"]
+    (folder / "planted.py").write_text("import os\n")
+    assert "extra file: planted.py isn't in the manifest" in bundleup.verify(folder).problems
+
+    lzip = tmp_path / "fn.zip"
+    bundleup.build(bundleup.BuildOptions(path=script, format="lambda", output=lzip))
+    assert bundleup.verify(lzip).ok and bundleup.verify(lzip).files > 0
+    bad_zip = corrupt(lzip, "app.py", tmp_path / "bad_fn.zip")
+    [problem] = bundleup.verify(bad_zip).problems
+    assert "app.py" in problem

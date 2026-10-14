@@ -760,3 +760,29 @@ def test_a_noexec_cache_is_skipped_for_native_code(
     assert not _loader._loads_code(str(tmp_path / "not-yet-created"))
     monkeypatch.setattr(_loader, "ABIFLAGS", None)  # pure Python: any folder will do
     assert _loader._loads_code(str(tmp_path))
+
+
+def test_rebuilding_after_editing_source_picks_up_the_change(tmp_path: Path) -> None:
+    """uv keys cached wheels of local directories on pyproject.toml alone, so without
+    `--refresh-package` for local packages a second build after editing `src/` bundled old code."""
+    proj = tmp_path / "proj"
+    (proj / "src" / "proj").mkdir(parents=True)
+    (proj / "pyproject.toml").write_text(
+        '[project]\nname = "proj"\nversion = "0.1.0"\nrequires-python = ">=3.9"\n'
+        'dependencies = []\n[project.scripts]\nproj = "proj:main"\n'
+        '[build-system]\nrequires = ["uv_build>=0.12,<0.13"]\nbuild-backend = "uv_build"\n'
+    )
+    init = proj / "src" / "proj" / "__init__.py"
+    init.write_text('def main(): print("v1")\n')
+    assert subprocess.run(["uv", "lock"], cwd=proj, capture_output=True).returncode == 0
+    first = build(BuildOptions(path=proj, output=proj / "a.pyz", smoke=()))
+    assert first.smoke is not None and first.smoke.output.strip() == "v1"
+    init.write_text('def main(): print("v2")\n')
+    second = build(BuildOptions(path=proj, output=proj / "b.pyz", smoke=()))
+    assert second.smoke is not None and second.smoke.output.strip() == "v2"
+
+
+def test_bundleup_checks_itself_cleanly() -> None:
+    """Self-hosting: `bundleup check --strict .` on this repository finds no errors or warnings."""
+    report = bundleup.check(BuildOptions(path=Path(__file__).parent.parent, strict=True))
+    assert report.ok and report.diagnostics == []

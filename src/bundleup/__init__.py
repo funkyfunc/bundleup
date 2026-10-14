@@ -37,7 +37,7 @@ if TYPE_CHECKING:
     from ._steps import ProgressEvent
     from ._verify import VerifyReport, verify
 
-__version__ = "0.0.1"
+__version__ = "0.1.0"
 
 __all__ = [
     "BuildOptions",

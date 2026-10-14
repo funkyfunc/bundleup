@@ -194,8 +194,26 @@ def _jump_trailer(jump: Path) -> dict[str, object]:
 _CLEAR = "remove bundleup's build cache (`bundleup cache clean --build`) and build again"
 
 
+def ssl_context() -> object:
+    """An SSLContext that honours REQUESTS_CA_BUNDLE and CURL_CA_BUNDLE as well as SSL_CERT_FILE,
+    so corporate TLS proxies work the same way for urllib as they do for uv and pip."""
+    import ssl
+
+    cafile = next(
+        (
+            v
+            for k in ("SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE")
+            if (v := os.environ.get(k)) and Path(v).is_file()
+        ),
+        None,
+    )
+    capath = d if (d := os.environ.get("SSL_CERT_DIR")) and Path(d).is_dir() else None
+    return ssl.create_default_context(cafile=cafile, capath=capath)
+
+
 def fetch_jump(platform: Platform, progress: Progress) -> Path:
-    """The launcher for `platform`, downloaded once and checked against its pinned hash."""
+    """The launcher for `platform`, downloaded once and checked against its pinned hash.
+    `BUNDLEUP_JUMP_MIRROR` can point to an internal mirror URL or a folder of pre-fetched files."""
     found = JUMPS.get((platform.sys_platform, platform.arch))
     if found is None:
         supported = ", ".join(f"{os_} {arch}" for os_, arch in JUMPS)
@@ -207,7 +225,14 @@ def fetch_jump(platform: Platform, progress: Progress) -> Path:
     path = exe_cache() / "jump" / JUMP_VERSION / asset
     if path.is_file() and _sha256(path) == digest:
         return path
-    url = JUMP_URL.format(version=JUMP_VERSION, asset=asset)
+    mirror = os.environ.get("BUNDLEUP_JUMP_MIRROR", "").rstrip("/")
+    if mirror and not mirror.startswith(("https://", "http://", "file://")):
+        local = Path(mirror) / asset
+        url = local.resolve().as_uri() if local.is_file() else f"file://{local}"
+    elif mirror:
+        url = f"{mirror}/{asset}"
+    else:
+        url = JUMP_URL.format(version=JUMP_VERSION, asset=asset)
     progress(ProgressEvent("note", f"downloading the scie-jump {JUMP_VERSION} launcher (once)"))
     _download(url, path, digest)
     return path
@@ -217,7 +242,11 @@ def _download(url: str, path: Path, digest: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     part = path.with_name(f".{path.name}.{os.getpid()}.part")
     try:
-        with urllib.request.urlopen(url, timeout=TIMEOUT) as response, open(part, "wb") as out:
+        ctx = ssl_context() if url.startswith("https://") else None
+        with (
+            urllib.request.urlopen(url, timeout=TIMEOUT, context=ctx) as response,  # type: ignore[arg-type]
+            open(part, "wb") as out,
+        ):
             shutil.copyfileobj(response, out, 1 << 20)
         if _sha256(part) != digest:
             raise BundleupError(
@@ -229,7 +258,7 @@ def _download(url: str, path: Path, digest: str) -> None:
         raise BundleupError(
             f"couldn't download {url} ({e})",
             hint="--format exe downloads its launcher once; check the network or proxy "
-            "(HTTPS_PROXY)",
+            "(HTTPS_PROXY, REQUESTS_CA_BUNDLE), or set BUNDLEUP_JUMP_MIRROR to an internal mirror",
         ) from None
     finally:
         part.unlink(missing_ok=True)
@@ -245,15 +274,16 @@ def fetch_python(
     version = f"{target.version[0]}.{target.version[1]}"
     where = f"{UV_OS[platform.sys_platform]}-{platform.arch}-{libc}"
     folder = exe_cache() / "python" / f"cpython-{version}-{where}"
-    # The newest patch release uv knows, so security fixes arrive (seventh review); offline, the
-    # newest one kept here.
+    # The newest patch release uv knows, so security fixes arrive (seventh review); offline or
+    # when a corporate mirror hasn't synced the newest patch yet, the newest one already cached.
+    cached = sorted(folder.glob("*.tar.gz"), key=_patch)
     newest = _newest(uv, f"cpython-{version}-{where}", platform, libc, stage) or version
     wanted = tuple(int(x) for x in newest.split("."))
-    found = sorted(
-        (x for x in folder.glob("*.tar.gz") if _patch(x)[: len(wanted)] == wanted), key=_patch
-    )
+    found = [x for x in cached if _patch(x)[: len(wanted)] == wanted]
     if found:
         return found[-1]
+    if cached and os.environ.get("UV_PYTHON_DOWNLOADS") == "never":
+        return cached[-1]
     key = f"cpython-{newest}-{where}"
     progress(
         ProgressEvent(
@@ -269,7 +299,12 @@ def fetch_python(
         "UV_PYTHON_INSTALL_DIR": str(installed),
     }
     install = [uv, "python", "install", key, "--no-bin", "--no-registry"]
-    run(install, cwd=stage, what="uv python install", progress=progress, env=env)
+    try:
+        run(install, cwd=stage, what="uv python install", progress=progress, env=env)
+    except BundleupError:
+        if cached:
+            return cached[-1]
+        raise
     archives = sorted(downloads.glob("*.tar.gz"))
     if not archives:
         raise BundleupError(
@@ -290,7 +325,11 @@ def _newest(uv: str, key: str, platform: Platform, libc: str, stage: Path) -> st
     command = [uv, "python", "list", key, "--only-downloads", "--all-platforms", "--all-arches"]
     try:
         out = subprocess.run(
-            [*command, "--output-format", "json"], capture_output=True, text=True, cwd=stage
+            [*command, "--output-format", "json"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            cwd=stage,
         )
         found = json.loads(out.stdout) if out.returncode == 0 else []
     except (OSError, ValueError):

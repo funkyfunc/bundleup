@@ -6,6 +6,14 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-13** · build · uv keys cached non-editable wheels of local directories on
+  `pyproject.toml` alone, so a second `bundleup build` after editing `src/` re-bundled the first
+  build's wheel unless `--refresh-package` is passed for every `directory` package in the lock;
+  tests that build each fixture only once in a fresh temp folder can't catch stale-cache bugs. Also:
+  `argparse`'s `nargs="?"` treats `--smoke "--version"` as an option of `build` unless joined with
+  `=`, and `zipfile.ZipFile` on a `--format exe` binary sees only the `.pyz` at the tail, not the
+  launcher or Python archive ahead of it. Evidence: `tests/test_bundle.py`, `tests/test_smoke.py`,
+  `tests/test_exe.py`.
 - **2026-10-10** · process · Changing a fallback breaks whoever relied on it: making
   `BUNDLEUP_CACHE` the only cache broke the gauntlet's noexec condition, `--smoke` on noexec
   hosts and `bundleup cache`'s root filter, and the Mac-only local run couldn't see the first
