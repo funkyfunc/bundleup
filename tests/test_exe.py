@@ -52,10 +52,10 @@ def test_it_runs_with_no_python_on_the_machine(app: Path, tmp_path: Path) -> Non
     bad.write_bytes(raw)
     assert verify(bad).problems == ["changed file: launcher doesn't match its recorded hash"]
     raw[100] ^= 0xFF
-    raw[2_000_000] ^= 0xFF  # flip a byte inside the bundled python.tar.gz archive
+    raw[len(raw) // 2] ^= 0xFF  # flip a byte inside the bundled python.tar.gz archive
     bad.write_bytes(raw)
     assert [p for p in verify(bad).problems if "python-" in p]
-    raw[2_000_000] ^= 0xFF
+    raw[len(raw) // 2] ^= 0xFF
     raw[-5] ^= 0xFF  # corrupt the trailing {"scie": ...} JSON line
     bad.write_bytes(raw)
     assert verify(bad).problems == ["corrupted: executable trailer can't be read"]
