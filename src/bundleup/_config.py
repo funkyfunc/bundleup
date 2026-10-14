@@ -3,7 +3,7 @@ project, in `pyproject.toml` or a PEP 723 script's `[tool.bundleup]` table. Flag
 environment variables win over it; it wins over defaults.
 
     [tool.bundleup]
-    format = "lambda"
+    format = "zip"
     entry = "app:handler"
     max-size = "30MB"
 """
@@ -132,6 +132,6 @@ def apply(options: BuildOptions) -> tuple[BuildOptions, list[str]]:
 
 
 def _example(key: str) -> str:
-    return {"strict": "true", "format": '"lambda"', "max-size": '"30MB"', "split": '"100MB"'}.get(
+    return {"strict": "true", "format": '"zip"', "max-size": '"30MB"', "split": '"100MB"'}.get(
         key, '"..."'
     )

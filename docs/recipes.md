@@ -120,11 +120,12 @@ platforms it does have wheels for. Not yet tested in the real sandbox (it needs 
 ```bash
 bundleup build --against docs/targets/aws-lambda-python3.13-x86_64.toml --entry app:handler
 bundleup build --against docs/targets/aws-lambda-python3.13-arm64.toml   # Graviton
-bundleup build handler.py --format lambda --python 3.12 --python-platform x86_64-manylinux_2_34
+bundleup build handler.py --format zip --python 3.12 --python-platform x86_64-manylinux_2_34 --max-size 50MB
 ```
 
-The [target files](targets/) stand for `--format lambda --python 3.13 --python-platform
-x86_64-manylinux_2_34` (or `aarch64-…`); for another runtime, copy one or pass the flags.
+The [target files](targets/) stand for `--format zip --python 3.13 --python-platform
+x86_64-manylinux_2_34 --max-size 50MB` (or `aarch64-…`); for another runtime or an S3 upload (up
+to 250 MB unzipped), copy one or pass the flags.
 
 Pick the platform from the function's runtime
 ([AWS's table](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html), checked
@@ -136,17 +137,15 @@ Pick the platform from the function's runtime
 | `python3.10`, `python3.11` | Amazon Linux 2 (glibc 2.26) | `x86_64-manylinux_2_17` or `aarch64-manylinux_2_17` |
 
 uv has no `manylinux_2_26`, so the older runtimes use 2_17, and packages that stopped publishing
-2_17 wheels (Pillow 12) can't be built for them; `bundleup check` says so. A `--format lambda`
-build of compiled packages for macOS or Windows is an error (`lambda-not-linux`).
+2_17 wheels (Pillow 12) can't be built for them; `bundleup check` says so.
 
-The zip has your code and its dependencies at the top, as Lambda expects, with bytecode
-precompiled for the runtime (Lambda's `/var/task` is read-only). Set the function's runtime to
-the Python you built for and its handler to `module.function`: bundleup prints it when you pass
-`--entry app:handler` (`handler app.handler`); for a script `handler.py`, it's
+`--format zip` writes your code and its dependencies at the top of a `.zip`, as Lambda expects,
+with bytecode precompiled for the runtime (Lambda's `/var/task` is read-only). Set the function's
+runtime to the Python you built for and its handler to `module.function`: bundleup prints it when
+you pass `--entry app:handler` (`handler app.handler`); for a script `handler.py`, it's
 `handler.<function>`. Bytecode is hash-checked, so edits made in Lambda's console editor apply.
-bundleup refuses a function over Lambda's 250 MB unzipped limit and warns over the 50 MB
-direct-upload limit. Tested in CI: every gauntlet project except the `.pth` one (below) runs
-inside AWS's own Lambda image on x86_64 and arm64.
+Tested in CI: every gauntlet project except the `.pth` one (below) runs inside AWS's own Lambda
+image on x86_64 and arm64.
 
 Known limits: Lambda doesn't run `.pth` files from `/var/task` (bundleup warns,
 `pth-not-run`), and has no `/dev/shm`, so `multiprocessing.Pool` and `Queue` don't work there
@@ -323,7 +322,7 @@ bundleup build --locked                       # CI implies --locked when there's
 bundleup verify dist/app.pyz                  # the bundle matches its manifest
 ```
 
-Diagnostics have stable codes (`syntax-error`, `data-files`, `pth-not-run`, `lambda-too-big`,
+Diagnostics have stable codes (`syntax-error`, `data-files`, `pth-not-run`, `max-size`,
 ...); branch on `code`, not on the message. Schemas: [docs/schema/](schema/).
 
 ## Many machines starting the same bundle (HPC, shared filesystems)

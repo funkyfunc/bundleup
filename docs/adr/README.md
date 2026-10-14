@@ -33,7 +33,7 @@ and change only the old one's status line.
 | [0022](0022-cache-command.md) | Unpacked bundles are cleaned up by a command, never by bundles themselves | Accepted |
 | [0023](0023-payload-behaves-like-site-packages.md) | The payload behaves like a venv's site-packages: wheel executables stay, `.pth` files run | Accepted |
 | [0024](0024-check-command-and-build-analysis.md) | `bundleup check` reports what won't survive bundling, and every build runs it | Accepted |
-| [0025](0025-dir-and-lambda-formats-and-presets.md) | How `--format dir`, `--format lambda` and target presets work | Accepted; presets superseded by 0039 |
+| [0025](0025-dir-and-lambda-formats-and-presets.md) | How `--format dir`, `--format lambda` and target presets work | Accepted; presets superseded by 0039, `--format lambda` renamed to `zip` by 0049 |
 | [0026](0026-pylock-toml-input.md) | A project's `pylock.toml` is used when it has no `uv.lock` | Accepted |
 | [0027](0027-children-see-the-bundle-only-from-its-own-python.md) | Child processes see the bundle only when they run the bundle's own Python | Accepted (amended by 0037) |
 | [0028](0028-a-project-needs-a-lockfile.md) | A project needs a lockfile; bundleup never writes one into it | Accepted; first decision superseded by 0041 |
@@ -57,3 +57,4 @@ and change only the old one's status line.
 | [0046](0046-one-py-file-output.md) | `--format py`: the bundle as one plain-text `.py` file | Accepted |
 | [0047](0047-standalone-executables.md) | `--format exe`: a standalone executable that brings its own Python | Accepted |
 | [0048](0048-an-explicit-cache-is-the-only-cache.md) | An explicit `BUNDLEUP_CACHE` is the only cache folder | Accepted |
+| [0049](0049-zip-format-replaces-lambda.md) | `--format zip` replaces `--format lambda` | Accepted |

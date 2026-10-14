@@ -225,21 +225,7 @@ def _replace_parts(folder: Path, payloads: dict[str, Path] | None) -> None:
         shutil.rmtree(old, ignore_errors=True)
 
 
-DIR_MANIFEST = "bundleup-manifest.json"  # in a `dir` output and at the top of a Lambda zip
-# AWS Lambda's limits for a function's .zip (checked 2026-10-05): 50 MB to upload directly,
-# 250 MB unzipped including layers.
-LAMBDA_UPLOAD = 50 * 1000 * 1000
-LAMBDA_UNZIPPED = 250 * 1000 * 1000
-
-
-def lambda_upload_warning(output: Path) -> Diagnostic:
-    return Diagnostic(
-        "lambda-upload-size",
-        "warning",
-        f"{output.name} is over Lambda's 50 MB limit for uploading a .zip directly",
-        hint="upload it to S3 and point the function at it (the limit there is 250 MB unzipped), "
-        "or move large dependencies into a layer",
-    )
+DIR_MANIFEST = "bundleup-manifest.json"  # in a `dir` output and at the top of a `zip` output
 
 
 def _loader_settings(p: Prepared, *, members: list[str], dirname: str) -> dict[str, object]:
@@ -607,15 +593,15 @@ def write_dir(p: Prepared, output: Path, *, steps: Steps) -> None:
         shutil.rmtree(old, ignore_errors=True)
 
 
-def stage_lambda(p: Prepared, *, stage: Path, steps: Steps) -> Path:
-    """An AWS Lambda function .zip, in the staging directory: the packages and the project at the
-    top (Lambda puts /var/task on sys.path), bytecode precompiled for the runtime's Python, since
-    /var/task is read-only; the manifest alongside."""
+def stage_zip(p: Prepared, *, stage: Path, steps: Steps) -> Path:
+    """A flat .zip of the payload, in the staging directory: the packages and the project at the
+    top (for hosts that unzip onto sys.path, like AWS Lambda's /var/task or PySpark), bytecode
+    precompiled for the target Python; the manifest alongside."""
     steps.start("zip")
-    staged = stage / "lambda.zip"
+    staged = stage / "payload.zip"
     _digest, written = write_payload(p.site, staged)
     steps.start("verify")
-    manifest_json = _plain_manifest(p, "lambda", written)
+    manifest_json = _plain_manifest(p, "zip", written)
     steps.start("write")
     with zipfile.ZipFile(staged, "a") as zf:
         info = zipfile.ZipInfo(DIR_MANIFEST, FIXED_TIME)

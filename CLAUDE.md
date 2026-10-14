@@ -54,7 +54,7 @@ and git.
   standard library only). Outputs: a
   `.pyz` (default), `--format py` (one plain-text `.py`, ADR-0046), `--format exe` (an
   unsigned executable with its own Python, any platform from any machine, ADR-0047), `--format
-  dir`, `--format lambda`; `--max-size`; `--split SIZE` (a small `.pyz` and a parts folder,
+  dir`, `--format zip` (ADR-0049); `--max-size`; `--split SIZE` (a small `.pyz` and a parts folder,
   ADR-0045). No named targets: each
   destination is a tested recipe in docs/recipes.md (ADR-0039). Builds for this machine or another
   platform. Pure-Python bundles run on every
@@ -75,7 +75,7 @@ and git.
 - **Evidence:** the gauntlet (24 projects, every hostile condition, plus running pure bundles on
   every other installed Python), as `.pyz` and as `.py` (`--tool bundleup-py`), passes locally; in CI on Linux x64/arm64, macOS arm64 and Windows,
   23 of them (`20-heavy-ml` runs only with `--heavy`, which CI doesn't pass). CI results live in
-  the runs' artifacts, not in gauntlet/results/. Lambda zips run in AWS's Lambda image; the skill
+  the runs' artifacts, not in gauntlet/results/. `--format zip` outputs run in AWS's Lambda image; the skill
   recipe runs end to end (CI `skill`). Nightly: top-200 PyPI smoke test and a 22-program corpus
   (their failures open issues), and four real test suites (no issues filed; read the run). First
   all green together on 2026-10-08. Warm start equals an installed venv.
@@ -86,7 +86,7 @@ and git.
   Python (`_bytecode.py` v3).
 - **Released:** `bundleup 0.1.0` is published on PyPI (`https://pypi.org/project/bundleup/0.1.0/`)
   and GitHub Releases ([docs/releasing.md](docs/releasing.md)).
-- **ADR status:** all accepted (0045-0048 on the owner's request, designs unreviewed; the owner accepted 0023-0026, 0033-0038 and 0040 on
+- **ADR status:** all accepted (0045-0049 on the owner's request; the owner accepted 0023-0026, 0033-0038 and 0040 on
   2026-10-08, on the agent's summary); only 0013's features are still Proposed. 0027-0032 are
   accepted fixes the owner asked for, with designs the owner hasn't reviewed.
   Eleven independent reviews: [first](docs/findings/2026-10-07-independent-review.md),
@@ -107,7 +107,7 @@ pyproject.toml, src/bundleup/  the package (ADR-0018): __init__.py (public API),
                         in steps: _build.py (orchestration, build()/check()), _source.py (project
                         or script, lockfile), _python.py (target interpreter), _uv.py (export,
                         install), _payload.py (installed tree, entry, bytecode, lock checks),
-                        _outputs.py (pyz/dir/lambda writers), _steps.py (progress, run);
+                        _outputs.py (pyz/dir/zip writers), _steps.py (progress, run);
                         _check.py (the analysis), _verify.py (lock/RECORD checks, `verify`),
                         _loader.py (the bundle's __main__), _runtime.py + _sitecustomize.py
                         (copied into each payload, ADR-0027), _platforms.py, _formats.py
@@ -136,7 +136,7 @@ gauntlet/smoke.py       nightly breadth test: top PyPI packages bundled and comp
 gauntlet/corpus*.py, corpus.toml  nightly corpus: real CLIs run installed vs bundled; failures -> issues
 gauntlet/weekly_summary.py  weekly findings page from the nightly smoke + corpus results (weekly.yml, paused)
 gauntlet/cross.py       cross-target gauntlet: build on one OS for another, run on the target
-gauntlet/formats.py     `dir` and Lambda outputs: run as a host app would, Lambda in AWS's image
+gauntlet/formats.py     `dir` and `zip` outputs: run as a host app would, `zip` in AWS's Lambda image
 gauntlet/skill/         the founding use case: a skill's scripts sharing one --entry python bundle (CI `skill`)
 gauntlet/suites.py, suites.toml  real projects' test suites, venv vs bundle (CI only, suites.yml)
 .github/workflows/       ci.yml (every push: checks, tests, gauntlet matrix); nightly.yml (smoke

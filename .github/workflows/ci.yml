@@ -256,9 +256,9 @@ jobs:
           cat noexec.txt; grep -q "mounted noexec" noexec.txt
 
   formats:
-    # ADR-0025: the `dir` output run as a host application would (only PYTHONPATH), and the Lambda
-    # .zip invoked in AWS's own Lambda image (public.ecr.aws/lambda/python) through its runtime
-    # interface emulator: read-only /var/task, Amazon Linux 2023's glibc.
+    # ADR-0025, ADR-0049: the `dir` output run as a host application would (only PYTHONPATH), and
+    # the `zip` output invoked in AWS's own Lambda image (public.ecr.aws/lambda/python) through its
+    # runtime interface emulator: read-only /var/task, Amazon Linux 2023's glibc.
     name: Formats (${{ matrix.format }}, ${{ matrix.os }})
     needs: checks
     strategy:
@@ -268,8 +268,8 @@ jobs:
           - { format: dir, os: ubuntu-24.04, args: "" }
           - { format: dir, os: windows-2025, args: "" }
           - { format: dir, os: macos-15, args: "" }
-          - { format: lambda, os: ubuntu-24.04, args: "" }
-          - { format: lambda, os: ubuntu-24.04-arm, args: "--platform aarch64-manylinux_2_34" }
+          - { format: zip, os: ubuntu-24.04, args: "" }
+          - { format: zip, os: ubuntu-24.04-arm, args: "--platform aarch64-manylinux_2_34" }
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     steps:

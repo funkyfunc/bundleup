@@ -210,10 +210,10 @@ def _add_build_options(command: argparse.ArgumentParser, *, output: bool) -> Non
         )
     command.add_argument(
         "--format",
-        choices=["pyz", "py", "exe", "dir", "lambda"],
+        choices=["pyz", "py", "exe", "dir", "zip"],
         metavar="FORMAT",
         default=None,
-        help="pyz (default), py (one .py), exe (experimental), dir, lambda (Lambda .zip)",
+        help="pyz (default), py (one .py), exe (experimental), dir, zip",
     )
     command.add_argument(
         "--python",
@@ -396,7 +396,7 @@ def _success_lines(result: BuildResult, style: Style) -> list[str]:
     packages = plural(result.packages, "package")
     target = result.target.describe(result.native, result.pythons, result.reach)
     details = [_payloads_line(result.payloads) if result.payloads else target, packages]
-    if result.format == "lambda" and result.handler:
+    if result.format == "zip" and result.handler:
         details.append(f"handler {result.handler}")
     if result.parts:
         count = plural(sum(1 for _ in result.parts.iterdir()), "part")

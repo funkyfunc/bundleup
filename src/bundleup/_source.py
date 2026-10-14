@@ -340,8 +340,7 @@ def script_metadata(text: str) -> dict[str, Any]:  # Any: TOML values have no fi
 
 def script_path(source: Source, fmt: Format) -> str | None:
     """Where a PEP 723 script goes in the payload: out of the way in a .pyz or .py (the loader
-    runs it), at the top for `dir` and `lambda`, where it's imported as a module (a Lambda
-    handler)."""
+    runs it), at the top for `dir` and `zip`, where it's imported as a module."""
     if not source.is_script:
         return None
     return f"{_verify.SCRIPT_DIR}/{source.path.name}" if fmt in LOADED else source.path.name

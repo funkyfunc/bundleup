@@ -511,7 +511,7 @@ def _read_manifest(bundle: Path) -> dict[str, Any]:  # Any: JSON
         ) from None
     if not isinstance(manifest, dict):
         raise NotABundleError(f"{bundle} isn't a bundleup bundle with a manifest")
-    if manifest.get("format") in ("dir", "lambda"):
+    if manifest.get("format") in ("dir", "zip", "lambda"):
         if not isinstance(manifest.get("name"), str) or not _str_dict(manifest.get("files")):
             raise NotABundleError(f"{bundle}'s manifest is incomplete")
         return manifest
@@ -641,7 +641,7 @@ def _check_bundle(bundle: Path, manifest: dict[str, Any]) -> list[str]:  # Any: 
     try:
         outer, code = _open(bundle)
         with outer:
-            if manifest.get("format") in ("dir", "lambda"):
+            if manifest.get("format") in ("dir", "zip", "lambda"):
                 return _check_payload(outer, manifest["files"], ignore=(DIR_MANIFEST,))
             problems = _check_exe(bundle) if _is_exe(bundle, outer) else []
             problems += _check_loader(outer, manifest.get("loader") or {}, code)
@@ -658,11 +658,11 @@ def _check_bundle(bundle: Path, manifest: dict[str, Any]) -> list[str]:  # Any: 
 
 
 def unpacks(bundle: Path) -> bool:
-    """Whether `bundle` unpacks to a cache directory at run time (`dir` and `lambda` don't)."""
+    """Whether `bundle` unpacks to a cache directory at run time (`dir` and `zip` don't)."""
     if bundle.is_dir():
         return False
     try:
-        return _read_manifest(bundle).get("format") not in ("dir", "lambda")
+        return _read_manifest(bundle).get("format") not in ("dir", "zip", "lambda")
     except NotABundleError:
         return False
 

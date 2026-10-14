@@ -46,7 +46,7 @@ options:
   -h, --help            show this help message and exit
   -o FILE, --output FILE
                         output file (default: dist/<name>.pyz) [env: BUNDLEUP_OUTPUT]
-  --format FORMAT       pyz (default), py (one .py), exe (experimental), dir, lambda (Lambda .zip)
+  --format FORMAT       pyz (default), py (one .py), exe (experimental), dir, zip
   --python VERSION      a version (3.12) or a path; repeatable; default: uv's [env: BUNDLEUP_PYTHON]
   --entry NAME          a script name, module:function, module or python [env: BUNDLEUP_ENTRY]
   --against FILE        a destination described in a TOML file (docs/targets/)
@@ -79,7 +79,7 @@ positional arguments:
 
 options:
   -h, --help            show this help message and exit
-  --format FORMAT       pyz (default), py (one .py), exe (experimental), dir, lambda (Lambda .zip)
+  --format FORMAT       pyz (default), py (one .py), exe (experimental), dir, zip
   --python VERSION      a version (3.12) or a path; repeatable; default: uv's [env: BUNDLEUP_PYTHON]
   --entry NAME          a script name, module:function, module or python [env: BUNDLEUP_ENTRY]
   --against FILE        a destination described in a TOML file (docs/targets/)

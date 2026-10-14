@@ -7,10 +7,10 @@ from typing import Literal
 
 from ._errors import UsageError
 
-Format = Literal["pyz", "py", "exe", "dir", "lambda"]
-FORMATS: tuple[Format, ...] = ("pyz", "py", "exe", "dir", "lambda")
+Format = Literal["pyz", "py", "exe", "dir", "zip"]
+FORMATS: tuple[Format, ...] = ("pyz", "py", "exe", "dir", "zip")
 # Formats that run through bundleup's loader, so they check the machine, unpack, and run an entry
-# point; `dir` and `lambda` are imported by a host instead. An `exe` carries a .pyz.
+# point; `dir` and `zip` are imported by a host instead. An `exe` carries a .pyz.
 LOADED: tuple[Format, ...] = ("pyz", "py", "exe")
 
 # Decimal units, as upload limits are written ("30 MB"), and binary ones for those who want them.

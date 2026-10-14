@@ -267,7 +267,7 @@ def test_walk_dir_handles_fifos_unreadable_dirs_and_malformed_manifests(
         BuildOptions(
             path=script,
             output=tmp_path / "fn.zip",
-            format="lambda",
+            format="zip",
             python_platform="x86_64-manylinux_2_34",
         )
     ).output
@@ -294,7 +294,7 @@ def test_eleventh_review_corrupted_deflate_and_malformed_manifest_types(
         BuildOptions(
             path=script,
             output=tmp_path / "corrupt_fn.zip",
-            format="lambda",
+            format="zip",
             python_platform="x86_64-manylinux_2_34",
         )
     ).output
@@ -322,7 +322,7 @@ def test_eleventh_review_corrupted_deflate_and_malformed_manifest_types(
         '{"name": "a", "format": "pyz", "loader": [], "payload": {"sha256": "abc"}, "files": {}}',
         '{"name": "a", "format": "pyz", "loader": {"sha256": "abc"}, "payload": {}}',
         '{"name": "a", "format": "pyz", "loader": {"sha256": "abc"}, "payloads": [123]}',
-        '{"name": "a", "format": "lambda", "files": ["not-a-dict"]}',
+        '{"name": "a", "format": "zip", "files": ["not-a-dict"]}',
     ):
         with zipfile.ZipFile(bad_zip, "w") as zf:
             zf.writestr("manifest.json", bad_json)

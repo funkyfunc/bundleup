@@ -418,7 +418,7 @@ class Prepared:
     site: Path
     pylock: Path
     script: str | None  # where a PEP 723 script is in the payload
-    entry: Entry | None  # None only for `dir` and `lambda`, where it's optional
+    entry: Entry | None  # None only for `dir` and `zip`, where it's optional
     packages: int
     native: bool
     version: str | None

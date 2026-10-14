@@ -33,6 +33,7 @@ bundleup build --smoke          # then run it once: fresh home folder, no networ
 bundleup check --audit          # ask PyPI: vulnerable, yanked or brand-new dependencies?
 bundleup build --max-size 30MB # fail, writing nothing, if the bundle is bigger
 bundleup build --format dir     # a plain directory, for apps that load packages from one
+bundleup build --format zip     # a flat .zip of code, packages and bytecode (e.g. serverless)
 bundleup build --format py      # one plain-text .py file (for small tools: gists, uploads)
 bundleup build --split 100MB    # no file over 100 MB: a small .pyz and a folder of parts
 bundleup build --format exe     # experimental: an executable with its own Python, unsigned

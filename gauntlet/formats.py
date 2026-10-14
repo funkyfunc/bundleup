@@ -1,10 +1,10 @@
-"""The gauntlet for bundleup's other output formats (ADR-0025): every project built as a `dir` and
-run with only that directory on PYTHONPATH (as a host application would), or built for AWS Lambda
-and invoked in AWS's own Lambda container image through its runtime interface emulator.
+"""The gauntlet for bundleup's other output formats (ADR-0025, ADR-0049): every project built as a
+`dir` and run with only that directory on PYTHONPATH (as a host application would), or built as a
+`zip` and invoked in AWS's own Lambda container image through its runtime interface emulator.
 
     uv run gauntlet/formats.py dir --check                  # any OS
-    uv run gauntlet/formats.py lambda --check               # Linux with Docker (CI)
-    uv run gauntlet/formats.py lambda --platform aarch64-manylinux_2_34  # on arm64 Linux
+    uv run gauntlet/formats.py zip --check                  # Linux with Docker (CI)
+    uv run gauntlet/formats.py zip --platform aarch64-manylinux_2_34  # on arm64 Linux
 
 A small handler (HANDLER below) is added to each output before it runs: it calls the project's
 entry point and returns what it printed. Results go to gauntlet/results/<--out>.json.
@@ -62,7 +62,7 @@ KNOWN = {
     "dir": {
         "23-pth-files": "no loader to run .pth files (`check` warns: pth-not-run)",
     },
-    "lambda": {
+    "zip": {
         "23-pth-files": "no loader to run .pth files (`check` warns: pth-not-run)",
     },
 }
@@ -140,10 +140,10 @@ def invoke(port: str, event: dict[str, object]) -> dict[str, object]:
             time.sleep(0.5)
 
 
-def run_lambda(project: Path, meta: rb.Meta, work: Path, platform: str, python: str) -> Record:
+def run_zip(project: Path, meta: rb.Meta, work: Path, platform: str, python: str) -> Record:
     archive = work / f"{meta['id']}.zip"
-    flags = ["--format", "lambda", "--python", python, "--python-platform", platform]
-    rec = build(project, meta, "lambda", archive, flags)
+    flags = ["--format", "zip", "--python", python, "--python-platform", platform]
+    rec = build(project, meta, "zip", archive, flags)
     if rec.outcome:
         return rec
     task = work / meta["id"]
@@ -177,16 +177,16 @@ def run_lambda(project: Path, meta: rb.Meta, work: Path, platform: str, python: 
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("format", choices=["dir", "lambda"])
+    parser.add_argument("format", choices=["dir", "zip"])
     parser.add_argument("only", nargs="*", help="project id prefixes")
     parser.add_argument("--python", default="3.12", help="dir: the Python to build for and run")
     # Python 3.12+ on Lambda is Amazon Linux 2023: glibc 2.34 (docs/recipes.md).
-    parser.add_argument("--platform", default="x86_64-manylinux_2_34", help="lambda: uv's name")
+    parser.add_argument("--platform", default="x86_64-manylinux_2_34", help="zip: uv's name")
     parser.add_argument("--check", action="store_true", help="exit 1 on unexpected failures")
     parser.add_argument("--out", default=None)
     opts = parser.parse_args()
     lambda_python = "3.13"  # the image tag must match
-    python = lambda_python if opts.format == "lambda" else opts.python
+    python = lambda_python if opts.format == "zip" else opts.python
     work = rb.WORK / f"formats-{opts.format}"
     work.mkdir(parents=True, exist_ok=True)
     records = []
@@ -202,7 +202,7 @@ def main() -> int:
         if opts.format == "dir":
             rec = run_dir(project, meta, work, rb.python_path(python))
         else:
-            rec = run_lambda(project, meta, work, opts.platform, lambda_python)
+            rec = run_zip(project, meta, work, opts.platform, lambda_python)
         records.append(rec)
         print(
             f"{rec.outcome:<11} {rec.format:<7} {rec.project:<32} {rec.detail[:90]!r}", flush=True

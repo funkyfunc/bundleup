@@ -34,8 +34,8 @@ def test_a_scripts_table_applies_and_paths_are_relative_to_it(tmp_path: Path) ->
 
 def test_flags_and_environment_win(tmp_path: Path) -> None:
     table = 'format = "dir"\npython = "3.11"\nstrict = true\nmax-size = "30MB"\n'
-    options, used = apply(BuildOptions(path=project(tmp_path, table), format="lambda"))
-    assert (options.format, options.python, options.strict) == ("lambda", "3.11", True)
+    options, used = apply(BuildOptions(path=project(tmp_path, table), format="zip"))
+    assert (options.format, options.python, options.strict) == ("zip", "3.11", True)
     assert options.max_size == 30_000_000
     assert used == ['python = "3.11"', "strict = true", 'max-size = "30MB"']
 
@@ -47,7 +47,7 @@ def test_flags_and_environment_win(tmp_path: Path) -> None:
         ('max-size = "big"\n', "can't read the size `big`", "a number with an optional unit"),
         ("json = true\n", "`json` is a per-run setting", "pass --json on the command line"),
         ("strict = 1\n", "`strict` must be true or false", "for example: strict = true"),
-        ('format = "msi"\n', "unknown format `msi`", "use one of pyz, py, exe, dir, lambda"),
+        ('format = "msi"\n', "unknown format `msi`", "use one of pyz, py, exe, dir, zip"),
     ],
 )
 def test_mistakes_are_usage_errors(tmp_path: Path, table: str, message: str, hint: str) -> None:

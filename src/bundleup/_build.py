@@ -41,11 +41,8 @@ from ._errors import (
 from ._exe import host_platform, write_exe
 from ._formats import FORMATS, LOADED, Format
 from ._outputs import (
-    LAMBDA_UNZIPPED,
-    LAMBDA_UPLOAD,
     check_size,
-    lambda_upload_warning,
-    stage_lambda,
+    stage_zip,
     write_dir,
     write_pyz,
 )
@@ -100,7 +97,7 @@ class BuildOptions:
     # Another OS/CPU, in uv's terms (e.g. "x86_64-manylinux_2_28"); default: this machine.
     python_platform: str | None = None
     strict: bool = False  # warnings fail the build too (errors always do)
-    # What to write (ADR-0025, ADR-0046): "pyz" (the default), "py", "dir" or "lambda".
+    # What to write (ADR-0025, ADR-0046, ADR-0049): "pyz" (default), "py", "exe", "dir" or "zip".
     format: Format | None = None
     # The most the output may be, in bytes: over it is an error, before writing (ADR-0039).
     max_size: int | None = None
@@ -253,7 +250,7 @@ def build(
             "py": f"{name}.py",
             "exe": f"{name}.exe" if windows else name,
             "dir": name,
-        }.get(fmt, f"{name}-lambda.zip")
+        }.get(fmt, f"{name}.zip")
         output = (options.output or p.source.workdir / "dist" / default).absolute()
         if fmt != "dir" and output.is_dir():
             raise UsageError(
@@ -319,16 +316,8 @@ def build(
             check_size(sum(x.size_bytes for x in p.sizes), options.max_size, diagnostics)
             write_dir(p, output, steps=steps)
         else:
-            staged = stage_lambda(p, stage=stage, steps=steps)
+            staged = stage_zip(p, stage=stage, steps=steps)
             check_size(staged.stat().st_size, options.max_size, diagnostics)
-            if staged.stat().st_size > LAMBDA_UPLOAD:
-                diagnostics.append(lambda_upload_warning(output))
-                if options.strict:  # checked before writing: an earlier zip stays untouched
-                    raise CheckFailedError(
-                        "found 1 warning, so nothing was written",
-                        diagnostics=diagnostics,
-                        hint=_STRICT_HINT,
-                    )
             # Next to the output, then renamed over it: never a half-written zip at `output`.
             output.parent.mkdir(parents=True, exist_ok=True)
             partial = output.with_name(f".{output.name}.tmp-{os.getpid()}")
@@ -631,10 +620,8 @@ def _unlocked(source: Source, *, pinned: bool) -> list[Diagnostic]:
     ]
 
 
-def _format_diagnostics(
-    fmt: Format, site: Path, sizes: list[_check.PackageSize]
-) -> list[Diagnostic]:
-    """What only matters for `dir` and `lambda` outputs, which run without bundleup's loader."""
+def _format_diagnostics(fmt: Format, site: Path) -> list[Diagnostic]:
+    """What only matters for `dir` and `zip` outputs, which run without bundleup's loader."""
     diags = []
     pth = pth_files(site)
     if fmt not in LOADED and pth:
@@ -644,20 +631,8 @@ def _format_diagnostics(
                 "warning",
                 f"{', '.join(pth)} won't run: the host puts this directory on sys.path, and Python "
                 "only runs .pth files in site-packages",
-                hint="a .pyz runs them (its loader does); in a directory output, whatever they set "
-                "up (e.g. setuptools' distutils, pywin32's paths) is missing",
-            )
-        )
-    unzipped = sum(x.size_bytes for x in sizes)
-    if fmt == "lambda" and unzipped > LAMBDA_UNZIPPED:
-        largest = ", ".join(f"{x.name} {x.size_bytes / 1e6:.0f} MB" for x in sizes[:3])
-        diags.append(
-            Diagnostic(
-                "lambda-too-big",
-                "error",
-                f"the function would be {unzipped / 1e6:.0f} MB unzipped; Lambda allows 250 MB "
-                "including layers",
-                hint=f"largest: {largest}; use a container image for bigger functions",
+                hint="a .pyz runs them (its loader does); in a directory or zip output, whatever "
+                "they set up (e.g. setuptools' distutils, pywin32's paths) is missing",
             )
         )
     return diags
@@ -712,8 +687,8 @@ def _prepare(
     if fmt in LOADED or options.entry or script:
         entry = resolve_entry(source, site, entry=options.entry, script=script)
     else:
-        # A directory or a Lambda zip is imported, and its host decides what runs. A console
-        # script is a CLI, not a Lambda handler, so it's never guessed (the review found the
+        # A directory or a flat zip is imported, and its host decides what runs. A console
+        # script is a CLI, not a module handler, so it's never guessed (the review found the
         # printed handler named one).
         entry = None
     packages, native = inspect_site(site)
@@ -759,7 +734,7 @@ def _prepare(
         for shown, path, beside in code
     ]
     diagnostics += _check.undeclared_imports(imported, provided, _imports.stdlib(target.version))
-    diagnostics += _format_diagnostics(fmt, site, sizes)
+    diagnostics += _format_diagnostics(fmt, site)
     diagnostics += coverage
     diagnostics += _unlocked(source, pinned=exported.pinned)
     pythons = python_range(site, pylock=pylock, target=target, source=source, native=native)
@@ -785,17 +760,6 @@ def _prepare(
     pythons, by_stdlib = _check.stdlib_range(pythons, target.version, every_import, provided)
     diagnostics += by_stdlib
     reach = portability(pylock, target=target, pythons=pythons, native=native)
-    if fmt == "lambda" and target.platform != "linux" and not reach.any_os:
-        diagnostics.append(
-            Diagnostic(
-                "lambda-not-linux",
-                "error",
-                "AWS Lambda runs Linux, but this was built for "
-                + target.describe(native, pythons, reach),
-                hint="add --python-platform x86_64-manylinux_2_34 or aarch64-manylinux_2_34 "
-                "(Lambda's Python 3.12+); docs/recipes.md lists the others",
-            )
-        )
     diagnostics.sort(key=lambda d: d.level != "error")
     return Prepared(
         source=source,

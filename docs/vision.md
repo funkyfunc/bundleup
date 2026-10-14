@@ -117,9 +117,10 @@ Examples, not the definition (from [round 4 research](research/round-4-synthesis
   scripts, HPC jobs on offline compute nodes, air-gapped servers, Raspberry Pi, course tools and
   graders, agent sandboxes and skills (e.g. Claude API Skills, which have no network), and Docker
   images built by copying one `app.pyz`.
-- **Also built (2026-10):** builds for other platforms from one machine, AWS Lambda zips
-  (`--format lambda`), plain directories for apps with Python built in such as Splunk and QGIS
-  (`--format dir`). See [ADR-0025](adr/0025-dir-and-lambda-formats-and-presets.md).
+- **Also built (2026-10):** builds for other platforms from one machine, flat `.zip` archives for
+  serverless (`--format zip`), plain directories for apps with Python built in such as Splunk and
+  QGIS (`--format dir`). See [ADR-0025](adr/0025-dir-and-lambda-formats-and-presets.md) and
+  [ADR-0049](adr/0049-zip-format-replaces-lambda.md).
 - **Also built (2026-10-09):** one plain-text `.py` (`--format py`), a `.pyz` cut into files under
   a size (`--split`), and unsigned executables that bring their own Python for machines without
   one (`--format exe`, delivered through git or a package manager; ADR-0047).

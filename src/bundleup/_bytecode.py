@@ -6,7 +6,7 @@ bundleup's build cache, keyed by the distribution's RECORD (every file with its 
 compile the project's own code and whatever changed (roadmap item 9).
 
 The `.pyc` files are hash-based, never mtime-based (mtimes aren't kept in zips): unchecked in a
-.pyz, whose content-addressed cache never changes; checked in `dir` and `lambda` outputs, which
+.pyz, whose content-addressed cache never changes; checked in `dir` and `zip` outputs, which
 people may edit in place.
 """
 
@@ -171,7 +171,7 @@ def precompile(
     """Compile everything in `site` with `python`, reusing cached bytecode.
 
     `checked`: hash-checked .pyc files, which Python ignores once the source is edited (for
-    `dir` and `lambda` outputs, which people can edit in place); otherwise unchecked, the fastest
+    `dir` and `zip` outputs, which people can edit in place); otherwise unchecked, the fastest
     for a .pyz, whose files never change. Returns (files compiled now, distributions restored
     from the cache).
     """

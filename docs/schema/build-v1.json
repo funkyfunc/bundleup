@@ -181,7 +181,7 @@
                 "py",
                 "exe",
                 "dir",
-                "lambda"
+                "zip"
               ],
               "description": "What was written (added within version 1)"
             },
@@ -190,7 +190,7 @@
                 "string",
                 "null"
               ],
-              "description": "What runs: module:function, module, or the script's path; null for a dir or Lambda output with none (added within version 1)"
+              "description": "What runs: module:function, module, or the script's path; null for a dir or zip output with none (added within version 1)"
             },
             "payloads": {
               "type": "array",
