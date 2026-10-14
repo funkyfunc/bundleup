@@ -123,11 +123,10 @@ def test_the_windows_cpu_is_the_interpreters(
     assert _loader._machine() == machine
 
 
-def test_tenth_review_musllinux_level_linux_tags_and_runtime_under() -> None:
+def test_tenth_review_musllinux_level_linux_tags_and_runtime_under(tmp_path: Path) -> None:
     """Tenth review: explicit musllinux_1_1 level, linux_{arch} in supported_tags, patch specifiers
     in _oldest_python, hyphenated dist-info in console_scripts, and root path in _runtime._under."""
     import os
-    from pathlib import Path
 
     from bundleup import _runtime, _uv
 
@@ -149,9 +148,9 @@ def test_tenth_review_musllinux_level_linux_tags_and_runtime_under() -> None:
     old_site = os.environ.get(_runtime.ENV_SITE)
     old_scripts = os.environ.get(_runtime.ENV_SCRIPTS)
     try:
-        os.environ[_runtime.ENV_SITE] = "/tmp/bundle-a"
-        os.environ[_runtime.ENV_SCRIPTS] = "/tmp/bundle-a-scripts"
-        site_b = Path("/tmp/bundle-b-test")
+        os.environ[_runtime.ENV_SITE] = str(tmp_path / "bundle-a")
+        os.environ[_runtime.ENV_SCRIPTS] = str(tmp_path / "bundle-a-scripts")
+        site_b = tmp_path / "bundle-b-test"
         site_b.mkdir(exist_ok=True)
         try:
             _runtime.activate(str(site_b), pth=[])
@@ -159,7 +158,6 @@ def test_tenth_review_musllinux_level_linux_tags_and_runtime_under() -> None:
         finally:
             if str(site_b) in _runtime.sys.path:
                 _runtime.sys.path.remove(str(site_b))
-            site_b.rmdir()
     finally:
         if old_site is None:
             os.environ.pop(_runtime.ENV_SITE, None)
