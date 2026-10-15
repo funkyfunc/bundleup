@@ -1,7 +1,6 @@
 # ADR-0043: `check --audit` asks PyPI about the locked packages
 
-- **Status:** Accepted (the owner, 2026-10-09: "go ahead and implement everything else", after
-  rounds 6 and 7)
+- **Status:** Superseded by [ADR-0050](0050-consolidate-cli-and-in-process-range-checks.md) (`check --audit` removed)
 - **Date:** 2026-10-09
 - **Deciders:** the owner (the direction), an agent (the design)
 

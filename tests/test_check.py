@@ -189,12 +189,12 @@ def test_tenth_review_check_imports_audit_and_folder_app(
 ) -> None:
     """Tenth review: `check -v` on a zero-package script, folder-app `own` files in `owners()` /
     `oldest_python()`, dotted filenames in `_source_of`, `except ImportError:` fallback imports,
-    PEP 263 / UTF-8 BOM in `imports_of`, and `(name, version)` filtering in `_audit.from_pypi`."""
+    and PEP 263 / UTF-8 BOM in `imports_of`."""
     # 1. `_check_lines` with `-v` on an empty packages list doesn't crash on max()
     import argparse
     from dataclasses import replace
 
-    from bundleup import _audit, _cli, _imports
+    from bundleup import _cli, _imports
     from bundleup._python import PythonRange
     from bundleup._term import Style
 
@@ -254,35 +254,15 @@ def test_tenth_review_check_imports_audit_and_folder_app(
     bom.write_bytes("\ufeffimport os\n".encode("utf-8"))
     assert _imports.imports_of(bom) == {"os"}
 
-    # 6. `_audit.from_pypi` filters by (name, version) and sorts PEP 440 versions
-    lock = """
-lock-version = "1.0"
-created-by = "uv"
-[[packages]]
-name = "foo"
-version = "1.0.0"
-index = "https://pypi.org/simple"
-wheels = [{ name = "foo-1.0.0-py3-none-any.whl" }]
-[[packages]]
-name = "foo"
-version = "2.0.0"
-index = "https://pypi.org/simple"
-wheels = [{ name = "foo-2.0.0-py3-none-any.whl" }]
-"""
-    assert _audit.from_pypi(lock, {("foo", "2.0.0")}) == [_audit.Locked("foo", "2.0.0")]
-    assert _audit._version_key("0.10.0") > _audit._version_key("0.9.0")
-
 
 def test_eleventh_review_canonical_project_else_imports_pth_bom_and_audit(
     tmp_path: Path,
 ) -> None:
     """Eleventh review: canonicalized project names in owners/oldest_python/syntax_errors,
-    standalone .pyc in _source_of, try/except/else in imports_in, UTF-8 BOM in .pth files,
-    and naive/malformed timestamps in _audit._oldest_upload."""
+    standalone .pyc in _source_of, try/except/else in imports_in, and UTF-8 BOM in .pth files."""
     import ast
-    from datetime import timezone
 
-    from bundleup import _audit, _imports
+    from bundleup import _imports
 
     assert c._source_of("standalone.pyc") == "standalone.py"
 
@@ -312,12 +292,3 @@ def test_eleventh_review_canonical_project_else_imports_pth_bom_and_audit(
     (site / "src_sub" / "extra_mod.py").write_text("x = 1\n")
     (site / ".hidden.pth").write_text("ghost_dir\n")
     assert "extra_mod" in _imports.provided_by(site)
-
-    # _audit._oldest_upload handles naive ISO timestamps and malformed strings gracefully
-    dt = _audit._oldest_upload(
-        [
-            {"upload_time_iso_8601": "not-a-timestamp"},
-            {"upload_time_iso_8601": "2025-01-01T00:00:00"},
-        ]
-    )
-    assert dt is not None and dt.tzinfo == timezone.utc

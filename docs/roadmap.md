@@ -40,15 +40,15 @@ for particular hosts (MCP servers and the like) are niche; don't add them.
     agent's recommendation): keep the sitecustomize approach (ADR-0027, 0037, 0040, all passing);
     revisit a venv in the cache (as pex `--venv` does) if real users hit child-process trouble.
 29. ~~**Decide whether a build may download an interpreter by default**~~ decided 2026-10-08:
-    yes, as uv does, but announced, and off with `UV_PYTHON_DOWNLOADS=never` (ADR-0035).
+    yes, when `--python 3.X` asks for an uninstalled version, announced and off with
+    `UV_PYTHON_DOWNLOADS=never` (ADR-0035); older syntax in a range is checked in-process with
+    `ast.parse(..., feature_version=...)` ([ADR-0050](adr/0050-consolidate-cli-and-in-process-range-checks.md)).
 30. ~~**Decide CI's shape**~~ decided 2026-10-08: the full matrix stays on every push (it's free
     for a public repository and caught real bugs); agents push in batches instead.
 32. ~~**A noexec cache**~~ done 2026-10-09: native bundles skip noexec cache folders; Linux CI's
     gauntlet mounts one (`noexec-cache`).
-33. ~~**`check --audit`**~~ done 2026-10-09 ([ADR-0043](adr/0043-check-audit-asks-pypi-about-the-lock.md)): vulnerabilities, yanked
-    versions, brand-new projects, from PyPI.
-34. ~~**Describe a target environment as data**~~ done 2026-10-09 ([ADR-0044](adr/0044-destinations-as-data-files.md)): `--against FILE`;
-    the Claude API sandbox and Lambda files in docs/targets/.
+33. ~~**`check --audit`**~~ removed 2026-10-14 ([ADR-0050](adr/0050-consolidate-cli-and-in-process-range-checks.md), superseding [ADR-0043](adr/0043-check-audit-asks-pypi-about-the-lock.md)): live PyPI auditing belongs to dedicated tools (`pip-audit`).
+34. ~~**Describe a target environment as data**~~ removed 2026-10-14 ([ADR-0050](adr/0050-consolidate-cli-and-in-process-range-checks.md), superseding [ADR-0044](adr/0044-destinations-as-data-files.md)): `[tool.bundleup]` and [recipes](recipes.md) cover destination settings directly.
 35. ~~**MCP servers**~~ dropped 2026-10-09 (the owner): too niche. The recipe, the CI jobs and
     the test server were removed; the focus is taking in more kinds of projects and producing more
     kinds of outputs.

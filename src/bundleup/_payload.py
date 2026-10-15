@@ -13,7 +13,7 @@ from typing import Literal, NamedTuple
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.utils import canonicalize_name
 
-from . import _bytecode, _check, _platforms, _verify, _zipwriter
+from . import _bytecode, _check, _imports, _platforms, _verify, _zipwriter
 from ._errors import (
     ISSUES_URL,
     BundleMismatchError,
@@ -45,14 +45,21 @@ class Entry(NamedTuple):
         return f"{self.target}:{self.attr}" if self.kind == "call" else self.target
 
 
-def resolve_entry(source: Source, site: Path, *, entry: str | None, script: str | None) -> Entry:
+def resolve_entry(
+    source: Source,
+    site: Path,
+    *,
+    entry: str | None,
+    script: str | None,
+    target_version: tuple[int, int] | None = None,
+) -> Entry:
     """What the loader runs: --entry, the project's console script, or the script itself.
     `--entry python` runs whatever script it's given, with the bundle's packages."""
     if entry == "python":
         return Entry("python", "")
     if source.app:  # a folder of modules (ADR-0041): its main file, or what --entry names
         if entry is None:
-            entry = next((m for m in APP_MAINS if (source.path / m).is_file()), None)
+            entry = next((m for m in APP_MAINS if _exact_file(site, m) is not None), None)
             if entry is None:
                 raise EntryPointError(
                     f"{source.name} has no {', '.join(APP_MAINS)}, so bundleup doesn't know "
@@ -60,9 +67,15 @@ def resolve_entry(source: Source, site: Path, *, entry: str | None, script: str 
                     hint="pass --entry main.py, --entry module:function, or --entry python",
                 )
         if entry.endswith(".py"):
-            if not (site / entry).is_file():
+            norm = Path(entry.replace("\\", "/")).as_posix().removeprefix("./")
+            exact = _exact_file(site, *norm.split("/"))
+            if (
+                ".." in norm.split("/")
+                or exact is None
+                or not exact.resolve().is_relative_to(site.resolve())
+            ):
                 raise EntryPointError(f"--entry {entry}: there's no such file in {source.name}")
-            return Entry("script", entry)
+            return Entry("script", norm)
     if script:
         if entry:
             raise UsageError(
@@ -72,6 +85,7 @@ def resolve_entry(source: Source, site: Path, *, entry: str | None, script: str 
         return Entry("script", script)
     scripts = console_scripts(site, source.name)
     by_canon = {canonicalize_name(k): v for k, v in scripts.items()}
+    roots = _imports.search_roots(site)
     if entry is None:
         if len(scripts) == 1:
             entry = next(iter(scripts.values()))
@@ -79,7 +93,7 @@ def resolve_entry(source: Source, site: Path, *, entry: str | None, script: str 
             entry = by_canon[canonicalize_name(source.name)]
         elif not scripts:
             pkg = canonicalize_name(source.name).replace("-", "_")
-            if (site / pkg / "__main__.py").is_file():
+            if _locate_module(roots, pkg).has_main:
                 return Entry("module", pkg)
             raise EntryPointError(
                 f"{source.name} defines no [project.scripts], so bundleup doesn't know what to run",
@@ -93,15 +107,405 @@ def resolve_entry(source: Source, site: Path, *, entry: str | None, script: str 
             )
     elif entry in scripts:
         entry = scripts[entry]
+    elif (
+        canonicalize_name(entry) in by_canon
+        and ":" not in entry
+        and "." not in entry
+        and not ((m := _locate_module(roots, entry)).found and (not m.is_pkg or m.has_main))
+    ):
+        entry = by_canon[canonicalize_name(entry)]
+    raw = entry
     module, sep, attr = entry.partition(":")
     module = module.strip()
     attr = attr.split("[")[0].strip()  # drop legacy "extras" syntax: "mod:func [extra]"
-    if not module or (sep and not attr):
+    if (
+        not module
+        or (sep and not attr)
+        or not all(p.isidentifier() for p in module.split("."))
+        or (attr and not all(p.isidentifier() for p in attr.split(".")))
+    ):
         raise UsageError(
-            f"invalid --entry {entry!r}",
+            f"invalid --entry {raw!r}",
             hint="give a script name, module:function, module, or python",
         )
+    _validate_entry(
+        site,
+        raw=raw,
+        module=module,
+        attr=attr,
+        scripts=scripts,
+        target_version=target_version,
+    )
     return Entry("call", module, attr) if attr else Entry("module", module)
+
+
+@dataclass(frozen=True)
+class _ModuleMatch:
+    found: bool
+    is_pkg: bool = False
+    has_main: bool = False
+    has_compiled_init: bool = False
+    py_file: Path | None = None
+    pkg_dirs: tuple[Path, ...] = ()
+
+
+def _exact_path(root: Path, *parts: str) -> Path | None:
+    """Resolve `parts` under `root` with strict case-sensitivity on every OS (APFS/NTFS too)."""
+    cur = root
+    for part in parts:
+        if not part or not cur.is_dir():
+            return None
+        try:
+            entries = os.listdir(cur)
+        except OSError:
+            return None
+        if part not in entries:
+            return None
+        cur = cur / part
+    return cur
+
+
+def _exact_file(root: Path, *parts: str) -> Path | None:
+    p = _exact_path(root, *parts)
+    return p if p is not None and p.is_file() else None
+
+
+def _exact_dir(root: Path, *parts: str) -> Path | None:
+    p = _exact_path(root, *parts)
+    return p if p is not None and p.is_dir() else None
+
+
+def _has_compiled(folder: Path, stem: str) -> bool:
+    if not folder.is_dir():
+        return False
+    if any(
+        p.name.startswith(f"{stem}.") and p.suffix in (".so", ".pyd", ".pyc")
+        for p in folder.iterdir()
+    ):
+        return True
+    pycache = folder / "__pycache__"
+    return pycache.is_dir() and any(
+        p.name.startswith(f"{stem}.") and p.suffix == ".pyc" for p in pycache.iterdir()
+    )
+
+
+def _locate_module(
+    roots: list[Path],
+    module: str,
+    target_version: tuple[int, int] | None = None,
+) -> _ModuleMatch:
+    import sys
+
+    parts = module.split(".")
+    pkg_dirs = tuple(d for r in roots if (d := _exact_dir(r, *parts)) is not None)
+    regular_pkg = any(
+        _exact_file(d, "__init__.py") is not None or _has_compiled(d, "__init__") for d in pkg_dirs
+    )
+    if regular_pkg:
+        return _ModuleMatch(
+            found=True,
+            is_pkg=True,
+            has_main=any(
+                _exact_file(d, "__main__.py") is not None or _has_compiled(d, "__main__")
+                for d in pkg_dirs
+            ),
+            has_compiled_init=any(_has_compiled(d, "__init__") for d in pkg_dirs),
+            py_file=next(
+                (f for d in pkg_dirs if (f := _exact_file(d, "__init__.py")) is not None),
+                None,
+            ),
+            pkg_dirs=pkg_dirs,
+        )
+    for root in roots:
+        parent = _exact_dir(root, *parts[:-1]) if len(parts) > 1 else root
+        if parent is not None:
+            if (py := _exact_file(parent, f"{parts[-1]}.py")) is not None:
+                return _ModuleMatch(found=True, py_file=py, pkg_dirs=pkg_dirs)
+            if _has_compiled(parent, parts[-1]):
+                return _ModuleMatch(found=True, pkg_dirs=pkg_dirs)
+    if pkg_dirs:
+        return _ModuleMatch(
+            found=True,
+            is_pkg=True,
+            has_main=any(
+                _exact_file(d, "__main__.py") is not None or _has_compiled(d, "__main__")
+                for d in pkg_dirs
+            ),
+            pkg_dirs=pkg_dirs,
+        )
+    in_site = any(
+        _exact_dir(r, parts[0]) is not None
+        or _exact_file(r, f"{parts[0]}.py") is not None
+        or _has_compiled(r, parts[0])
+        for r in roots
+    )
+    py_ver = target_version or sys.version_info[:2]
+    std_names = _imports.stdlib(py_ver) or set()
+    host_std = _imports.stdlib(sys.version_info[:2]) or set()
+    if not in_site and parts[0] in std_names:
+        if parts[0] not in host_std:
+            return _ModuleMatch(found=True)
+        import importlib.util
+
+        try:
+            spec = importlib.util.find_spec(module)
+        except (ModuleNotFoundError, ValueError):
+            spec = None
+        if spec is not None:
+            py_file = (
+                Path(spec.origin)
+                if spec.origin and spec.origin.endswith(".py") and Path(spec.origin).is_file()
+                else None
+            )
+            is_pkg = spec.submodule_search_locations is not None
+            has_main = False
+            if is_pkg:
+                try:
+                    has_main = importlib.util.find_spec(f"{module}.__main__") is not None
+                except (ModuleNotFoundError, ValueError):
+                    has_main = False
+            return _ModuleMatch(found=True, is_pkg=is_pkg, has_main=has_main, py_file=py_file)
+    return _ModuleMatch(found=False)
+
+
+def _close_match(name: str, candidates: list[str]) -> str | None:
+    import difflib
+
+    ci = [c for c in candidates if c.lower() == name.lower() and c != name]
+    if ci:
+        return ci[0]
+    close = difflib.get_close_matches(name, candidates, n=1)
+    return close[0] if close else None
+
+
+def _missing_module_error(
+    site: Path,
+    roots: list[Path],
+    *,
+    raw: str,
+    module: str,
+    attr: str,
+    scripts: dict[str, str],
+    target_version: tuple[int, int] | None,
+) -> EntryPointError:
+    parts = module.split(".")
+    provided = sorted(_imports.provided_by(site))
+    if not attr and scripts and len(parts) == 1:
+        close = _close_match(raw, [*scripts, *provided])
+        names = ", ".join(sorted(scripts))
+        hint = (
+            f"did you mean --entry {close}? (scripts: {names})"
+            if close
+            else f"available scripts: {names}"
+        )
+        return EntryPointError(
+            f"entry point {raw!r}: no script or module {module!r} in the bundle", hint=hint
+        )
+    submodules: set[str] = set()
+    parent_mod = ".".join(parts[:-1])
+    parent_match = _locate_module(roots, parent_mod, target_version) if len(parts) > 1 else None
+    if len(parts) > 1:
+        for r in roots:
+            pdir = _exact_dir(r, *parts[:-1])
+            if pdir is not None:
+                for item in pdir.iterdir():
+                    if (
+                        item.is_file()
+                        and item.suffix == ".py"
+                        and item.stem not in ("__init__", "__main__")
+                    ):
+                        submodules.add(item.stem)
+                    elif item.is_dir() and not item.name.startswith((".", "__")):
+                        submodules.add(item.name)
+    if submodules:
+        sub_close = _close_match(parts[-1], sorted(submodules))
+        if sub_close:
+            prefix = ".".join([*parts[:-1], sub_close])
+            hint = f"did you mean {prefix}:{attr}?" if attr else f"did you mean {prefix}?"
+        else:
+            prefix = ".".join(parts[:-1])
+            hint = f"available in {prefix}: {', '.join(sorted(submodules)[:5])}"
+    elif parent_match is not None and parent_match.found and not parent_match.is_pkg:
+        if parts[-1] == "py":
+            hint = f"did you mean {parent_mod}:{attr}?" if attr else f"did you mean {parent_mod}?"
+        else:
+            rest = f"{parts[-1]}.{attr}" if attr else parts[-1]
+            hint = f"did you mean {parent_mod}:{rest}?"
+    else:
+        candidates = [p for p in provided if p != parts[0]] if len(parts) > 1 else provided
+        close = _close_match(parts[0], candidates)
+        if close:
+            suffix = f":{attr}" if attr and len(parts) == 1 else ""
+            hint = f"did you mean {close}{suffix}?"
+        else:
+            hint = "check [project.scripts] or --entry module:function"
+    return EntryPointError(f"entry point {raw!r}: module {module!r} isn't in the bundle", hint=hint)
+
+
+def _missing_attr_error(
+    m: _ModuleMatch,
+    *,
+    raw: str,
+    module: str,
+    top_attr: str,
+    attr: str,
+    callables: list[str],
+    defined: list[str],
+) -> EntryPointError:
+    if m.is_pkg and any(
+        _exact_file(d, f"{top_attr}.py") is not None
+        or _exact_dir(d, top_attr) is not None
+        or _has_compiled(d, top_attr)
+        for d in (m.pkg_dirs or ([m.py_file.parent] if m.py_file else ()))
+    ):
+        rest = attr.split(".", 1)[1] if "." in attr else ""
+        hint = (
+            f"did you mean {module}.{top_attr}:{rest}?"
+            if rest
+            else f"did you mean {module}.{top_attr}?"
+        )
+    else:
+        pool = [
+            *callables,
+            *(d for d in defined if d not in callables and not d.startswith("__")),
+        ]
+        close = _close_match(top_attr, pool)
+        if close:
+            hint = f"did you mean {module}:{close}?"
+        elif callables:
+            hint = f"available in {module}: {', '.join(callables[:5])}"
+        else:
+            hint = f"check the function name in {module}"
+    return EntryPointError(f"entry point {raw!r}: {module} has no {top_attr!r}", hint=hint)
+
+
+def _validate_entry(
+    site: Path,
+    *,
+    raw: str,
+    module: str,
+    attr: str,
+    scripts: dict[str, str],
+    target_version: tuple[int, int] | None = None,
+) -> None:
+    if not site.is_dir() or not any(site.iterdir()):
+        return
+    roots = _imports.search_roots(site)
+    rel = Path(*module.split("."))
+    m = _locate_module(roots, module, target_version)
+    if not m.found:
+        raise _missing_module_error(
+            site,
+            roots,
+            raw=raw,
+            module=module,
+            attr=attr,
+            scripts=scripts,
+            target_version=target_version,
+        )
+    if not attr and m.is_pkg and not m.has_main:
+        raise EntryPointError(
+            f"entry point {raw!r}: package {module!r} has no __main__.py, so it can't be run "
+            "as a module",
+            hint=f"pass --entry {module}:function, or add {rel.as_posix()}/__main__.py",
+        )
+    if attr and (
+        m.py_file is not None or (m.is_pkg and not m.has_compiled_init and bool(m.pkg_dirs))
+    ):
+        top_attr = attr.split(".")[0]
+        ok, callables, defined = (
+            _has_attr(m.py_file, top_attr) if m.py_file is not None else (False, [], [])
+        )
+        if not ok:
+            raise _missing_attr_error(
+                m,
+                raw=raw,
+                module=module,
+                top_attr=top_attr,
+                attr=attr,
+                callables=callables,
+                defined=defined,
+            )
+
+
+def _module_nodes(tree: object) -> list[object]:
+    """Walk module-scope AST nodes without descending into function, class, lambda, or
+    comprehension target scopes."""
+    import ast
+
+    assert isinstance(tree, ast.AST)
+    out: list[object] = []
+    stack = list(ast.iter_child_nodes(tree))
+    while stack:
+        node = stack.pop()
+        out.append(node)
+        if isinstance(node, ast.comprehension):
+            stack.extend([node.iter, *node.ifs])
+        elif not isinstance(
+            node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef, ast.Lambda)
+        ):
+            stack.extend(ast.iter_child_nodes(node))
+    return out
+
+
+def _has_attr(py_file: Path, top_attr: str) -> tuple[bool, list[str], list[str]]:
+    import ast
+
+    try:
+        tree = ast.parse(py_file.read_bytes())
+    except (OSError, SyntaxError, ValueError):
+        return True, [], []
+    defined: set[str] = {
+        "__name__",
+        "__doc__",
+        "__package__",
+        "__loader__",
+        "__spec__",
+        "__file__",
+        "__cached__",
+        "__builtins__",
+        "__all__",
+        "__path__",
+    }
+    callables: set[str] = set()
+    for node in _module_nodes(tree):
+        if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            defined.add(node.name)
+            callables.add(node.name)
+        elif isinstance(node, ast.Name) and isinstance(node.ctx, ast.Store):
+            defined.add(node.id)
+        elif isinstance(node, ast.Subscript) and isinstance(node.ctx, ast.Store):
+            # e.g. sys.modules[__name__] = ... or globals()[...] = ...
+            if isinstance(node.value, ast.Attribute) and node.value.attr == "modules":
+                return True, [], []
+        elif isinstance(node, (ast.ExceptHandler, ast.MatchAs, ast.MatchStar)) and node.name:
+            defined.add(node.name)
+        elif isinstance(node, ast.MatchMapping) and node.rest:
+            defined.add(node.rest)
+        elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            for alias in node.names:
+                if alias.name == "*":
+                    return True, [], []
+                defined.add(alias.asname or alias.name.split(".")[0])
+                if (
+                    isinstance(node, ast.Import)
+                    and not alias.asname
+                    and py_file.name == "__init__.py"
+                    and alias.name.startswith(f"{py_file.parent.name}.")
+                ):
+                    defined.add(alias.name.split(".")[1])
+        elif isinstance(node, ast.Call):
+            func = node.func
+            name = (
+                func.id
+                if isinstance(func, ast.Name)
+                else (func.attr if isinstance(func, ast.Attribute) else "")
+            )
+            if name in ("globals", "vars", "setattr", "exec"):
+                return True, [], []
+    if "__getattr__" in defined:
+        return True, [], []
+    return top_attr in defined, sorted(callables), sorted(defined)
 
 
 def check_wheel_platforms(site: Path, target: Target) -> None:

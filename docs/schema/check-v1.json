@@ -176,7 +176,7 @@
               "items": {
                 "type": "string"
               },
-              "description": "With --also-platform (added within version 1): the other platforms whose wheels were checked in the lock, in uv's names"
+              "description": "With more --python-platform targets (added within version 1): the other platforms whose wheels were checked in the lock, in uv's names"
             },
             "matrix": {
               "type": "array",
@@ -215,13 +215,6 @@
                   }
                 }
               }
-            },
-            "against": {
-              "type": [
-                "object",
-                "null"
-              ],
-              "description": "The --against file, if one was given (added within version 1, ADR-0044): its file, name, source, checked date, network and installs facts, and the flags it stood for"
             }
           }
         }
@@ -229,7 +222,7 @@
     },
     "diagnostics": {
       "type": "array",
-      "description": "Codes: syntax-error (error in the project's code, warning in a dependency), data-files, pth-not-run, unlocked, python-range, python-range-approximate, source-only, undeclared-import, vulnerable, yanked, not-on-pypi, new-project, audit-incomplete (warnings), no-wheel, lambda-too-big, lambda-not-linux (errors), or any build error code",
+      "description": "Codes: syntax-error (error in the project's code, warning in a dependency), data-files, pth-not-run, unlocked, python-range, source-only, undeclared-import, secret-file (warnings), no-wheel (error), or any build error code",
       "items": {
         "type": "object",
         "required": [

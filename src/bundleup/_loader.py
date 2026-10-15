@@ -820,7 +820,11 @@ def _run(site: str) -> None:
     if kind == "module":
         runpy.run_module(target, run_name="__main__", alter_sys=True)
     else:
-        runpy.run_path(os.path.join(site, target), run_name="__main__")
+        script_path = os.path.join(site, target)
+        script_dir = os.path.dirname(script_path)
+        if script_dir != site and os.path.basename(script_dir) != "__bundleup_script__":
+            sys.path.insert(0, script_dir)
+        runpy.run_path(script_path, run_name="__main__")
 
 
 PYTHON_USAGE = "usage: python %s [SCRIPT.py | -m MODULE | -c CODE | -] [ARGS...]"

@@ -39,11 +39,11 @@ and change only the old one's status line.
 | [0028](0028-a-project-needs-a-lockfile.md) | A project needs a lockfile; bundleup never writes one into it | Accepted; first decision superseded by 0041 |
 | [0029](0029-start-up-checks-c-library-and-macos-version.md) | Bundles check the C library and macOS version at start-up | Accepted |
 | [0030](0030-pure-python-bundles-run-on-a-range.md) | A pure-Python bundle runs on every Python version its lock allows | Accepted (shebang superseded by 0036) |
-| [0031](0031-wheel-coverage-from-the-lock.md) | Wheel coverage is checked from the lock, before installing, for any number of targets | Accepted |
+| [0031](0031-wheel-coverage-from-the-lock.md) | Wheel coverage is checked from the lock, before installing, for any number of targets | Accepted (`--also-platform` unified into `--python-platform` by 0050) |
 | [0032](0032-tool-bundleup-configuration.md) | Project settings live in `[tool.bundleup]` | Accepted |
 | [0033](0033-a-stale-lock-is-an-error.md) | A stale lock is an error by default; bundleup never rewrites it | Accepted |
 | [0034](0034-pure-python-bundles-run-on-any-os.md) | A pure-Python bundle runs on any OS when the lock selects the same packages everywhere | Accepted |
-| [0035](0035-check-older-pythons-syntax-without-their-interpreters.md) | A range's oldest Python is checked with a real interpreter, installed privately if needed | Accepted |
+| [0035](0035-check-older-pythons-syntax-without-their-interpreters.md) | A range's oldest Python is checked with a real interpreter, installed privately if needed | Superseded by 0050 |
 | [0036](0036-wrong-python-reruns-and-a-platform-matrix.md) | A plain `python3` shebang and a re-run with a matching Python; `check --matrix`; in-use copies are kept | Accepted |
 | [0037](0037-children-activate-only-for-bundle-code.md) | A child process activates the bundle only when it runs the bundle's code | Accepted |
 | [0038](0038-one-pyz-for-several-platforms.md) | One `.pyz` can carry a payload per platform and Python version | Accepted |
@@ -51,10 +51,11 @@ and change only the old one's status line.
 | [0040](0040-entry-python-runs-any-script.md) | `--entry python`: a bundle that runs the scripts it's given | Accepted |
 | [0041](0041-input-without-a-lock.md) | Input without a lock builds, resolved at build time, with a warning | Accepted |
 | [0042](0042-smoke-runs-the-bundle-once.md) | `--smoke` runs the finished bundle once before shipping | Accepted |
-| [0043](0043-check-audit-asks-pypi-about-the-lock.md) | `check --audit` asks PyPI about the locked packages | Accepted |
-| [0044](0044-destinations-as-data-files.md) | Destinations described as data files (`--against FILE`) | Accepted |
+| [0043](0043-check-audit-asks-pypi-about-the-lock.md) | `check --audit` asks PyPI about the locked packages | Superseded by 0050 |
+| [0044](0044-destinations-as-data-files.md) | Destinations described as data files (`--against FILE`) | Superseded by 0050 |
 | [0045](0045-split-a-bundle-into-parts.md) | `--split SIZE`: a big bundle as a small `.pyz` and a folder of parts | Accepted |
 | [0046](0046-one-py-file-output.md) | `--format py`: the bundle as one plain-text `.py` file | Accepted |
 | [0047](0047-standalone-executables.md) | `--format exe`: a standalone executable that brings its own Python | Accepted |
 | [0048](0048-an-explicit-cache-is-the-only-cache.md) | An explicit `BUNDLEUP_CACHE` is the only cache folder | Accepted |
 | [0049](0049-zip-format-replaces-lambda.md) | `--format zip` replaces `--format lambda` | Accepted |
+| [0050](0050-consolidate-cli-and-in-process-range-checks.md) | Consolidate CLI flags and check older Pythons' syntax in-process | Accepted |

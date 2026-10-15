@@ -190,8 +190,11 @@ def third_party_imports(path: Path, *, local: Path) -> list[str]:
         return []
     files = [path] if path.is_file() else list(_app_files(path, suffix=".py"))
     neighbours = top_level_modules(local)
-    found: set[str] = set().union(*(imports_of(f) for f in files)) if files else set()
-    return sorted(found - ever - neighbours - {"__future__", "__main__"})
+    found: set[str] = set()
+    for f in files:
+        beside = neighbours if f.parent == local else (neighbours | top_level_modules(f.parent))
+        found |= imports_of(f) - beside
+    return sorted(found - ever - {"__future__", "__main__"})
 
 
 def _which(names: list[str]) -> str:

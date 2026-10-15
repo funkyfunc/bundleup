@@ -134,17 +134,27 @@ def top_level_modules(folder: Path) -> set[str]:
     return names
 
 
-def provided_by(site: Path) -> set[str]:
-    """The modules a payload provides: its top level, the folders its .pth files add (pywin32's
-    win32/, win32/lib), and `distutils` where setuptools' shim provides it on 3.12+."""
-    names = top_level_modules(site)
-    for pth in site.glob("*.pth"):
+def search_roots(site: Path) -> list[Path]:
+    """`site` and the existing subdirectories its `.pth` files add to sys.path."""
+    roots = [site] if site.is_dir() else []
+    for pth in sorted(site.glob("*.pth")) if site.is_dir() else []:
         if pth.name.startswith("."):
             continue
         for line in pth.read_text(encoding="utf-8-sig", errors="replace").splitlines():
             line = line.strip()
             if line and not line.startswith(("#", "import ", "import\t")):
-                names |= top_level_modules(site / line)
+                sub = site / line
+                if sub.is_dir():
+                    roots.append(sub)
+    return roots
+
+
+def provided_by(site: Path) -> set[str]:
+    """The modules a payload provides: its top level, the folders its .pth files add (pywin32's
+    win32/, win32/lib), and `distutils` where setuptools' shim provides it on 3.12+."""
+    names: set[str] = set()
+    for root in search_roots(site):
+        names |= top_level_modules(root)
     if (site / "_distutils_hack").is_dir():
         names.add("distutils")
     return names

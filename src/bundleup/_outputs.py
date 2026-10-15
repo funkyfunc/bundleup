@@ -24,7 +24,7 @@ import os
 import re
 import shutil
 import zipfile
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
 from pathlib import Path
 
 from . import __version__, _bytecode, _verify
@@ -139,6 +139,27 @@ def manifest(
     return json.dumps(document, indent=1, sort_keys=True).encode("utf-8") + b"\n"
 
 
+@contextlib.contextmanager
+def atomic_output(output: Path) -> Iterator[Path]:
+    """Yield a temporary file next to `output` and atomically replace `output` when the block
+    succeeds; on failure, remove the temporary file and any parent directories created for it."""
+    created = [p for p in (output.parent, *output.parent.parents) if not p.exists()]
+    output.parent.mkdir(parents=True, exist_ok=True)
+    tmp = output.with_name(f".{output.name}.tmp-{os.getpid()}")
+    wrote = False
+    try:
+        yield tmp
+        tmp.replace(output)
+        wrote = True
+    finally:
+        if tmp.exists():
+            tmp.unlink()
+        if not wrote:
+            for d in created:
+                with contextlib.suppress(OSError):
+                    d.rmdir()
+
+
 def write_bundle(
     output: Path,
     *,
@@ -149,15 +170,14 @@ def write_bundle(
     max_size: int | None = None,
     parts: str | None = None,
     split: int | None = None,
+    diagnostics: list[Diagnostic] | None = None,
 ) -> None:
     """Write shebang + outer zip to a temporary file, then rename it over `output`. `payloads`:
     member name -> payload zip (one, `payload.zip`, unless the bundle is for several platforms).
     The finished file is checked against `max_size` before it replaces anything. With `parts`
     (`--split`), the payloads go into that folder beside `output` instead, written first."""
-    output.parent.mkdir(parents=True, exist_ok=True)
-    tmp = output.with_name(f".{output.name}.tmp-{os.getpid()}")
     folder = output.with_name(parts or f"{output.name}.parts")
-    try:
+    with atomic_output(output) as tmp:
         with open(tmp, "wb") as f:
             # Plain python3 (works everywhere, also with Windows' py launcher); a wrong version
             # re-runs itself with a matching one (ADR-0036).
@@ -172,6 +192,7 @@ def write_bundle(
                 for path, name in ((loader, "__main__.py"), (loader_pyc, "__main__.pyc")):
                     info = zipfile.ZipInfo(name, FIXED_TIME)
                     info.external_attr = 0o100644 << 16
+                    info.compress_type = zipfile.ZIP_DEFLATED
                     zf.writestr(info, path.read_bytes())
                 info = zipfile.ZipInfo(MANIFEST, FIXED_TIME)
                 info.external_attr = 0o100644 << 16
@@ -179,7 +200,7 @@ def write_bundle(
                 zf.writestr(info, manifest_json)
         tmp.chmod(0o755)
         size = tmp.stat().st_size + sum(p.stat().st_size for p in payloads.values()) * bool(parts)
-        check_size(size, max_size, [])  # exact: loader and manifest included
+        check_size(size, max_size, list(diagnostics) if diagnostics is not None else [])
         if split is not None and tmp.stat().st_size > split:
             alone = " alone (its loader and manifest)" if parts else ""
             raise UsageError(
@@ -188,10 +209,6 @@ def write_bundle(
                 hint="give --split a bigger size",
             )
         _replace_parts(folder, payloads if parts else None)
-        tmp.replace(output)
-    finally:
-        if tmp.exists():
-            tmp.unlink()
 
 
 PART_NAME = re.compile(r"layer-[0-9a-f]{16}\.zip")
@@ -201,8 +218,12 @@ def _replace_parts(folder: Path, payloads: dict[str, Path] | None) -> None:
     """Write a split bundle's parts folder (a new one, renamed over the old), or remove a stale
     one an earlier `--split` build left beside the output. Never touches a folder that holds
     anything but parts."""
-    ours = folder.is_dir() and all(PART_NAME.fullmatch(x.name) for x in folder.iterdir())
-    if folder.exists() and not ours:
+    ours = (
+        folder.is_dir()
+        and not folder.is_symlink()
+        and all(PART_NAME.fullmatch(x.name) for x in folder.iterdir())
+    )
+    if (folder.exists() or folder.is_symlink()) and not ours:
         if payloads is None:
             return  # not ours, and not needed: leave it alone
         raise UsageError(
@@ -260,6 +281,7 @@ def write_pyz(
     split: int | None = None,
     fmt: Format = "pyz",
     warn_large: bool = True,
+    diagnostics: list[Diagnostic] | None = None,
 ) -> list[Diagnostic]:
     """The default: shebang + outer zip with the loader, the manifest and the payload, or one
     payload per platform and Python version when there are several (ADR-0038). Refuses, before
@@ -287,13 +309,13 @@ def write_pyz(
                 hint="this is a bug in bundleup; a slightly smaller --split avoids it",
             )
     diags: list[Diagnostic] = []
-    check_size(total, max_size, diags)
     if warn_large and max_size is None and split is None and total > LARGE:
         diags.append(_large(total, ps))
         if strict:  # before anything is written, as for every other warning (fifth review)
+            all_diags = [*(diagnostics or []), *diags]
             raise CheckFailedError(
-                "found 1 warning, so nothing was written",
-                diagnostics=diags,
+                f"found {findings(0, len(all_diags))}, so nothing was written",
+                diagnostics=all_diags,
                 hint="--strict makes warnings fail too; build without it to allow them",
             )
     steps.start("verify")
@@ -368,9 +390,17 @@ def write_pyz(
     else:
         manifest_json = _multi_manifest(ps, layers, settings, locked, hashes, parts, fmt)
     payloads = {layer.member: layer.path for layer in layers}
+    all_diags = [*(diagnostics or []), *diags]
     if fmt == "py":
         diags += write_py(
-            output, code, payloads, manifest_json, stage=stage, max_size=max_size, strict=strict
+            output,
+            code,
+            payloads,
+            manifest_json,
+            stage=stage,
+            max_size=max_size,
+            strict=strict,
+            diagnostics=all_diags,
         )
         return diags
     write_bundle(
@@ -382,6 +412,7 @@ def write_pyz(
         max_size=max_size,
         parts=parts,
         split=split,
+        diagnostics=all_diags,
     )
     return diags
 
@@ -428,6 +459,7 @@ def write_py(
     stage: Path,
     max_size: int | None,
     strict: bool = False,
+    diagnostics: list[Diagnostic] | None = None,
 ) -> list[Diagnostic]:
     """A .py bundle: `code`, then the zip a .pyz would carry (payloads and manifest, without the
     loader), in base64 comment lines, so Python skips it at the cost of reading it (ADR-0046).
@@ -446,41 +478,33 @@ def write_py(
         info.external_attr = 0o100644 << 16
         info.compress_type = zipfile.ZIP_DEFLATED
         zf.writestr(info, manifest_json)
-    # 4/3 of the zip, plus a `#` and a line end per 76 characters.
-    size = len(code.encode()) + len(DATA_START) + len(DATA_END) + inner.stat().st_size * 4 // 3
-    size += size // 76 * 2
-    check_size(size, max_size, [])
-    diags = []
-    if size > SLOW_PY:
-        diags.append(
-            Diagnostic(
-                "slow-start",
-                "warning",
-                f"the .py is {describe_size(size)}, and Python reads all of it on every start: "
-                f"about {size * 1.8 / 10**9:.2f} s more each time than the .pyz",
-                hint="a .py suits small tools; ship a .pyz (or --split it) where it can go",
-            )
-        )
-        if strict:  # before anything is written, as for every other warning
-            raise CheckFailedError(
-                "found 1 warning, so nothing was written",
-                diagnostics=diags,
-                hint="--strict makes warnings fail too; build without it to allow them",
-            )
-    output.parent.mkdir(parents=True, exist_ok=True)
-    tmp = output.with_name(f".{output.name}.tmp-{os.getpid()}")
-    try:
+    diags: list[Diagnostic] = []
+    with atomic_output(output) as tmp:
         with open(tmp, "wb") as out, open(inner, "rb") as src:
             out.write(code.encode("utf-8") + DATA_START + b"\n")
             for chunk in iter(lambda: src.read(57 * 4096), b""):  # 57 bytes: one 76-char line
                 out.writelines(b"#" + line + b"\n" for line in base64.encodebytes(chunk).split())
             out.write(DATA_END + b"\n")
         tmp.chmod(0o755)
-        check_size(tmp.stat().st_size, max_size, [])  # exact
-        tmp.replace(output)
-    finally:
-        if tmp.exists():
-            tmp.unlink()
+        size = tmp.stat().st_size
+        if size > SLOW_PY:
+            diags.append(
+                Diagnostic(
+                    "slow-start",
+                    "warning",
+                    f"the .py is {describe_size(size)}, and Python reads all of it on every start: "
+                    f"about {size * 1.8 / 10**9:.2f} s more each time than the .pyz",
+                    hint="a .py suits small tools; ship a .pyz (or --split it) where it can go",
+                )
+            )
+        all_diags = [*(diagnostics or []), *diags]
+        check_size(size, max_size, list(all_diags))  # exact
+        if diags and strict:  # before replacing anything, as for every other warning
+            raise CheckFailedError(
+                f"found {findings(0, len(all_diags))}, so nothing was written",
+                diagnostics=all_diags,
+                hint="--strict makes warnings fail too; build without it to allow them",
+            )
     return diags
 
 
@@ -561,6 +585,18 @@ def _plain_manifest(p: Prepared, fmt: Format, written: dict[str, str]) -> bytes:
     )
 
 
+def check_dir_output(output: Path) -> None:
+    if (output.exists() or output.is_symlink()) and not (
+        output.is_dir()
+        and not output.is_symlink()
+        and (not any(output.iterdir()) or (output / DIR_MANIFEST).is_file())
+    ):
+        raise UsageError(
+            f"{output} already exists and isn't a directory bundleup wrote",
+            hint="remove it, or choose another place with -o",
+        )
+
+
 def write_dir(p: Prepared, output: Path, *, steps: Steps) -> None:
     """The payload as a plain directory, for hosts that put a directory on sys.path (Splunk's
     bin/lib, QGIS, Azure Functions' .python_packages). Replaces an earlier bundleup output
@@ -572,25 +608,26 @@ def write_dir(p: Prepared, output: Path, *, steps: Steps) -> None:
     }
     manifest_json = _plain_manifest(p, "dir", written)
     steps.start("write")
-    if output.exists() and not (
-        output.is_dir() and (not any(output.iterdir()) or (output / DIR_MANIFEST).is_file())
-    ):
-        raise UsageError(
-            f"{output} already exists and isn't a directory bundleup wrote",
-            hint="remove it, or choose another place with -o",
-        )
+    check_dir_output(output)
+    created = [p for p in (output.parent, *output.parent.parents) if not p.exists()]
     output.parent.mkdir(parents=True, exist_ok=True)
     tmp = output.with_name(f".{output.name}.tmp-{os.getpid()}")
     old = output.with_name(f".{output.name}.old-{os.getpid()}")
+    wrote = False
     try:
         shutil.copytree(p.site, tmp, symlinks=True)
         (tmp / DIR_MANIFEST).write_bytes(manifest_json)
         if output.exists():
             output.rename(old)
         tmp.rename(output)
+        wrote = True
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
         shutil.rmtree(old, ignore_errors=True)
+        if not wrote:
+            for d in created:
+                with contextlib.suppress(OSError):
+                    d.rmdir()
 
 
 def stage_zip(p: Prepared, *, stage: Path, steps: Steps) -> Path:

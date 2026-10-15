@@ -192,11 +192,19 @@ def test_max_size_refuses_before_writing(tmp_path: Path, script: Path) -> None:
 
 
 def test_check_also_platform(tmp_path: Path, script: Path) -> None:
-    r = cli("check", "app.py", "--also-platform", "windows", "--also-platform", "linux", "--json",
-            cwd=tmp_path)  # fmt: skip
+    r = cli(
+        "check",
+        "app.py",
+        "--python-platform",
+        "windows",
+        "--python-platform",
+        "linux",
+        "--json",
+        cwd=tmp_path,
+    )
     assert r.returncode == 0, r.stderr
     jsonschema.validate(json.loads(r.stdout), CHECK_SCHEMA)
-    r = cli("check", "app.py", "--also-platform", "solaris", cwd=tmp_path)
+    r = cli("check", "app.py", "--python-platform", "solaris", cwd=tmp_path)
     assert r.returncode == 2 and "can't build for 'solaris'" in r.stderr
 
 

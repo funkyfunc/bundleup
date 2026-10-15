@@ -3,7 +3,7 @@ platform, without installing anything. A lock lists every file of every locked v
 takes milliseconds and works for any number of targets.
 
 Used before a cross-platform install (a precise error instead of uv's "built wheel is not
-compatible"), and by `bundleup check --also-platform`, which checks other targets too.
+compatible"), and by `bundleup check --python-platform`, which checks other targets too.
 """
 
 from __future__ import annotations

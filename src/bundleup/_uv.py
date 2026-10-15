@@ -162,11 +162,11 @@ def export(
     if source.pylock:
         return Exported(*from_pylock(source, stage))
     if not (source.is_script and source.pep723) and not source.locked:
-        # Only a requirements.txt can turn out to pin everything; a project can't, so --locked
-        # refuses it before resolving anything.
-        txt = source.declared is not None and source.declared.suffix == ".txt"
+        # Only a requirements.txt (or an input with no dependencies) can turn out to pin
+        # everything; an unlocked project can't, so --locked refuses it before resolving anything.
+        can_pin = source.declared is None or source.declared.suffix == ".txt"
         exported = None
-        if txt or lock_mode != "locked":
+        if can_pin or lock_mode != "locked":
             exported = resolve(uv, source, python=python, stage=stage, progress=progress)
         if exported is None or (lock_mode == "locked" and not exported.pinned):
             raise NoLockfileError(
@@ -184,7 +184,8 @@ def export(
     # A lock is checked against pyproject.toml / the script by default: uv would otherwise
     # re-lock a stale one, rewriting uv.lock and bundling versions nobody reviewed (ADR-0033).
     # --frozen uses it as is. A script without a lock has nothing to check (uv refuses --locked).
-    mode = lock_mode or ("locked" if has_lock(source) else None)
+    locked_file = has_lock(source)
+    mode = (lock_mode or "locked") if locked_file else (lock_mode if not source.is_script else None)
     if mode:
         selection.append(f"--{mode}")
     command = [uv, "export", "--quiet", *selection, "--format", "pylock.toml", "-o", str(pylock)]
@@ -203,7 +204,14 @@ def export(
         raise
     lock = None if source.is_script else find_uv_lock(source.path)
     relocate_paths(pylock, lock.parent if lock else source.workdir)
-    return Exported([["-r", str(pylock), *_refresh_local(pylock)]], pylock, pinned=mode is not None)
+    pinned = mode is not None or (source.is_script and _script_pinned(source, pylock))
+    if lock_mode == "locked" and not pinned:
+        raise NoLockfileError(
+            f"{source.path.name} has no lockfile, and --locked asks for one",
+            hint=f"run `uv lock --script {source.path.name}`, pin every package in "
+            "`dependencies` with ==, or build without --locked",
+        )
+    return Exported([["-r", str(pylock), *_refresh_local(pylock)]], pylock, pinned=pinned)
 
 
 EMPTY_PYLOCK = 'lock-version = "1.0"\ncreated-by = "bundleup"\npackages = []\n'
@@ -240,7 +248,9 @@ def resolve(
     pinned = False
     if declared.name.endswith(".txt"):
         pins, hashed = pinned_requirements(declared)
-        compiled = {canonicalize_name(str(p["name"])) for p in tomllib.loads(text)["packages"]}
+        compiled = {
+            canonicalize_name(str(p["name"])) for p in tomllib.loads(text).get("packages", [])
+        }
         pinned = pins is not None and compiled <= set(pins)
         if pinned and hashed:
             # Every line pinned and hashed, nothing missing: install from the file itself,
@@ -284,7 +294,7 @@ def pinned_requirements(path: Path) -> tuple[dict[str, str] | None, bool]:
 
     pins: dict[str, str] = {}
     hashed = True
-    text = path.read_text(encoding="utf-8-sig").replace("\\\n", " ")
+    text = path.read_text(encoding="utf-8-sig").replace("\r\n", "\n").replace("\\\n", " ")
     for raw in text.splitlines():
         line = raw.split(" #")[0].strip()
         if not line or line.startswith("#"):
@@ -304,6 +314,36 @@ def pinned_requirements(path: Path) -> tuple[dict[str, str] | None, bool]:
             return None, False
         pins[canonicalize_name(req.name)] = exact[0].version
     return pins, hashed and bool(pins)
+
+
+def _script_pinned(source: Source, pylock: Path) -> bool:
+    """Whether a PEP 723 script's `dependencies` list pins every package in `pylock` with ==."""
+    from packaging.requirements import InvalidRequirement, Requirement
+
+    from ._source import read_python_text, script_metadata
+
+    deps = script_metadata(read_python_text(source.path)).get("dependencies")
+    if deps is None or deps == []:
+        return True
+    if not isinstance(deps, list):
+        return False
+    pins: set[str] = set()
+    for item in deps:
+        if not isinstance(item, str):
+            return False
+        try:
+            req = Requirement(item)
+        except InvalidRequirement:
+            return False
+        exact = [s for s in req.specifier if s.operator in ("==", "===") and "*" not in s.version]
+        if req.url or len(exact) != 1 or len(req.specifier) != 1:
+            return False
+        pins.add(canonicalize_name(req.name))
+    compiled = {
+        canonicalize_name(str(p["name"]))
+        for p in tomllib.loads(pylock.read_text(encoding="utf-8")).get("packages", [])
+    }
+    return compiled <= pins
 
 
 # A local path in uv's pylock.toml export: `directory = { path = "." }`, `path = "dist/x.whl"`.

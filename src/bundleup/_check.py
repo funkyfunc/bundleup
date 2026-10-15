@@ -33,7 +33,6 @@ from ._text import listing, plural
 
 if TYPE_CHECKING:
     from ._python import Target
-    from ._target_files import TargetFile
 
 # Runs on the target interpreter: why each listed file doesn't compile (paths relative to argv[1]).
 # argv[3], if given, is an older minor version ("9") to check against with this interpreter:
@@ -96,8 +95,7 @@ class CheckReport:
     pythons: PythonRange | None = None  # the versions a bundle would run on (ADR-0030)
     matrix: list[MatrixCell] = field(default_factory=list)  # `check --matrix` (ADR-0031)
     reach: Portability | None = None  # whether it would run on any OS / CPU (ADR-0034)
-    against: TargetFile | None = None  # the --against file, if one was given (ADR-0044)
-    # `--also-platform`: the other platforms whose wheels were checked in the lock, uv's names.
+    # Extra `--python-platform` values whose wheels were checked in the lock, uv's names.
     also_platforms: list[str] = field(default_factory=list)
 
     @property
@@ -130,7 +128,6 @@ class CheckReport:
             "duration_s": round(self.duration_s, 3),
             "matrix": [cell.to_json_dict() for cell in self.matrix],
             "also_platforms": self.also_platforms,
-            "against": self.against.to_json_dict() if self.against else None,
         }
 
 
@@ -202,6 +199,23 @@ def compile_errors(
     return json.loads(run([python, "-I", "-c", COMPILE_ERRORS, str(site), str(to_check), *older]))
 
 
+def _ast_errors(
+    site: Path, files: list[str], version: tuple[int, int]
+) -> list[list[str | int | None]]:
+    import ast
+
+    found: list[list[str | int | None]] = []
+    for path in files:
+        try:
+            source = (site / path).read_bytes()
+            ast.parse(source, path, feature_version=version)
+        except SyntaxError as e:
+            found.append([path, e.lineno, e.msg])
+        except Exception as e:
+            found.append([path, None, repr(e)])
+    return found
+
+
 def oldest_python(
     site: Path,
     *,
@@ -209,19 +223,21 @@ def oldest_python(
     script: str | None,
     pythons: PythonRange,
     target: Target,
-    interpreters: dict[tuple[int, int], str | None],
+    interpreters: dict[tuple[int, int], str | None] | None = None,
     run: Callable[[list[str]], str],
     own: Sequence[str] = (),
 ) -> tuple[PythonRange, list[Diagnostic]]:
     """A pure-Python bundle claims every version its requires-python allows (ADR-0030). Check
-    that the project's own code compiles on the versions below the target, using whichever of
-    them are installed here (`interpreters`: version -> interpreter or None): the range starts at
-    the oldest one that compiles. A version that isn't installed is checked by the target's
-    interpreter with `ast.parse(feature_version=)`, so no claim goes unchecked (second review,
-    2026-10-07; ADR-0035)."""
+    that the project's own code compiles on the versions below the target: in-process with
+    `ast.parse(feature_version=)` (or on an installed older interpreter if passed): the range
+    starts at the oldest one that compiles."""
+    import sys
+
     from packaging.utils import canonicalize_name
 
     project = canonicalize_name(project)
+    if interpreters is None:
+        interpreters = {(3, m): None for m in range(pythons.min[1], target.version[1])}
     below = sorted(v for v in interpreters if pythons.min <= v < target.version)
     if not below:
         return pythons, []
@@ -241,7 +257,9 @@ def oldest_python(
     failed_on: tuple[int, int] | None = None
     for version in below:
         python = interpreters[version]
-        if python is None:  # not installed: the target's interpreter checks the syntax for it
+        if python is None and sys.version_info[:2] >= version:
+            found = _ast_errors(site, files, version)
+        elif python is None:
             found = compile_errors(
                 site, files, python=target.executable, run=run, as_version=version
             )
@@ -253,18 +271,6 @@ def oldest_python(
         if failure is None:
             failure, failed_on = found[0], version
     if failure is None or failed_on is None:
-        if interpreters.get(pythons.min) is None:  # checked with ast only: say so
-            return pythons, [
-                Diagnostic(
-                    "python-range-approximate",
-                    "warning",
-                    f"Python {_v(pythons.min)} couldn't be installed to check the code, so only "
-                    "its syntax was checked, roughly; the bundle claims Python "
-                    f"{pythons} from requires-python",
-                    hint=f"install it to check exactly: uv python install {_v(pythons.min)}",
-                    package=project,
-                )
-            ]
         return pythons, []
     # Claim only from the oldest version that compiled, or the target's.
     narrowed = PythonRange(verified or target.version, pythons.max)

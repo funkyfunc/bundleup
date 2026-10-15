@@ -84,16 +84,13 @@ anything outside the standard library and the preinstalled libraries can't run t
 `uv run` the Agent Skills guide recommends needs the network. A bundle carries its dependencies:
 
 ```bash
-bundleup build tool.py --against docs/targets/claude-api.toml -o my-skill/scripts/tool.pyz
+bundleup build tool.py --python 3.11 --python-platform x86_64-manylinux_2_28 --max-size 30MB -o my-skill/scripts/tool.pyz
 ```
-
-[`docs/targets/claude-api.toml`](targets/claude-api.toml) describes the sandbox, with its source
-and the date it was checked ([ADR-0044](adr/0044-destinations-as-data-files.md)); it stands for:
 
 - `--python 3.11 --python-platform x86_64-manylinux_2_28`: the sandbox's Python and platform.
   Its exact glibc isn't documented; 2.28 (2018) is the oldest level that many packages, Pillow 12
   among them, still publish wheels for.
-- `--max-size 30MB`: a Skill must stay under 30 MB uncompressed; over it, nothing is written.
+- `--max-size 30MB`: a Skill must stay under 30 MB; over it, nothing is written.
 
 Then in `my-skill/SKILL.md` ([format](https://agentskills.io/specification)):
 
@@ -118,14 +115,12 @@ platforms it does have wheels for. Not yet tested in the real sandbox (it needs 
 ## An AWS Lambda function *(CI)*
 
 ```bash
-bundleup build --against docs/targets/aws-lambda-python3.13-x86_64.toml --entry app:handler
-bundleup build --against docs/targets/aws-lambda-python3.13-arm64.toml   # Graviton
+bundleup build --format zip --python 3.13 --python-platform x86_64-manylinux_2_34 --max-size 50MB --entry app:handler
+bundleup build --format zip --python 3.13 --python-platform aarch64-manylinux_2_34 --max-size 50MB   # Graviton
 bundleup build handler.py --format zip --python 3.12 --python-platform x86_64-manylinux_2_34 --max-size 50MB
 ```
 
-The [target files](targets/) stand for `--format zip --python 3.13 --python-platform
-x86_64-manylinux_2_34 --max-size 50MB` (or `aarch64-…`); for another runtime or an S3 upload (up
-to 250 MB unzipped), copy one or pass the flags.
+For an S3 upload (up to 250 MB unzipped), raise or drop `--max-size 50MB`.
 
 Pick the platform from the function's runtime
 ([AWS's table](https://docs.aws.amazon.com/lambda/latest/dg/lambda-runtimes.html), checked
@@ -235,15 +230,13 @@ work too:
 - **Proxy:** `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`.
 - **A proxy that inspects TLS** (a company certificate): `UV_NATIVE_TLS=1` uses the system's
   certificate store, or `SSL_CERT_FILE=<bundle.pem>` (`REQUESTS_CA_BUNDLE` and `CURL_CA_BUNDLE`
-  are also read for `--format exe` and `check --audit`).
+  are also read for `--format exe`).
 - **Credentials:** `~/.netrc`, keyring, or `UV_INDEX_<NAME>_USERNAME` / `_PASSWORD` for a named
   index. A lock never stores them. (Not yet tested against an index that needs a login.)
-- **Python and launcher downloads:** to check the oldest Python a pure-Python bundle supports (or
-  to pack an interpreter into `--format exe`), bundleup may download that Python (into its own
-  cache, through uv); `UV_PYTHON_INSTALL_MIRROR` points it at a mirror, and
-  `BUNDLEUP_JUMP_MIRROR` points `--format exe`'s `scie-jump` launcher download at a mirror or
-  `file://` folder (still checked against its pinned SHA-256 hash). If the range-check download
-  fails, the build still works and says the range is approximate.
+- **Python and launcher downloads:** to pack an interpreter into `--format exe`, bundleup downloads
+  that Python (into its own cache, through uv) and the `scie-jump` launcher; `UV_PYTHON_INSTALL_MIRROR`
+  points the Python download at a mirror, and `BUNDLEUP_JUMP_MIRROR` points the launcher download at
+  a mirror or `file://` folder (still checked against its pinned SHA-256 hash).
 
 Tested: a script locked against a private index (a flat folder) builds and runs from it
 (`tests/test_index.py`).
@@ -295,9 +288,9 @@ also runs as a `.py` (`--tool bundleup-py`).
 
 ## Will it build for other platforms?
 
-`bundleup check --also-platform windows --also-platform linux --also-platform macos` reads the
-lock and lists every package without a wheel for each platform, in milliseconds, without building
-anything. On Linux it also says which manylinux level would work.
+`bundleup check --python-platform linux --python-platform windows --python-platform macos` checks
+the first platform and reads the lock to list every package without a wheel for the others, in
+milliseconds. On Linux it also says which manylinux level would work.
 
 ## A host application that loads packages from a directory
 
@@ -316,7 +309,6 @@ anything else. Tested on every push: each gauntlet project runs with only that d
 
 ```bash
 bundleup check --strict --json > check.json   # exit 1 on any error or warning
-bundleup check --audit --strict               # also fail on vulnerable or brand-new dependencies
 bundleup build --smoke "--version"            # build, then run it once offline in a fresh home
 bundleup build --locked                       # CI implies --locked when there's a lockfile
 bundleup verify dist/app.pyz                  # the bundle matches its manifest

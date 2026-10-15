@@ -130,7 +130,13 @@ def find_python(
     else:
         cmd = _find_cmd(uv, source, request=request)
         try:
-            exe = run(cmd, cwd=source.workdir, what="finding a Python", progress=progress).strip()
+            exe = run(
+                cmd,
+                cwd=source.workdir,
+                what="finding a Python",
+                progress=progress,
+                env=None if source.is_script else _find_env(source.workdir),
+            ).strip()
         except UvError as e:
             # A version that isn't installed: fetch it into bundleup's own directory (ADR-0035),
             # so `--python 3.11 --python 3.13` works without setting anything up (ADR-0038).
@@ -228,6 +234,36 @@ def _find_cmd(uv: str, source: Source, *, request: str | None) -> list[str]:
         # project at all (its own venv/ or .venv is for development).
         cmd.append("--no-project")
     return cmd
+
+
+def _belongs_to(val: str, workdir: Path) -> bool:
+    if Path(os.path.abspath(val)).is_relative_to(Path(os.path.abspath(workdir))):
+        return True
+    resolved = Path(val).resolve()
+    if resolved.is_relative_to(workdir.resolve()):
+        return True
+    venv = workdir / ".venv"
+    return venv.exists() and resolved == venv.resolve()
+
+
+def _find_env(workdir: Path) -> dict[str, str] | None:
+    """Environment for `uv python find`: when `workdir` (or its uv workspace root) has its own
+    `.venv` or `.python-version`, drop an active VIRTUAL_ENV / CONDA_PREFIX that belongs to
+    another folder."""
+    from ._source import find_uv_lock
+
+    lock = find_uv_lock(workdir) if workdir.is_dir() else None
+    roots = [workdir, *([lock.parent] if lock and lock.parent != workdir else [])]
+    if not any((r / ".venv").exists() or (r / ".python-version").is_file() for r in roots):
+        return None
+    drop = [
+        var
+        for var in ("VIRTUAL_ENV", "CONDA_PREFIX")
+        if (val := os.environ.get(var)) and not any(_belongs_to(val, r) for r in roots)
+    ]
+    if not drop:
+        return None
+    return {k: v for k, v in os.environ.items() if k not in drop}
 
 
 def find_interpreter(uv: str, version: str, *, cwd: Path, progress: Progress) -> str | None:

@@ -228,3 +228,7 @@ __marimo__/
 
 # Gauntlet build/run scratch space
 gauntlet/.work/
+
+# Cloned reference repositories
+docs/references/
+

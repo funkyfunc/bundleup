@@ -18,6 +18,7 @@
     },
     "command": {
       "enum": [
+        "cache",
         "cache list",
         "cache clean"
       ]
@@ -36,6 +37,9 @@
     },
     "result": {
       "oneOf": [
+        {
+          "type": "null"
+        },
         {
           "type": "object",
           "description": "cache list",

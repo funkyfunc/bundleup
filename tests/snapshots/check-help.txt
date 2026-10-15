@@ -10,20 +10,17 @@ options:
   --format FORMAT       pyz (default), py (one .py), exe (experimental), dir, zip
   --python VERSION      a version (3.12) or a path; repeatable; default: uv's [env: BUNDLEUP_PYTHON]
   --entry NAME          a script name, module:function, module or python [env: BUNDLEUP_ENTRY]
-  --against FILE        a destination described in a TOML file (docs/targets/)
   --python-platform OS  an OS/CPU, uv's names (linux); repeatable [env: BUNDLEUP_PYTHON_PLATFORM]
   --locked              fail if the lock is out of date (as in uv; the default when there is one)
   --frozen              bundle the lock as it is, without checking it (as in uv)
   --strict              warnings fail too (errors always do)
-  --also-platform OS    also check, from the lock alone, that every package has a wheel there
   --matrix              show which OS, CPU and Python versions the lock's wheels cover
-  --audit               ask PyPI about the locked packages: vulnerabilities, yanked, brand-new
   --json                print one JSON document on stdout
   -q, --quiet           -q: warnings and errors only; -qq: errors
   -v, --verbose         -v: every package's size; -vv: commands run
   --color WHEN          auto, always or never (default: auto; also NO_COLOR, FORCE_COLOR)
 
 examples:
-  bundleup check --audit --also-platform windows   also ask PyPI, and check Windows wheels
+  bundleup check --python-platform linux --python-platform windows   also check Windows wheels
 
 docs: https://github.com/funkyfunc/bundleup

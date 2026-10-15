@@ -1,7 +1,6 @@
 # ADR-0044: Destinations described as data files (`--against FILE`)
 
-- **Status:** Accepted (the owner, 2026-10-09: "go ahead and implement everything else", after
-  rounds 6 and 7)
+- **Status:** Superseded by [ADR-0050](0050-consolidate-cli-and-in-process-range-checks.md) (`--against FILE` removed in favour of `[tool.bundleup]` and recipes)
 - **Date:** 2026-10-09
 - **Deciders:** the owner (the direction), an agent (the design)
 - **Refines:** [ADR-0039](0039-recipes-instead-of-target-presets.md) (no named targets in code)

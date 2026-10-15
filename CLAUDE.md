@@ -64,9 +64,7 @@ and git.
   scripts it's given, one for all of a skill's scripts (ADR-0040). Packages come from the lock's
   own files and index, hash-checked (a company index works). A stale lock is an error (ADR-0033). Every build checks the code
   and, for other platforms, wheel coverage from the lock (ADR-0024, ADR-0031). `--smoke` runs the
-  finished bundle once, offline, in a fresh home (ADR-0042); `check --audit` asks PyPI about the
-  locked packages (ADR-0043); `--against FILE` applies a destination described as data,
-  docs/targets/ (ADR-0044). Recipes tested in CI: skills, Docker, Lambda, Claude API.
+  finished bundle once, offline, in a fresh home (ADR-0042). Recipes tested in CI: skills, Docker, Lambda, Claude API.
 - **Focus (the owner, 2026-10-09):** more kinds of projects in, more kinds of outputs out; no
   recipes for niche hosts (an MCP server recipe was dropped).
 - **Runtime:** unpacks once to a content-addressed cache; checks Python version, platform, CPU,
@@ -112,12 +110,11 @@ pyproject.toml, src/bundleup/  the package (ADR-0018): __init__.py (public API),
                         _loader.py (the bundle's __main__), _runtime.py + _sitecustomize.py
                         (copied into each payload, ADR-0027), _platforms.py, _formats.py
                         (Format, sizes), _imports.py (imports, stdlib by version), _smoke.py
-                        (--smoke), _audit.py (check --audit), _target_files.py (--against), _exe.py (--format exe),
+                        (--smoke), _exe.py (--format exe),
                         _zipwriter.py, _bytecode.py, _cache.py, _errors.py,
                         _term.py, _text.py
 tests/snapshots/        CLI output and API snapshots; docs/cli-reference.md is generated too
 docs/schema/            JSON Schemas of each command's `--json` (build, check, verify, cache)
-docs/targets/           destinations described as data, for --against (ADR-0044)
 tests/                  pytest: loader/CLI edge cases the gauntlet doesn't reach
 docs/roadmap.md         "Next up" work list, then possible future directions
 docs/python-for-js-reviewers.md  code style rules + review guide for the JS-fluent owner

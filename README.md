@@ -27,10 +27,9 @@ bundleup build --python 3.11 --python-platform linux   # build on a Mac for Linu
 bundleup build --python-platform linux --python-platform macos --python-platform windows   # one file for all three
 bundleup build --json           # the result as JSON on stdout, for scripts and agents
 bundleup check                  # what won't survive bundling, and each package's size
-bundleup check --also-platform windows   # which packages lack a wheel for another OS
+bundleup check --python-platform linux --python-platform windows   # also check Windows wheels
 bundleup check --matrix         # which OS, CPU and Python versions the lock's wheels cover
 bundleup build --smoke          # then run it once: fresh home folder, no network
-bundleup check --audit          # ask PyPI: vulnerable, yanked or brand-new dependencies?
 bundleup build --max-size 30MB # fail, writing nothing, if the bundle is bigger
 bundleup build --format dir     # a plain directory, for apps that load packages from one
 bundleup build --format zip     # a flat .zip of code, packages and bytecode (e.g. serverless)

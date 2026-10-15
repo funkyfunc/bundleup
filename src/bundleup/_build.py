@@ -18,7 +18,6 @@ from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
 
 from . import (
-    _audit,
     _check,
     _config,
     _coverage,
@@ -26,8 +25,6 @@ from . import (
     _loader,
     _platforms,
     _smoke,
-    _target_files,
-    _verify,
 )
 from . import _toml as tomllib
 from ._check import CheckReport
@@ -41,6 +38,8 @@ from ._errors import (
 from ._exe import host_platform, write_exe
 from ._formats import FORMATS, LOADED, Format
 from ._outputs import (
+    atomic_output,
+    check_dir_output,
     check_size,
     stage_zip,
     write_dir,
@@ -63,13 +62,12 @@ from ._python import (
     PythonRange,
     Target,
     check_requires_python,
-    fetch_interpreter,
-    find_interpreter,
     find_python,
 )
 from ._smoke import SmokeResult
 from ._source import (
     Source,
+    find_uv_lock,
     load_source,
     looks_secret,
     project_version,
@@ -80,7 +78,6 @@ from ._source import (
     script_path,
 )
 from ._steps import Progress, ProgressEvent, Steps, ignore, run
-from ._target_files import TargetFile
 from ._text import findings, plural
 from ._uv import add_runtime, export, find_uv, install
 
@@ -104,9 +101,6 @@ class BuildOptions:
     # No file over this many bytes (`--split`): a bundle that doesn't fit in one is written as a
     # small .pyz and a folder of parts beside it (ADR-0045).
     split: int | None = None
-    # A destination described as data (`--against FILE`, ADR-0044): its settings fill what isn't
-    # set, and the result reports its facts.
-    against: Path | None = None
     # Run the finished .pyz once with these arguments, in a fresh home folder with no network
     # (`--smoke`); None: don't; (): the default, `--help`.
     smoke: tuple[str, ...] | None = None
@@ -114,6 +108,24 @@ class BuildOptions:
     # [python, *more_pythons] and [python_platform, *more_python_platforms] (ADR-0038).
     more_pythons: tuple[str, ...] = ()
     more_python_platforms: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if isinstance(self.path, str):
+            object.__setattr__(self, "path", Path(self.path))
+        if isinstance(self.output, str):
+            object.__setattr__(self, "output", Path(self.output))
+        if isinstance(self.python, Sequence) and not isinstance(self.python, (str, bytes)):
+            items = list(self.python)
+            object.__setattr__(self, "python", items[0] if items else None)
+            object.__setattr__(self, "more_pythons", (*items[1:], *self.more_pythons))
+        if isinstance(self.python_platform, Sequence) and not isinstance(
+            self.python_platform, (str, bytes)
+        ):
+            items = list(self.python_platform)
+            object.__setattr__(self, "python_platform", items[0] if items else None)
+            object.__setattr__(
+                self, "more_python_platforms", (*items[1:], *self.more_python_platforms)
+            )
 
 
 @dataclass(frozen=True)
@@ -139,7 +151,6 @@ class BuildResult:
     # A bundle for several platforms: each payload's target, as in `target` (ADR-0038).
     payloads: list[dict[str, object]] = field(default_factory=list)
     smoke: SmokeResult | None = None  # what --smoke ran, if it did
-    against: TargetFile | None = None  # the --against file, if one was given
     # `--split`: the folder of parts beside `output`, when the bundle didn't fit in one file;
     # size_bytes counts them too.
     parts: Path | None = None
@@ -180,7 +191,6 @@ class BuildResult:
             "entry": self.entry,
             "payloads": self.payloads,
             "smoke": self.smoke.to_json_dict() if self.smoke else None,
-            "against": self.against.to_json_dict() if self.against else None,
         }
 
 
@@ -196,12 +206,7 @@ def build(
     if options.output is not None:
         if not options.output.absolute().name:
             raise UsageError(f"-o {options.output} has no file name")
-        if fmt != "dir" and options.output.is_dir():
-            raise UsageError(
-                f"{options.output} is a directory",
-                hint=f"give a file path (for example: -o {options.output / 'app.pyz'}), "
-                "or use --format dir",
-            )
+        _validate_output_path(options.output, fmt, "app.pyz")
     report = progress or ignore
     steps = Steps(report)
     combinations = _combinations(options)
@@ -251,22 +256,10 @@ def build(
             "exe": f"{name}.exe" if windows else name,
             "dir": name,
         }.get(fmt, f"{name}.zip")
-        output = (options.output or p.source.workdir / "dist" / default).absolute()
-        if fmt != "dir" and output.is_dir():
-            raise UsageError(
-                f"{output} is a directory",
-                hint=f"give a file path (for example: -o {output / default}), or use --format dir",
-            )
-        if output.resolve() in {
-            x.resolve()
-            for x in (p.source.path, p.source.declared, p.source.pylock)
-            if x is not None
-        }:
-            what = "the input script" if p.source.is_script else "the project's own files"
-            raise UsageError(
-                f"-o {output.name} would overwrite {what}",
-                hint="choose another output path",
-            )
+        raw_path = Path(os.path.abspath(options.path))
+        workdir = raw_path.parent if p.source.is_script else raw_path
+        output = Path(os.path.abspath(options.output or workdir / "dist" / default))
+        _validate_output_path(output, fmt, default, p.source, p.own)
         diagnostics = list(p_diagnostics)
         if fmt in LOADED:
             # An executable carries a .pyz (ADR-0047): written here first, then wrapped.
@@ -282,6 +275,7 @@ def build(
                 strict=options.strict,
                 split=options.split,
                 warn_large=fmt != "exe",  # an executable's own size is checked below
+                diagnostics=diagnostics,
             )
             if fmt == "exe":
                 steps.start("interpreter")
@@ -296,6 +290,7 @@ def build(
                     progress=report,
                     max_size=options.max_size,
                     strict=options.strict,
+                    diagnostics=diagnostics,
                 )
                 diagnostics += found
                 # Reported as what the file is (seventh review): this OS and CPU, the Python it
@@ -313,16 +308,14 @@ def build(
                 smoked, skipped = _smoke_run(prepared, output, options.smoke, exe=fmt == "exe")
                 diagnostics += skipped
         elif fmt == "dir":
+            check_dir_output(output)
             check_size(sum(x.size_bytes for x in p.sizes), options.max_size, diagnostics)
             write_dir(p, output, steps=steps)
         else:
             staged = stage_zip(p, stage=stage, steps=steps)
             check_size(staged.stat().st_size, options.max_size, diagnostics)
-            # Next to the output, then renamed over it: never a half-written zip at `output`.
-            output.parent.mkdir(parents=True, exist_ok=True)
-            partial = output.with_name(f".{output.name}.tmp-{os.getpid()}")
-            shutil.copyfile(staged, partial)
-            partial.replace(output)
+            with atomic_output(output) as partial:
+                shutil.copyfile(staged, partial)
         steps.finish()
     size = output.stat().st_size if output.is_file() else sum(x.size_bytes for x in p.sizes)
     parts = output.with_name(f"{output.name}.parts")
@@ -339,7 +332,7 @@ def build(
         packages=p.packages,
         native=p.native,
         target=p.target,
-        project_dir=p.source.workdir,
+        project_dir=workdir,
         duration_s=time.perf_counter() - steps.started,
         timings=steps.timings,
         diagnostics=diagnostics,
@@ -348,7 +341,6 @@ def build(
         pythons=p.pythons,
         reach=p.reach,
         smoke=smoked,
-        against=_target_files.load(options.against) if options.against else None,
         payloads=[
             x.target.to_json_dict(native=x.native, pythons=x.pythons, reach=x.reach)
             for x in prepared
@@ -409,16 +401,6 @@ def _smoke_run(
     ]
 
 
-def _audit_lock(pylock: Path, target: Target) -> list[Diagnostic]:
-    """`check --audit`: the locked packages for this target that come from PyPI, checked there."""
-    text = pylock.read_text(encoding="utf-8")
-    selected = {
-        (canonicalize_name(p.name), p.version)
-        for p in _verify.locked_packages(text, target.markers)
-    }
-    return _audit.audit(_audit.from_pypi(text, selected))
-
-
 def _lowest(combinations: list[BuildOptions]) -> tuple[int, int] | None:
     """The lowest Python version asked for: input without a lock is resolved from it for every
     payload, so they all bundle the same versions (fourth review: each resolved from its own)."""
@@ -467,12 +449,50 @@ def _merged_diagnostics(prepared: list[Prepared]) -> list[Diagnostic]:
 _STRICT_HINT = "--strict makes warnings fail too; build without it to allow them"
 
 
-def _settle(options: BuildOptions) -> tuple[BuildOptions, Format]:
-    """What `build` and `check` start from: the --against file's settings (ADR-0044), then
-    [tool.bundleup] (ADR-0032) filled in, the format checked."""
-    if options.against is not None:
-        options = _target_files.apply(options, _target_files.load(options.against))
-    options, _configured = _config.apply(options)
+def _input_files(source: Source, own: Sequence[str]) -> set[Path]:
+    files = {x.resolve() for x in (source.path, source.declared, source.pylock) if x is not None}
+    if source.is_script:
+        script_lock = source.path.with_name(f"{source.path.name}.lock")
+        if script_lock.is_file():
+            files.add(script_lock.resolve())
+    else:
+        if (uv_lock := find_uv_lock(source.path)) is not None:
+            files.add(uv_lock.resolve())
+        for name in ("pyproject.toml", "setup.py", "setup.cfg", "requirements.txt", "pylock.toml"):
+            if (p := source.path / name).is_file():
+                files.add(p.resolve())
+        for rel in own:
+            if (p := source.path / rel).is_file():
+                files.add(p.resolve())
+    return files
+
+
+def _validate_output_path(
+    output: Path,
+    fmt: Format,
+    default_name: str,
+    source: Source | None = None,
+    own: Sequence[str] = (),
+) -> None:
+    if fmt == "dir":
+        check_dir_output(Path(os.path.abspath(output)))
+    elif output.is_dir():
+        raise UsageError(
+            f"{output} is a directory",
+            hint=f"give a file path (for example: -o {output / default_name}), or use --format dir",
+        )
+    if source is not None and output.resolve() in _input_files(source, own):
+        what = "the input script" if source.is_script else "the project's own files"
+        raise UsageError(
+            f"-o {output.name} would overwrite {what}",
+            hint="choose another output path",
+        )
+
+
+def _settle(options: BuildOptions, *, for_check: bool = False) -> tuple[BuildOptions, Format]:
+    """What `build` and `check` start from: [tool.bundleup] (ADR-0032) filled in, the format
+    checked."""
+    options, _configured = _config.apply(options, for_check=for_check)
     if options.smoke is not None and (options.format or "pyz") not in LOADED:
         raise UsageError(
             "--smoke runs a .pyz or .py",
@@ -528,7 +548,7 @@ def _wheel_coverage(pylock: Path, target: Target) -> list[Diagnostic]:
 
 
 def _also_platforms(pylock: Path, target: Target, names: Sequence[str]) -> list[Diagnostic]:
-    """`bundleup check --also-platform`: the lock-only coverage check for more targets."""
+    """`bundleup check` with more `--python-platform` targets: the lock-only coverage check."""
     lock = pylock.read_text(encoding="utf-8")
     found: list[Diagnostic] = []
     for name in names:
@@ -550,8 +570,12 @@ def _own_code(
     the script, a folder app's modules, or the project's own installed files; with `--entry
     python`, also the scripts in the input's folder that the bundle will be given (their
     neighbours import too, as when python runs a script)."""
+    is_py_entry = entry is not None and entry.kind == "python"
+    script_target = entry.target if entry is not None and entry.kind == "script" else None
     code = [(source.path.name, site / script, False)] if script else []
-    code += [(rel, site / rel, False) for rel in own if rel.endswith(".py")]
+    code += [
+        (rel, site / rel, is_py_entry or rel == script_target) for rel in own if rel.endswith(".py")
+    ]
     if not source.is_script and not source.app:
         project = canonicalize_name(source.name)
         owned = _check.owners(site, project=project)
@@ -560,9 +584,9 @@ def _own_code(
             for rel, owner in sorted(owned.items())
             if owner.name == project and rel.endswith(".py") and (site / rel).is_file()
         ]
-    if entry is not None and entry.kind == "python":
-        # A project's or folder app's scripts anywhere under it (as git sees them); a script's
-        # neighbours only: its folder may be ~/Downloads (fifth review).
+    if is_py_entry and not source.app:
+        # A project's scripts anywhere under it (as git sees them); a script's neighbours only:
+        # its folder may be ~/Downloads (fifth review).
         folder = source.path if source.path.is_dir() else source.path.parent
         bundled = _imports.top_level_modules(site)
         for rel, file in python_files(folder, deep=not source.is_script)[:MOST_SCRIPTS]:
@@ -592,7 +616,10 @@ def _unlocked(source: Source, *, pinned: bool) -> list[Diagnostic]:
             return []
         name = source.path.name
         message = f"{name} has no lockfile"
-        hint = f"run `uv lock --script {name}` and keep {name}.lock next to it"
+        hint = (
+            f"run `uv lock --script {name}` and keep {name}.lock next to it, "
+            "or pin every dependency with =="
+        )
     elif source.declared is not None and source.declared.suffix == ".txt":
         name = source.declared.name
         message = f"{name} doesn't pin every package it needs to one version (==)"
@@ -685,7 +712,9 @@ def _prepare(
     )
     check_wheel_platforms(site, target)
     if fmt in LOADED or options.entry or script:
-        entry = resolve_entry(source, site, entry=options.entry, script=script)
+        entry = resolve_entry(
+            source, site, entry=options.entry, script=script, target_version=target.version
+        )
     else:
         # A directory or a flat zip is imported, and its host decides what runs. A console
         # script is a CLI, not a module handler, so it's never guessed (the review found the
@@ -738,13 +767,6 @@ def _prepare(
     diagnostics += coverage
     diagnostics += _unlocked(source, pinned=exported.pinned)
     pythons = python_range(site, pylock=pylock, target=target, source=source, native=native)
-    interpreters = {
-        (3, minor): find_interpreter(uv, f"3.{minor}", cwd=stage, progress=progress)
-        for minor in range(pythons.min[1], target.version[1])
-    }
-    if pythons.min in interpreters and interpreters[pythons.min] is None:
-        oldest = f"{pythons.min[0]}.{pythons.min[1]}"
-        interpreters[pythons.min] = fetch_interpreter(uv, oldest, cwd=stage, progress=progress)
     pythons, narrowed = _check.oldest_python(
         site,
         project=canonicalize_name(source.name),
@@ -752,7 +774,6 @@ def _prepare(
         own=own,
         pythons=pythons,
         target=target,
-        interpreters=interpreters,
         run=run_python,
     )
     diagnostics += narrowed
@@ -785,24 +806,22 @@ def check(
     progress: Callable[[ProgressEvent], None] | None = None,
     also_platforms: Sequence[str] = (),
     matrix: bool = False,
-    audit: bool = False,
 ) -> CheckReport:
     """Install, compile and analyze like `build`, without writing anything: what won't survive
     bundling (for `options.format`), and how big each package is. Findings are in the report
     (`ok` is False when there are errors); raises a BundleupError subclass only when the build
     itself fails. `options.output` and `options.strict` are ignored. `also_platforms`: more uv
-    platform names to check from the lock alone (ADR-0031), for the same Python version.
-    `matrix`: wheel coverage for every platform and Python version (`report.matrix`).
-    `audit`: supply-chain checks on the locked packages, from PyPI (needs the network)."""
-    asked_more = bool(options.more_pythons or options.more_python_platforms)
-    options, fmt = _settle(options)
-    if asked_more:
+    platform names to check from the lock alone (ADR-0031), for the same Python version (or pass
+    multiple `python_platform` entries on `options`). `matrix`: wheel coverage for every platform
+    and Python version (`report.matrix`)."""
+    if options.more_pythons:
         raise UsageError(
-            "check looks at one Python version and platform at a time",
+            "check looks at one Python version at a time",
             hint="--matrix shows every platform and Python version from the lock",
         )
+    options, fmt = _settle(options, for_check=True)
     if options.more_python_platforms:
-        also_platforms = (*also_platforms, *options.more_python_platforms)
+        also_platforms = (*options.more_python_platforms, *also_platforms)
     options = replace(options, more_pythons=(), more_python_platforms=())
     primary = (
         replace(_platforms.parse(options.python_platform), name="")
@@ -823,9 +842,6 @@ def check(
         p = _prepare(options, fmt=fmt, stage=Path(tmp), steps=steps, progress=report)
         extra = _also_platforms(p.pylock, p.target, others)
         cells = _matrix(p.pylock, p.source) if matrix else []
-        if audit:
-            steps.start("audit")
-            extra += _audit_lock(p.pylock, p.target)
         steps.finish()
     return CheckReport(
         name=p.source.name,
@@ -838,7 +854,6 @@ def check(
         pythons=p.pythons,
         reach=p.reach,
         matrix=cells,
-        against=_target_files.load(options.against) if options.against else None,
         also_platforms=others,
     )
 

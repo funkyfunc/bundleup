@@ -29,11 +29,12 @@ from pathlib import Path
 from ._bytecode import cache_dir
 from ._errors import BundleupError, CheckFailedError, Diagnostic, UsageError
 from ._formats import describe_size
-from ._outputs import LARGE, check_size
+from ._outputs import LARGE, atomic_output, check_size
 from ._payload import compile_env
 from ._platforms import Platform
 from ._python import Target
 from ._steps import Progress, ProgressEvent, run
+from ._text import findings
 
 # scie-jump, pinned with each binary's sha256 as published beside it (release v1.13.0,
 # 2026-07-27; github.com/a-scie/jump/releases). Linux uses the static (musl) build, which runs on
@@ -104,6 +105,7 @@ def write_exe(
     progress: Progress,
     max_size: int | None = None,
     strict: bool = False,
+    diagnostics: list[Diagnostic] | None = None,
 ) -> tuple[str, list[Diagnostic]]:
     """The executable for `platform`: its launcher, an interpreter of the target's Python version
     with its standard library precompiled, and `pyz`, written next to `output` then renamed."""
@@ -140,9 +142,7 @@ def write_exe(
             "jump": _jump_trailer(jump),
         }
     }
-    output.parent.mkdir(parents=True, exist_ok=True)
-    tmp = output.with_name(f".{output.name}.tmp-{os.getpid()}")
-    try:
+    with atomic_output(output) as tmp:
         with open(tmp, "wb") as out:
             for path in (jump, python, pyz):
                 with open(path, "rb") as src:
@@ -150,18 +150,15 @@ def write_exe(
             out.write(b"\n" + json.dumps(manifest, separators=(",", ":")).encode() + b"\n")
         tmp.chmod(0o755)
         size = tmp.stat().st_size
-        check_size(size, max_size, [])
         diags = [] if max_size is not None or size <= LARGE else [_large(size, python, pyz)]
+        all_diags = [*(diagnostics or []), *diags]
+        check_size(size, max_size, list(all_diags))
         if diags and strict:  # before replacing anything, as for every other warning
             raise CheckFailedError(
-                "found 1 warning, so nothing was written",
-                diagnostics=diags,
+                f"found {findings(0, len(all_diags))}, so nothing was written",
+                diagnostics=all_diags,
                 hint="--strict makes warnings fail too; build without it to allow them",
             )
-        tmp.replace(output)
-    finally:
-        if tmp.exists():
-            tmp.unlink()
     return ".".join(map(str, _patch(python))), diags
 
 

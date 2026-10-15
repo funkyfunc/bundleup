@@ -54,7 +54,7 @@ examples:
 
 CHECK_EXAMPLES = f"""\
 examples:
-  bundleup check --audit --also-platform windows   also ask PyPI, and check Windows wheels
+  bundleup check --python-platform linux --python-platform windows   also check Windows wheels
 
 docs: {DOCS_URL}"""
 
@@ -119,21 +119,9 @@ def parsers() -> dict[str, argparse.ArgumentParser]:
     )
     _add_build_options(check, output=False)
     check.add_argument(
-        "--also-platform",
-        action="append",
-        default=[],
-        metavar="OS",
-        help="also check, from the lock alone, that every package has a wheel there",
-    )
-    check.add_argument(
         "--matrix",
         action="store_true",
         help="show which OS, CPU and Python versions the lock's wheels cover",
-    )
-    check.add_argument(
-        "--audit",
-        action="store_true",
-        help="ask PyPI about the locked packages: vulnerabilities, yanked, brand-new",
     )
     _add_output_options(check, verbose="-v: every package's size; -vv: commands run")
     verify = commands.add_parser(
@@ -232,12 +220,6 @@ def _add_build_options(command: argparse.ArgumentParser, *, output: bool) -> Non
             "a script name, module:function, module or python",
             "BUNDLEUP_ENTRY",
         ),
-    )
-    command.add_argument(
-        "--against",
-        type=Path,
-        metavar="FILE",
-        help="a destination described in a TOML file (docs/targets/)",
     )
     command.add_argument(
         "--python-platform",
@@ -388,7 +370,9 @@ def _success_lines(result: BuildResult, style: Style) -> list[str]:
     shown = _shown(result.output) + ("/" if result.format == "dir" else "")
     name = f"{result.name} {result.version}" if result.version else result.name
     path = style.link(style.bold(shown), result.output.as_uri())
-    size = _size(result.size_bytes) + (" unpacked" if result.format == "dir" else "")
+    size = _size(result.size_bytes) + (
+        " unpacked" if result.format == "dir" else " total" if result.parts else ""
+    )
     first = (
         f"{style.bold('Bundled')} {name} {style.arrow} {path} "
         f"{style.dim(f'({size}) in {result.duration_s:.2f}s')}"
@@ -442,25 +426,15 @@ def _options(opts: argparse.Namespace) -> BuildOptions:
         max_size=getattr(opts, "max_size", None),
         split=getattr(opts, "split", None),
         smoke=_smoke_args(getattr(opts, "smoke", None)),
-        against=opts.against,
     )
 
 
-def _expanded(opts: argparse.Namespace, style: Style) -> BuildOptions:
+def _expanded(opts: argparse.Namespace, style: Style, *, for_check: bool = False) -> BuildOptions:
     """The options with [tool.bundleup] filled in; -v says what it set (rule 7)."""
     from ._config import apply as apply_config
 
     options = _options(opts)
-    if options.against is not None:  # say what it stands for (rule 7)
-        from ._target_files import apply, load
-
-        target = load(options.against)
-        options = apply(options, target)  # before [tool.bundleup], which it outranks
-        if not opts.json and opts.quiet == 0:
-            facts = f"; {target.facts()}" if target.facts() else ""
-            line = f"Against {target.name} (checked {target.checked}): {' '.join(target.flags())}"
-            print(style.dim(line + facts), file=sys.stderr)
-    options, configured = apply_config(options)
+    options, configured = apply_config(options, for_check=for_check)
     if configured and not opts.json and opts.verbose >= 1:
         print(style.dim(f"Using [tool.bundleup]: {', '.join(configured)}"), file=sys.stderr)
     return options
@@ -545,11 +519,8 @@ def _check_lines(report: CheckReport, opts: argparse.Namespace, style: Style) ->
     lines = [f"{style.bold('Checked')} {name} for {target}: {verdict}"]
     packages = plural(len(report.packages), "package")
     largest = ", ".join(f"{p.name} {_size(p.size_bytes)}" for p in report.packages[:3])
-    lines.append(
-        style.dim(
-            f"  {packages}, {_size(report.size_bytes)} unpacked {style.dot} largest: {largest}"
-        )
-    )
+    more = f" {style.dot} largest: {largest}" if largest and opts.verbose == 0 else ""
+    lines.append(style.dim(f"  {packages}, {_size(report.size_bytes)} unpacked{more}"))
     if opts.verbose >= 1 and report.packages:
         width = max(len(p.name) for p in report.packages)
         for p in report.packages:
@@ -559,32 +530,17 @@ def _check_lines(report: CheckReport, opts: argparse.Namespace, style: Style) ->
 
 
 def _run_check(opts: argparse.Namespace) -> ExitCode:
-    from dataclasses import replace
-
     from ._build import check  # deferred: --help and --version stay instant
 
     err = sys.stderr
     style = Style(err, opts.color)
     status, on_progress = _progress(opts, style)
     try:
-        raw = _options(opts)
-        if raw.more_pythons or raw.more_python_platforms:
-            raise UsageError(
-                "check looks at one Python version and platform at a time",
-                hint="--matrix shows every platform and Python version from the lock",
-            )
-        options = _expanded(opts, style)
-        also = list(opts.also_platform)
-        for p in options.more_python_platforms:
-            if p != options.python_platform and p not in also:
-                also.append(p)
-        options = replace(options, more_pythons=(), more_python_platforms=())
+        options = _expanded(opts, style, for_check=True)
         report = check(
             options,
             progress=on_progress,
-            also_platforms=also,
             matrix=opts.matrix,
-            audit=opts.audit,
         )
     except BundleupError as e:
         status.clear()
@@ -717,26 +673,30 @@ def _run_cache(opts: argparse.Namespace) -> ExitCode:
         _emit_json(command, ExitCode.OK, report.to_json_dict(), [])
     elif opts.quiet == 0:
         verb = "Would remove" if report.dry_run else "Removed"
-        items = plural(len(report.removed), "item")
+        shown = [p for p in report.removed if not p.name.startswith(".lock-")]
+        items = plural(len(shown), "item")
         print(f"{style.bold(verb)} {items} ({_size(report.freed_bytes)})", file=err)
         if report.in_use:
             kept = len(report.in_use)
             which = "a copy" if kept == 1 else f"{kept} copies"
             print(style.dim(f"  kept {which} a running program still uses"), file=err)
         if opts.verbose >= 1:
-            for path in report.removed:
+            for path in shown:
                 print(style.dim(f"  {path}"), file=err)
     return ExitCode.OK
 
 
-def _first_word(argv: list[str]) -> str:
-    words = [a for a in argv if not a.startswith("-")]
-    return words[0] if words else ""
-
-
 def _usage_error(message: str, argv: list[str]) -> ExitCode:
-    hint = "run `bundleup --help` to see the commands and options"
-    word = _first_word(argv)
+    words = [a for a in argv if not a.startswith("-")]
+    word = words[0] if words else ""
+    all_parsers = parsers()
+    sub_name = (
+        f"cache {words[1]}"
+        if word == "cache" and len(words) > 1 and f"cache {words[1]}" in all_parsers
+        else word
+    )
+    help_cmd = f"bundleup {sub_name} --help" if sub_name in all_parsers else "bundleup --help"
+    hint = f"run `{help_cmd}` to see the commands and options"
     if word and word not in COMMANDS and "invalid choice" in message:
         import difflib  # only on this error path: keeps startup light (rule 35)
 
@@ -745,9 +705,32 @@ def _usage_error(message: str, argv: list[str]) -> ExitCode:
         close = difflib.get_close_matches(word, COMMANDS, n=1)
         if close:
             hint = f"did you mean `bundleup {close[0]}`?"
+    elif (
+        word == "cache"
+        and len(words) > 1
+        and words[1] not in ("list", "clean")
+        and "invalid choice" in message
+    ):
+        import difflib
+
+        bad_sub = words[1]
+        message = f"unknown command `cache {bad_sub}`"
+        close = difflib.get_close_matches(bad_sub, ("list", "clean"), n=1)
+        if close:
+            hint = f"did you mean `bundleup cache {close[0]}`?"
+    elif "unrecognized arguments:" in message:
+        import difflib
+
+        bad = message.split("unrecognized arguments:", 1)[1].strip().split()[0].split("=", 1)[0]
+        if bad.startswith("-"):
+            sub = all_parsers.get(sub_name) or all_parsers["bundleup"]
+            flags = [opt for opt in sub._option_string_actions if opt.startswith("--")]
+            close = difflib.get_close_matches(bad, flags, n=1)
+            if close:
+                hint = f"did you mean `{close[0]}`? (see `{help_cmd}`)"
     diag = Diagnostic("usage", "error", message, hint)
     if "--json" in argv:
-        _emit_json(word, ExitCode.USAGE_ERROR, None, [diag])
+        _emit_json(sub_name, ExitCode.USAGE_ERROR, None, [diag])
     else:
         _print_diagnostic(diag, Style(sys.stderr, "auto"), sys.stderr)
     return ExitCode.USAGE_ERROR
