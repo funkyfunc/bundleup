@@ -24,10 +24,11 @@ bundleup build                  # the project in this directory -> dist/<name>.p
 bundleup build path/to/script.py  # a PEP 723 script with inline dependencies
 bundleup build --python 3.9     # build with Python 3.9 (pure Python: runs on 3.9 and newer)
 bundleup build --python 3.11 --python-platform linux   # build on a Mac for Linux x86_64
-bundleup build --python-platform linux --python-platform macos --python-platform windows   # one file for all three
+bundleup build --python-platform linux,macos,windows   # one file for all three
+bundleup build --external torch # leave a heavy host package out of the bundle
 bundleup build --json           # the result as JSON on stdout, for scripts and agents
 bundleup check                  # what won't survive bundling, and each package's size
-bundleup check --python-platform linux --python-platform windows   # also check Windows wheels
+bundleup check --python-platform linux,windows   # also check Windows wheels
 bundleup check --matrix         # which OS, CPU and Python versions the lock's wheels cover
 bundleup build --smoke          # then run it once: fresh home folder, no network
 bundleup build --max-size 30MB # fail, writing nothing, if the bundle is bigger
@@ -51,7 +52,7 @@ copies of the same bundle that went unused for 30 days. A pure-Python
 bundle runs on every Python version its lock allows (`Python 3.10+`), and on any OS when the lock
 picks the same packages everywhere (`on any OS`); one with compiled code runs on the version and
 platform it was built for. A bundle only sees
-its own packages and the standard library; set `BUNDLEUP_INHERIT_PATH=1` to also let it use
+its own packages and the standard library; pass `--external <pkg>` (or set `BUNDLEUP_INHERIT_PATH=1` at runtime) to also let it use
 packages installed on the machine (they come after the bundle's, but a machine package can still
 win over a bundled namespace package of the same name: a Python rule, PEP 420). If it's started
 with the wrong Python, it runs itself again with a matching one if one is installed; otherwise, and on

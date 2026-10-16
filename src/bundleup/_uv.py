@@ -72,11 +72,17 @@ def find_uv() -> str:
     )
 
 
+def _clean_external(external: Sequence[str]) -> set[str]:
+    return {
+        canonicalize_name(head)
+        for pkg in external
+        if (head := re.split(r"[<>=!~;\[\s]", pkg, maxsplit=1)[0].strip())
+    }
+
+
 def _strip_external(text: str, external: Sequence[str]) -> str:
     """Remove `[[packages]]` entries whose canonical name is in `external` from a pylock.toml."""
-    if not external:
-        return text
-    excluded = {canonicalize_name(pkg.split("[", 1)[0].strip()) for pkg in external if pkg.strip()}
+    excluded = _clean_external(external)
     if not excluded or "[[packages]]" not in text:
         return text
     parts = re.split(r"(?m)(?=^\[\[packages\]\]\s*$)", text)
@@ -196,6 +202,8 @@ def _export_cache_key(
             if b"workspace" in manifest_bytes or b"dynamic" in manifest_bytes:
                 return None
             lock_bytes = lock.read_bytes()
+        if re.search(rb'source\s*=\s*\{\s*(?:directory|editable|path)\s*=\s*"(?!\.")', lock_bytes):
+            return None
         uv_mtime = str(os.stat(uv).st_mtime_ns) if os.path.exists(uv) else uv
     except OSError:
         return None
@@ -204,6 +212,52 @@ def _export_cache_key(
         digest.update(part.encode("utf-8", "replace") + b"\0")
     digest.update(manifest_bytes + b"\0" + lock_bytes)
     return digest.hexdigest()[:32]
+
+
+def _strip_script_external(script_path: Path, excluded: set[str], stage: Path) -> Path:
+    """When an unlocked PEP 723 script declares an `--external` package in `dependencies`, write a
+    staged script with that package removed so `uv export --script` doesn't try to resolve it."""
+    if not excluded:
+        return script_path
+    from ._source import PEP723, read_python_text, script_metadata
+
+    text = read_python_text(script_path)
+    meta = script_metadata(text)
+    deps = meta.get("dependencies")
+    if not isinstance(deps, list) or "path" in str(meta.get("tool", "")):
+        return script_path
+    kept: list[str] = []
+    removed = False
+    for item in deps:
+        if not isinstance(item, str):
+            return script_path
+        head = re.split(r"[<>=!~;\[\s]", item, maxsplit=1)[0].strip()
+        if head and canonicalize_name(head) in excluded:
+            removed = True
+        else:
+            kept.append(item)
+    if not removed:
+        return script_path
+    match = next((m for m in PEP723.finditer(text) if m.group("type") == "script"), None)
+    if match is None:
+        return script_path
+    toml_body = re.sub(r"(?m)^#( ?)", "", match.group("content"))
+    new_deps = f"dependencies = [{', '.join(json.dumps(x) for x in kept)}]"
+    patched_toml, count = re.subn(
+        r"(?ms)^dependencies\s*=\s*\[.*?\]",
+        new_deps,
+        toml_body,
+        count=1,
+    )
+    if count != 1:
+        return script_path
+    commented = "".join(f"# {line}\n" if line else "#\n" for line in patched_toml.splitlines())
+    staged = stage.resolve() / script_path.name
+    staged.write_text(
+        text[: match.start("content")] + commented + text[match.end("content") :],
+        encoding="utf-8",
+    )
+    return staged
 
 
 @dataclass(frozen=True)
@@ -253,17 +307,19 @@ def export(
     # The real path: uv writes local paths relative to the file as spelled, but reads them from
     # its real location, and macOS's temporary folder is behind a symlink (/var -> /private/var).
     pylock = stage.resolve() / "pylock.toml"
-    selection = (
-        ["--script", str(source.path)] if source.is_script else ["--no-dev", "--no-editable"]
+    locked_file = has_lock(source)
+    excluded = _clean_external(external)
+    script_arg = (
+        _strip_script_external(source.path, excluded, stage)
+        if source.is_script and not locked_file
+        else source.path
     )
-    for pkg in external:
-        clean = canonicalize_name(pkg.split("[", 1)[0].strip())
-        if clean:
-            selection.extend(["--prune", clean])
+    selection = ["--script", str(script_arg)] if source.is_script else ["--no-dev", "--no-editable"]
+    for clean in sorted(excluded):
+        selection.extend(["--prune", clean])
     # A lock is checked against pyproject.toml / the script by default: uv would otherwise
     # re-lock a stale one, rewriting uv.lock and bundling versions nobody reviewed (ADR-0033).
     # --frozen uses it as is. A script without a lock has nothing to check (uv refuses --locked).
-    locked_file = has_lock(source)
     mode = (lock_mode or "locked") if locked_file else (lock_mode if not source.is_script else None)
     if mode:
         selection.append(f"--{mode}")
@@ -312,7 +368,9 @@ def export(
         pylock.write_text(
             _strip_external(pylock.read_text(encoding="utf-8"), external), encoding="utf-8"
         )
-    pinned = mode is not None or (source.is_script and _script_pinned(source, pylock))
+    pinned = mode is not None or (
+        source.is_script and _script_pinned(source, pylock, external=external)
+    )
     if lock_mode == "locked" and not pinned:
         raise NoLockfileError(
             f"{source.path.name} has no lockfile, and --locked asks for one",
@@ -325,6 +383,47 @@ def export(
 
 
 EMPTY_PYLOCK = 'lock-version = "1.0"\ncreated-by = "bundleup"\npackages = []\n'
+
+
+def _strip_requirements_external(declared: Path, excluded: set[str], stage: Path) -> Path | None:
+    """If `declared` is a `requirements.txt` and lists packages in `excluded`, write a staged copy
+    without them so `uv pip compile` doesn't resolve them or their transitive dependencies. Returns
+    None when every requirement in `declared` is external."""
+    if not excluded or not declared.name.endswith(".txt"):
+        return declared
+    from packaging.requirements import InvalidRequirement, Requirement
+
+    text = declared.read_text(encoding="utf-8-sig").replace("\r\n", "\n").replace("\\\n", " ")
+    kept: list[str] = []
+    kept_reqs = 0
+    removed = False
+    for raw in text.splitlines():
+        line = raw.split(" #")[0].strip()
+        if not line or line.startswith("#"):
+            kept.append(raw)
+            continue
+        if line.startswith("-"):
+            if line.split()[0].split("=")[0] in INCLUDES:
+                return declared
+            kept.append(raw)
+            continue
+        spec, _, _ = line.partition(" --")
+        try:
+            req = Requirement(spec.strip())
+        except InvalidRequirement:
+            return declared
+        if canonicalize_name(req.name) in excluded:
+            removed = True
+        else:
+            kept.append(raw)
+            kept_reqs += 1
+    if not removed:
+        return declared
+    if kept_reqs == 0:
+        return None
+    staged = stage.resolve() / "requirements.in"
+    staged.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    return staged
 
 
 def resolve(
@@ -348,18 +447,23 @@ def resolve(
     if declared is None:  # a script or folder app that needs only the standard library
         check.write_text(EMPTY_PYLOCK, encoding="utf-8")
         return Exported([], check)
-    oldest = _oldest_python(source.requires_python, python)
-    cmd = [uv, "pip", "compile", "--quiet", "--universal", "--format", "pylock.toml"]
-    cmd += ["--python-version", oldest, "-o", str(resolved), str(declared)]
-    with untouched(source):  # reading a setup.py project's metadata builds it
-        run(cmd, cwd=declared.parent, what="uv pip compile", progress=progress)
-    relocate_paths(resolved, declared.parent)
+    excluded = _clean_external(external)
+    compile_input = _strip_requirements_external(declared, excluded, stage)
+    if compile_input is None:
+        resolved.write_text(EMPTY_PYLOCK, encoding="utf-8")
+    else:
+        oldest = _oldest_python(source.requires_python, python)
+        cmd = [uv, "pip", "compile", "--quiet", "--universal", "--format", "pylock.toml"]
+        cmd += ["--python-version", oldest, "-o", str(resolved), str(compile_input)]
+        with untouched(source):  # reading a setup.py project's metadata builds it
+            run(cmd, cwd=declared.parent, what="uv pip compile", progress=progress)
+        relocate_paths(resolved, declared.parent)
     text = _strip_external(resolved.read_text(encoding="utf-8"), external)
     resolved.write_text(text, encoding="utf-8")
     installs: list[list[str]] = [["-r", str(resolved)]] if "[[packages]]" in text else []
     pinned = False
     if declared.name.endswith(".txt"):
-        pins, hashed = pinned_requirements(declared)
+        pins, hashed = pinned_requirements(declared, external=external)
         compiled = {
             canonicalize_name(str(p["name"])) for p in tomllib.loads(text).get("packages", [])
         }
@@ -398,14 +502,18 @@ def _oldest_python(requires: str | None, python: tuple[int, int]) -> str:
 INCLUDES = ("-r", "-c", "-e", "--requirement", "--constraint", "--editable")
 
 
-def pinned_requirements(path: Path) -> tuple[dict[str, str] | None, bool]:
+def pinned_requirements(
+    path: Path, *, external: Sequence[str] = ()
+) -> tuple[dict[str, str] | None, bool]:
     """The versions a requirements.txt pins (name -> version) if every requirement is pinned to
     one exact version (`name==1.2`) and none comes from elsewhere (-r, -c, -e, URLs, paths);
     else None. And whether every requirement carries a --hash."""
     from packaging.requirements import InvalidRequirement, Requirement
 
+    excluded = _clean_external(external)
     pins: dict[str, str] = {}
     hashed = True
+    had_external = False
     text = path.read_text(encoding="utf-8-sig").replace("\r\n", "\n").replace("\\\n", " ")
     for raw in text.splitlines():
         line = raw.split(" #")[0].strip()
@@ -416,19 +524,23 @@ def pinned_requirements(path: Path) -> tuple[dict[str, str] | None, bool]:
                 return None, False
             continue  # --index-url and friends: where from, not which version
         spec, _, options = line.partition(" --")
-        hashed = hashed and "hash" in options
         try:
             req = Requirement(spec.strip())
         except InvalidRequirement:
             return None, False  # a path or URL
+        canon = canonicalize_name(req.name)
+        if canon in excluded:
+            had_external = True
+            continue
+        hashed = hashed and "hash" in options
         exact = [s for s in req.specifier if s.operator in ("==", "===") and "*" not in s.version]
         if req.url or len(exact) != 1 or len(req.specifier) != 1:
             return None, False
-        pins[canonicalize_name(req.name)] = exact[0].version
-    return pins, hashed and bool(pins)
+        pins[canon] = exact[0].version
+    return pins, hashed and (bool(pins) and not had_external)
 
 
-def _script_pinned(source: Source, pylock: Path) -> bool:
+def _script_pinned(source: Source, pylock: Path, *, external: Sequence[str] = ()) -> bool:
     """Whether a PEP 723 script's `dependencies` list pins every package in `pylock` with ==."""
     from packaging.requirements import InvalidRequirement, Requirement
 
@@ -439,6 +551,7 @@ def _script_pinned(source: Source, pylock: Path) -> bool:
         return True
     if not isinstance(deps, list):
         return False
+    excluded = _clean_external(external)
     pins: set[str] = set()
     for item in deps:
         if not isinstance(item, str):
@@ -447,10 +560,13 @@ def _script_pinned(source: Source, pylock: Path) -> bool:
             req = Requirement(item)
         except InvalidRequirement:
             return False
+        canon = canonicalize_name(req.name)
+        if canon in excluded:
+            continue
         exact = [s for s in req.specifier if s.operator in ("==", "===") and "*" not in s.version]
         if req.url or len(exact) != 1 or len(req.specifier) != 1:
             return False
-        pins.add(canonicalize_name(req.name))
+        pins.add(canon)
     compiled = {
         canonicalize_name(str(p["name"]))
         for p in tomllib.loads(pylock.read_text(encoding="utf-8")).get("packages", [])

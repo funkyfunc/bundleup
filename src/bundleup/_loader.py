@@ -804,7 +804,9 @@ def _activate(site: str) -> None:
     finally:
         del sys.path[0]
     if EXTERNAL:
-        os.environ.setdefault("BUNDLEUP_INHERIT_PATH", "1")
+        os.environ["BUNDLEUP_RUNTIME_INHERIT"] = site
+    else:
+        os.environ.pop("BUNDLEUP_RUNTIME_INHERIT", None)
     runtime.activate(site, PTH)
 
 

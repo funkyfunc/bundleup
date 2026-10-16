@@ -122,6 +122,36 @@ class Platform:
         return any(word in platform_tag for word in TAG_CPU[self.arch])
 
 
+PLATFORM_HINTS = {
+    "darwin": "macos",
+    "osx": "macos",
+    "mac": "macos",
+    "macos-arm64": "macos",
+    "macos-aarch64": "macos",
+    "darwin-arm64": "macos",
+    "darwin-aarch64": "macos",
+    "macos-x86-64": "x86_64-apple-darwin",
+    "macos-x64": "x86_64-apple-darwin",
+    "macos-intel": "x86_64-apple-darwin",
+    "darwin-x86-64": "x86_64-apple-darwin",
+    "linux-x86-64": "linux",
+    "linux-x64": "linux",
+    "linux-amd64": "linux",
+    "linux-arm64": "aarch64-unknown-linux-gnu",
+    "linux-aarch64": "aarch64-unknown-linux-gnu",
+    "linux-musl": "x86_64-unknown-linux-musl",
+    "alpine": "x86_64-unknown-linux-musl",
+    "win32": "windows",
+    "win64": "windows",
+    "win": "windows",
+    "windows-x86-64": "windows",
+    "windows-x64": "windows",
+    "windows-amd64": "windows",
+    "windows-arm64": "aarch64-pc-windows-msvc",
+    "windows-aarch64": "aarch64-pc-windows-msvc",
+}
+
+
 def parse(name: str) -> Platform:
     """Read a uv platform name. Raises UsageError for names bundleup can't target."""
     clean = name.strip()
@@ -136,9 +166,14 @@ def parse(name: str) -> Platform:
     else:
         sys_platform = ""
     if not sys_platform or arch not in MACHINES.get(sys_platform, {}):
+        suggest = PLATFORM_HINTS.get(clean.lower().replace("_", "-"))
+        prefix = f"did you mean `{suggest}`? " if suggest else ""
         raise UsageError(
             f"bundleup can't build for {name!r}",
-            hint=f"use one of uv's platform names for Linux, macOS or Windows, e.g. {EXAMPLES}",
+            hint=(
+                f"{prefix}use one of uv's platform names for Linux, macOS or Windows,"
+                f" e.g. {EXAMPLES}"
+            ),
         )
     return Platform(name, sys_platform, arch, musl="musl" in full, level=_level(full))
 

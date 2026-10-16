@@ -710,11 +710,14 @@ _FLAG_ALIASES: dict[str, str] = {
     "--out": "-o / --output",
     "--outdir": "-o / --output",
     "--out-dir": "-o / --output",
+    "-e": "--entry",
     "--entrypoint": "-e / --entry",
     "--entry-point": "-e / --entry",
     "--main": "-e / --entry",
     "--externals": "--external",
     "--onefile": "--format scie",
+    "--scie": "--format exe",
+    "--standalone": "--format exe",
     "--analyze": "bundleup check -v",
     "--metafile": "bundleup check --json",
 }
@@ -740,10 +743,10 @@ def _usage_error(message: str, argv: list[str]) -> ExitCode:
             hint = f"did you mean `bundleup verify {word}`?"
         elif word == "." or word.endswith((".py", ".toml", ".txt")) or "/" in word or "\\" in word:
             hint = f"did you mean `bundleup build {word}`?"
-        else:
-            close = difflib.get_close_matches(word, COMMANDS, n=1)
-            if close:
-                hint = f"did you mean `bundleup {close[0]}`?"
+        elif close := difflib.get_close_matches(word, COMMANDS, n=1):
+            hint = f"did you mean `bundleup {close[0]}`?"
+        elif Path(word).exists():
+            hint = f"did you mean `bundleup build {word}`?"
     elif (
         word == "cache"
         and len(words) > 1
@@ -757,6 +760,13 @@ def _usage_error(message: str, argv: list[str]) -> ExitCode:
         close = difflib.get_close_matches(bad_sub, ("list", "clean"), n=1)
         if close:
             hint = f"did you mean `bundleup cache {close[0]}`?"
+    elif "argument --format: invalid choice:" in message:
+        if any(k in message.lower() for k in ("'scie'", "'onefile'", "'binary'", "'standalone'")):
+            hint = f"did you mean `--format exe`? (see `{help_cmd}`)"
+        elif any(k in message.lower() for k in ("'lambda'", "'aws'")):
+            hint = f"did you mean `--format zip`? (see `{help_cmd}`)"
+        elif any(k in message.lower() for k in ("'pex'", "'shiv'", "'zipapp'")):
+            hint = f"did you mean `--format pyz`? (see `{help_cmd}`)"
     elif "unrecognized arguments:" in message:
         import difflib
 
@@ -768,10 +778,18 @@ def _usage_error(message: str, argv: list[str]) -> ExitCode:
             hint = f"{verb} `{alias}`{q} (see `{help_cmd}`)"
         elif bad.startswith("-"):
             sub = all_parsers.get(sub_name) or all_parsers["bundleup"]
-            flags = [opt for opt in sub._option_string_actions if opt.startswith("--")]
-            close = difflib.get_close_matches(bad, flags, n=1)
-            if close:
-                hint = f"did you mean `{close[0]}`? (see `{help_cmd}`)"
+            other = [
+                name
+                for name, p in all_parsers.items()
+                if name not in ("bundleup", sub_name) and bad in p._option_string_actions
+            ]
+            if other and sub_name in all_parsers:
+                hint = f"`{bad}` is an option for `bundleup {other[0]}`, not `bundleup {sub_name}`"
+            else:
+                flags = [opt for opt in sub._option_string_actions if opt.startswith("--")]
+                close = difflib.get_close_matches(bad, flags, n=1)
+                if close:
+                    hint = f"did you mean `{close[0]}`? (see `{help_cmd}`)"
     diag = Diagnostic("usage", "error", message, hint)
     if "--json" in argv:
         _emit_json(sub_name, ExitCode.USAGE_ERROR, None, [diag])

@@ -40,7 +40,6 @@ NEWEST = (3, 14)  # the newest version the tables describe
 EXTERNAL_ALIASES: dict[str, set[str]] = {
     "attrs": {"attr", "attrs"},
     "beautifulsoup4": {"bs4"},
-    " gitpython": {"git"},
     "gitpython": {"git"},
     "msgpack-python": {"msgpack"},
     "opencv-contrib-python": {"cv2"},
@@ -73,7 +72,7 @@ def external_modules(external: Sequence[str]) -> set[str]:
     """Top-level module names that `--external` distributions provide on the host."""
     names: set[str] = set()
     for raw in external:
-        pkg = raw.split("[", 1)[0].strip()
+        pkg = re.split(r"[<>=!~;\[\s]", raw, maxsplit=1)[0].strip()
         if not pkg:
             continue
         canon = re.sub(r"[-_.]+", "-", pkg).lower()
@@ -105,6 +104,9 @@ def code_frame(path: Path, line: int | None) -> str | None:
     if not raw.strip():
         return None
     caret = len(raw) - len(raw.lstrip(" "))
+    if len(raw) > 120:
+        raw = raw[:117] + "..."
+        caret = min(caret, 116)
     pad = " " * len(str(line))
     return f"{line} | {raw}\n{pad} | {' ' * caret}^"
 

@@ -439,6 +439,8 @@ def py_header(ps: list[Prepared], locked: list[list[_verify.LockedPackage]], nam
     }
     lines = ["#!/usr/bin/env python3", "# /// bundleup"]
     lines += [f"# {k} = {json.dumps(v)}" for k, v in fields.items() if v is not None]
+    if first.external:
+        lines.append(f"# external = [{', '.join(json.dumps(x) for x in first.external)}]")
     lines += ["# packages = ["] + [f"#     {json.dumps(x)}," for x in packages] + ["# ]", "# ///"]
     lines += [
         "#",

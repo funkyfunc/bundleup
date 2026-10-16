@@ -86,16 +86,22 @@ def _key_line(where: Path, key: str | None) -> int | None:
         return None
     in_section = False
     header = re.compile(r"^\s*(?:#\s*)?\[\s*tool\.bundleup\s*\]")
-    other_header = re.compile(r"^\s*(?:#\s*)?\[")
-    key_pat = re.compile(rf"^\s*(?:#\s*)?{re.escape(key)}\s*=")
+    other_header = re.compile(r"^\s*(?:#\s*)?\[\s*\[?\s*[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\s*\]")
+    key_pat = re.compile(rf"^\s*(?:#\s*)?(?:['\"])?{re.escape(key)}(?:['\"])?\s*=")
+    dotted_pat = re.compile(
+        rf"^\s*(?:#\s*)?(?:tool\.)?bundleup\.(?:['\"])?{re.escape(key)}(?:['\"])?\s*="
+    )
+    fallback: int | None = None
     for i, raw in enumerate(lines, start=1):
         if header.match(raw):
             in_section = True
         elif in_section and other_header.match(raw):
-            break
+            in_section = False
         elif in_section and key_pat.match(raw):
             return i
-    return None
+        elif fallback is None and dotted_pat.match(raw):
+            fallback = i
+    return fallback
 
 
 def _invalid(where: Path, message: str, hint: str, *, key: str | None = None) -> UsageError:

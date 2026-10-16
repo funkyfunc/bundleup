@@ -911,3 +911,253 @@ def test_adr0051_js_bundler_learnings(
     cached_entry.write_text("six==1.16.0\n")
     clean_rep = _cache.clean_cache(build=True)
     assert exp_dir in clean_rep.removed and not cached_entry.exists()
+
+
+def test_pass4_iteration1_regressions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Pass 1 regressions: external stripping in scripts/requirements, markers in required_by,
+    config line scan, and CLI hints."""
+    from bundleup import _check, _cli, _config, _imports, _uv
+    from bundleup._source import load_source
+    from bundleup._verify import record_hash
+
+    # 1. external_modules strips version specifiers/extras and code_frame truncates long lines
+    assert "torch" in _imports.external_modules(("torch[cuda]>=2.0",))
+    assert "yaml" in _imports.external_modules(("PyYAML==6.0",))
+    long_py = tmp_path / "long.py"
+    long_py.write_text("x = " + ("a" * 200) + "\n")
+    frame = _imports.code_frame(long_py, 1)
+    assert frame is not None and "..." in frame.splitlines()[0]
+    assert len(frame.splitlines()[0]) <= 135
+
+    # 2. _strip_script_external and _strip_requirements_external + pinned checks ignoring external
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    script = tmp_path / "script.py"
+    script.write_text(
+        "# /// script\n"
+        "# dependencies = [\n"
+        '#   "host_only_pkg>=1.0",\n'
+        '#   "click==8.1.7",\n'
+        "# ]\n"
+        "# ///\n"
+        "print(1)\n"
+    )
+    pylock = tmp_path / "script.pylock.toml"
+    pylock.write_text('lock-version = "1.0"\n[[packages]]\nname = "click"\nversion = "8.1.7"\n')
+    src = load_source(script, external=("host-only-pkg",))
+    assert _uv._script_pinned(src, pylock, external=("host-only-pkg",)) is True
+    assert _uv._script_pinned(src, pylock, external=()) is False
+    staged_script = _uv._strip_script_external(script, {"host-only-pkg"}, stage)
+    text = staged_script.read_text()
+    assert "host_only_pkg" not in text
+    assert "click==8.1.7" in text
+
+    req = tmp_path / "requirements.txt"
+    req.write_text("host-only-pkg>=1.0\nclick==8.1.7\n")
+    pins_ext, _ = _uv.pinned_requirements(req, external=("host_only_pkg",))
+    pins_no_ext, _ = _uv.pinned_requirements(req, external=())
+    assert pins_ext == {"click": "8.1.7"}
+    assert pins_no_ext is None
+    staged_req = _uv._strip_requirements_external(req, {"host-only-pkg"}, stage)
+    assert staged_req is not None
+    assert "host-only-pkg" not in staged_req.read_text()
+    assert "click==8.1.7" in staged_req.read_text()
+    assert _uv._strip_requirements_external(req, {"host-only-pkg", "click"}, stage) is None
+
+    # 3. _dependency_chains respects target markers (e.g. sys_platform)
+    markers = {"sys_platform": "linux", "os_name": "posix", "platform_system": "Linux"}
+    site = tmp_path / "site_markers"
+    site.mkdir()
+    for pkg_name, ver, req_lines in [
+        (
+            "app",
+            "0.1.0",
+            (
+                "Requires-Dist: winpkg; sys_platform == 'win32'\n"
+                "Requires-Dist: linpkg; sys_platform == 'linux'\n"
+            ),
+        ),
+        ("winpkg", "1.0.0", "Requires-Dist: subpkg; sys_platform == 'win32'\n"),
+        ("linpkg", "1.0.0", ""),
+        ("subpkg", "1.0.0", ""),
+    ]:
+        dinfo = site / f"{pkg_name}-{ver}.dist-info"
+        dinfo.mkdir()
+        (dinfo / "METADATA").write_text(
+            f"Metadata-Version: 2.1\nName: {pkg_name}\nVersion: {ver}\n{req_lines}"
+        )
+        (dinfo / "WHEEL").write_text("Wheel-Version: 1.0\nTag: py3-none-any\n")
+        body = b"x = 1\n"
+        (site / f"{pkg_name}.py").write_bytes(body)
+        (dinfo / "RECORD").write_text(f"{pkg_name}.py,{record_hash(body)},{len(body)}\n")
+    owned = _check.owners(site, project="app")
+    sizes = _check.package_sizes(site, owned, project="app", markers=markers)
+    by_name = {p.name: p for p in sizes}
+    assert by_name["linpkg"].required_by == ()
+    assert by_name["subpkg"].required_by == ()
+
+    # 4. _key_line handles multiline arrays with leading `[` inside [tool.bundleup]
+    raw_toml = tmp_path / "key_line_pyproject.toml"
+    raw_toml.write_text(
+        '[tool.bundleup]\ninclude = [\n  "[a-z].txt",\n]\nbad_key = 1\n[other]\nbad_key = 2\n'
+    )
+    assert _config._key_line(raw_toml, "bad_key") == 5
+
+    # 5. _usage_error suggests subcommand for cross-command flags and existing project directories
+    proj_dir = tmp_path / "my_service"
+    proj_dir.mkdir()
+    monkeypatch.chdir(tmp_path)
+    assert _cli.main(["my_service"]) == _cli.ExitCode.USAGE_ERROR
+    err1 = capsys.readouterr().err
+    assert "did you mean `bundleup build my_service`?" in err1
+
+    assert _cli.main(["check", "--max-size", "10MB"]) == _cli.ExitCode.USAGE_ERROR
+    err2 = capsys.readouterr().err
+    assert "`--max-size` is an option for `bundleup build`, not `bundleup check`" in err2
+
+
+def test_pass4_iteration2_regressions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Pass 2 regressions: BUNDLEUP_RUNTIME_INHERIT isolation + .pth ordering, --entry with
+    --external, --external + --format exe rejection, _export_cache_key with local path deps,
+    and py_header external."""
+    import sys
+
+    from bundleup import BuildOptions, UsageError, _build, _outputs, _payload, _runtime, _uv
+    from bundleup._python import Portability, PythonRange, Target
+    from bundleup._source import Source
+
+    # 1. _runtime.activate keeps bundle .pth directories BEFORE inherited host site-packages,
+    # respects BUNDLEUP_INHERIT_PATH=0, and does not leak BUNDLEUP_RUNTIME_INHERIT to another bundle
+    bundle_a = tmp_path / "bundle_a"
+    bundle_a.mkdir()
+    pth_sub = bundle_a / "win32_extra"
+    pth_sub.mkdir()
+    (bundle_a / "extra.pth").write_text("win32_extra\n")
+    host_sp = tmp_path / "host-site-packages"
+    host_sp.mkdir()
+
+    monkeypatch.setattr(sys, "path", ["/stdlib", str(host_sp)])
+    monkeypatch.setenv("BUNDLEUP_RUNTIME_INHERIT", str(bundle_a))
+    monkeypatch.delenv("BUNDLEUP_INHERIT_PATH", raising=False)
+    _runtime.activate(str(bundle_a), ["extra.pth"])
+    # Order must be: /stdlib, bundle_a, bundle_a/win32_extra, host_sp
+    assert sys.path == ["/stdlib", str(bundle_a), str(pth_sub), str(host_sp)]
+
+    # Child bundle_b without EXTERNAL should NOT inherit host_sp from bundle_a
+    bundle_b = tmp_path / "bundle_b"
+    bundle_b.mkdir()
+    _runtime.activate(str(bundle_b), [])
+    assert str(host_sp) not in sys.path
+    assert "BUNDLEUP_RUNTIME_INHERIT" not in _runtime.os.environ
+
+    # BUNDLEUP_INHERIT_PATH=0 overrides BUNDLEUP_RUNTIME_INHERIT
+    bundle_c = tmp_path / "bundle_c"
+    bundle_c.mkdir()
+    monkeypatch.setattr(sys, "path", ["/stdlib", str(host_sp)])
+    monkeypatch.setenv("BUNDLEUP_RUNTIME_INHERIT", str(bundle_c))
+    monkeypatch.setenv("BUNDLEUP_INHERIT_PATH", "0")
+    _runtime.activate(str(bundle_c), [])
+    assert str(host_sp) not in sys.path
+
+    # 2. resolve_entry allows --entry pointing to a module provided by --external
+    site = tmp_path / "entry_site"
+    site.mkdir()
+    (site / "app.py").write_text("x = 1\n")
+    src = Source(path=tmp_path, name="app", requires_python=None, is_script=False, pep723=False)
+    entry = _payload.resolve_entry(
+        src, site, entry="uvicorn:main", script=None, target_version=(3, 12), external=("uvicorn",)
+    )
+    assert entry == _payload.Entry("call", "uvicorn", "main")
+
+    # 3. --external + --format exe raises UsageError in _settle
+    with pytest.raises(UsageError, match="--external leaves packages to the host Python"):
+        _build._settle(BuildOptions(path=tmp_path, format="exe", external=("torch",)))
+
+    # 4. _export_cache_key returns None when uv.lock references an external local path dependency
+    proj = tmp_path / "proj_local_dep"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text('[project]\nname = "app"\nversion = "0.1.0"\n')
+    (proj / "uv.lock").write_text(
+        'version = 1\n[[package]]\nname = "helper"\nsource = { directory = "../helper" }\n'
+    )
+    local_src = Source(path=proj, name="app", requires_python=None, is_script=False, pep723=False)
+    assert _uv._export_cache_key("uv", local_src, ["--no-dev"], "locked") is None
+    (proj / "uv.lock").write_text(
+        'version = 1\n[[package]]\nname = "app"\nsource = { editable = "." }\n'
+    )
+    assert _uv._export_cache_key("uv", local_src, ["--no-dev"], "locked") is not None
+
+    # 5. py_header records # external = [...] when --external is set
+    target = Target(
+        executable=sys.executable,
+        version=(3, 12),
+        full_version="3.12.0",
+        platform="linux",
+        machine="x86_64",
+        abiflags=None,
+        implementation="cpython",
+        cache_tag="cpython-312",
+        markers={},
+    )
+    prep = _payload.Prepared(
+        source=local_src,
+        target=target,
+        site=site,
+        pylock=proj / "uv.lock",
+        script=None,
+        entry=_payload.Entry("call", "app", "main"),
+        packages=1,
+        native=False,
+        version="0.1.0",
+        diagnostics=[],
+        sizes=[],
+        pythons=PythonRange((3, 12), (3, 12)),
+        reach=Portability(),
+        external=("torch", "pyyaml"),
+    )
+    header = _outputs.py_header([prep], [[]], "app.py")
+    assert '# external = ["torch", "pyyaml"]' in header
+
+
+def test_pass4_iteration3_regressions(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    """Pass 3 regressions: platform spelling hints, Python version shorthand normalization,
+    and format/flag alias hints."""
+    from bundleup import BuildOptions, UsageError, _build, _cli, _platforms
+
+    # 1. PLATFORM_HINTS in _platforms.parse
+    for bad, expected in [
+        ("linux-arm64", "aarch64-unknown-linux-gnu"),
+        ("darwin", "macos"),
+        ("macos-x86_64", "x86_64-apple-darwin"),
+        ("alpine", "x86_64-unknown-linux-musl"),
+        ("win64", "windows"),
+    ]:
+        with pytest.raises(UsageError) as exc:
+            _platforms.parse(bad)
+        assert exc.value.hint is not None
+        assert f"did you mean `{expected}`?" in exc.value.hint
+
+    # 2. Python version shorthand normalization (py312, cp313, python3.11) in BuildOptions
+    settled, _ = _build._settle(BuildOptions(path=tmp_path, python="py312,cp313,python3.11"))
+    assert settled.python == "3.12"
+    assert settled.more_pythons == ("3.13", "3.11")
+
+    # 3. _FORMAT_HINTS in programmatic API and CLI
+    with pytest.raises(UsageError) as fmt_exc:
+        _build._format(BuildOptions(path=tmp_path, format="scie"))  # type: ignore[arg-type]
+    assert fmt_exc.value.hint is not None
+    assert "did you mean `exe`?" in fmt_exc.value.hint
+
+    assert _cli.main(["build", "--format", "lambda"]) == _cli.ExitCode.USAGE_ERROR
+    err1 = capsys.readouterr().err
+    assert "did you mean `--format zip`?" in err1
+
+    assert _cli.main(["build", "--scie"]) == _cli.ExitCode.USAGE_ERROR
+    err2 = capsys.readouterr().err
+    assert "did you mean `--format exe`?" in err2
+
+    assert _cli.main(["build", "-e", "pkg:main"]) == _cli.ExitCode.USAGE_ERROR
+    err3 = capsys.readouterr().err
+    assert "did you mean `--entry`?" in err3

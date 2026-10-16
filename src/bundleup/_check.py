@@ -176,16 +176,23 @@ def _source_of(pyc: str) -> str:
     return f"{head}{stem}.py"
 
 
-def _dependency_chains(site: Path, project: str, installed: set[str]) -> dict[str, tuple[str, ...]]:
+def _dependency_chains(
+    site: Path,
+    project: str,
+    installed: set[str],
+    markers: dict[str, str] | None = None,
+) -> dict[str, tuple[str, ...]]:
     """For each transitive distribution in `installed`, the shortest `Requires-Dist` chain from a
     direct dependency (`("rich", "markdown-it-py")` for `mdurl`); `()` for the project itself and
     its direct dependencies."""
     from collections import deque
 
+    from packaging.markers import UndefinedEnvironmentName
     from packaging.requirements import InvalidRequirement, Requirement
     from packaging.utils import canonicalize_name
 
     canon_proj = canonicalize_name(project) if project else ""
+    env = {**(markers or {}), "extra": ""}
     deps: dict[str, list[str]] = {}
     for dist in _verify.installed_distributions(site):
         meta = site / dist.dist_info / "METADATA"
@@ -201,8 +208,12 @@ def _dependency_chains(site: Path, project: str, installed: set[str]) -> dict[st
                     req = Requirement(spec)
                 except InvalidRequirement:
                     continue
-                if req.marker and "extra" in str(req.marker):
-                    continue
+                if req.marker is not None and (markers or "extra" in str(req.marker)):
+                    try:
+                        if not req.marker.evaluate(env):
+                            continue
+                    except UndefinedEnvironmentName:
+                        continue
                 target_name = canonicalize_name(req.name)
                 if target_name in installed and target_name != dist.name:
                     reqs.add(target_name)
@@ -231,14 +242,20 @@ def _dependency_chains(site: Path, project: str, installed: set[str]) -> dict[st
     return chains
 
 
-def package_sizes(site: Path, owner: dict[str, _Owner], *, project: str = "") -> list[PackageSize]:
+def package_sizes(
+    site: Path,
+    owner: dict[str, _Owner],
+    *,
+    project: str = "",
+    markers: dict[str, str] | None = None,
+) -> list[PackageSize]:
     """Unpacked size of each distribution, largest first. Bytecode counts towards its source's."""
     sizes: dict[_Owner, int] = defaultdict(int)
     for rel, path in _bytecode.walk_files(site):
         who = owner.get(rel) or (owner.get(_source_of(rel)) if rel.endswith(".pyc") else None)
         if who:
             sizes[who] += os.lstat(path).st_size
-    chains = _dependency_chains(site, project, {o.name for o in sizes})
+    chains = _dependency_chains(site, project, {o.name for o in sizes}, markers=markers)
     found = [
         PackageSize(o.name, o.version, size, o.native, chains.get(o.name, ()))
         for o, size in sizes.items()
@@ -470,7 +487,7 @@ def analyze(
     diags = syntax_errors(site, owner, project=project, target=target, run=run)
     diags += data_files(site, owner)
     diags.sort(key=lambda d: d.level != "error")  # stable: errors first, then in found order
-    return diags, package_sizes(site, owner, project=project)
+    return diags, package_sizes(site, owner, project=project, markers=target.markers)
 
 
 def undeclared_imports(
@@ -502,8 +519,9 @@ def undeclared_imports(
                     "warning",
                     f"{shown} imports {', '.join(missing)}: neither the bundle nor the standard "
                     f"library has {'it' if len(missing) == 1 else 'them'}",
-                    hint="add the packages that provide them to the dependencies (an import in "
-                    "`try: ... except ImportError` counts as optional)",
+                    hint=f"add the packages that provide them to the dependencies, pass --external "
+                    f"{missing[0]} if the host Python provides it, or guard optional imports with "
+                    "`try: ... except ImportError`",
                     detail=frame,
                     file=shown,
                     line=line,

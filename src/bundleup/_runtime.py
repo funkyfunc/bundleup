@@ -23,6 +23,9 @@ ENV_PYTHON = "BUNDLEUP_RUNTIME_PYTHON"  # identity() of the bundle's interpreter
 # `--entry python` (ADR-0040): the folder of the script it was given. Scripts under it are the
 # bundle's code too, so a skill script that runs a sibling with sys.executable shares the bundle.
 ENV_SCRIPTS = "BUNDLEUP_RUNTIME_SCRIPTS"
+# `--external` (ADR-0051): the active bundle's `site` when it relies on host packages, so its own
+# child processes keep the host's site-packages without leaking inheritance to another bundle.
+ENV_INHERIT = "BUNDLEUP_RUNTIME_INHERIT"
 
 
 def identity() -> str:
@@ -72,6 +75,9 @@ def runs_bundle_code(site: str) -> bool:
         return True
     scripts = [p for p in os.environ.get(ENV_SCRIPTS, "").split(os.pathsep) if p]
     if first == "-m":
+        inherit_site = os.environ.get(ENV_INHERIT, "")
+        if inherit_site and _same(inherit_site, site):
+            return True
         original = getattr(sys, "orig_argv", None)  # 3.10+: the full command line
         if original and "-m" in original[:-1]:
             top = original[original.index("-m") + 1].split(".")[0]
@@ -102,9 +108,10 @@ def _same(a: str, b: str) -> bool:
 
 def activate(site: str, pth: "Optional[Sequence[str]]" = None) -> None:
     """Put the payload on sys.path where a venv's site-packages would be, in place of the
-    machine's own packages (unless BUNDLEUP_INHERIT_PATH=1), run its .pth files, and set up the
-    environment so child processes of this same interpreter do the same (via the payload's
-    sitecustomize.py on PYTHONPATH). Other Pythons the program starts ignore the bundle."""
+    machine's own packages (unless BUNDLEUP_INHERIT_PATH=1 or the bundle was built with
+    --external), run its .pth files, and set up the environment so child processes of this same
+    interpreter do the same (via the payload's sitecustomize.py on PYTHONPATH). Other Pythons the
+    program starts ignore the bundle."""
     if any(_same(p, site) for p in sys.path if p):
         return  # already active (e.g. a multiprocessing child that got the parent's sys.path)
     # A bundle started from another bundle inherits the parent's environment: drop what the
@@ -114,6 +121,8 @@ def activate(site: str, pth: "Optional[Sequence[str]]" = None) -> None:
     if parent and not _same(parent, site):
         sys.path[:] = [p for p in sys.path if p not in parent_paths]
         os.environ.pop(ENV_SCRIPTS, None)
+        if not (os.environ.get(ENV_INHERIT) and _same(os.environ.get(ENV_INHERIT, ""), site)):
+            os.environ.pop(ENV_INHERIT, None)
     parent_shim = os.path.join(parent, SHIM) if parent else None
     shim = os.path.join(site, SHIM)
     pythonpath = [
@@ -122,21 +131,32 @@ def activate(site: str, pth: "Optional[Sequence[str]]" = None) -> None:
         if p and p != parent_shim and p != shim
     ]
     index = site_packages_index()
-    if os.environ.get("BUNDLEUP_INHERIT_PATH", "").lower() not in ("1", "true", "yes"):
-        # Isolation (ADR-0021): drop the machine's own packages (user and system site-packages,
-        # and whatever their .pth files added), so nothing outside the bundle is imported by
-        # accident.
-        del sys.path[index:]
-    sys.path.insert(index, site)
+    raw_inherit = os.environ.get("BUNDLEUP_INHERIT_PATH", "").lower()
+    if raw_inherit in ("0", "false", "no"):
+        inherit = False
+    else:
+        inherit_site = os.environ.get(ENV_INHERIT, "")
+        inherit = raw_inherit in ("1", "true", "yes") or (
+            bool(inherit_site) and _same(inherit_site, site)
+        )
+    # Isolation (ADR-0021): drop the machine's own packages (user and system site-packages, and
+    # whatever their .pth files added) unless inheriting; when inheriting, re-append them after
+    # the bundle's own .pth directories so the bundle always comes first.
+    tail = sys.path[index:] if inherit else []
+    del sys.path[index:]
+    sys.path.append(site)
     if pth is None:  # a child process: the loader passes the list it got at build time
         pth = sorted(n for n in os.listdir(site) if n.endswith(".pth") and not n.startswith("."))
-    added = []  # type: list[str]
-    if pth:
-        known = set(os.path.normcase(os.path.abspath(p)) for p in sys.path if p)
-        before = len(sys.path)
-        for name in pth:
-            add_pth(site, name, known)
-        added = sys.path[before:]
+    known = set(os.path.normcase(os.path.abspath(p)) for p in sys.path if p)
+    for name in pth or ():
+        add_pth(site, name, known)
+    added = sys.path[index + 1 :]
+    for p in tail:
+        norm = os.path.normcase(os.path.abspath(p)) if p else ""
+        if not norm or norm not in known:
+            sys.path.append(p)
+            if norm:
+                known.add(norm)
     # Children see the bundle through the shim (ADR-0027), never through the payload itself.
     os.environ["PYTHONPATH"] = os.pathsep.join([shim, *pythonpath])
     os.environ[ENV_SITE] = site

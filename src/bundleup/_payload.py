@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import os
 import zipfile
+from collections.abc import Sequence
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
@@ -52,6 +53,7 @@ def resolve_entry(
     entry: str | None,
     script: str | None,
     target_version: tuple[int, int] | None = None,
+    external: Sequence[str] = (),
 ) -> Entry:
     """What the loader runs: --entry, the project's console script, or the script itself.
     `--entry python` runs whatever script it's given, with the bundle's packages."""
@@ -93,7 +95,7 @@ def resolve_entry(
             entry = by_canon[canonicalize_name(source.name)]
         elif not scripts:
             pkg = canonicalize_name(source.name).replace("-", "_")
-            if _locate_module(roots, pkg).has_main:
+            if _locate_module(roots, pkg, target_version, external).has_main:
                 return Entry("module", pkg)
             raise EntryPointError(
                 f"{source.name} defines no [project.scripts], so bundleup doesn't know what to run",
@@ -111,7 +113,10 @@ def resolve_entry(
         canonicalize_name(entry) in by_canon
         and ":" not in entry
         and "." not in entry
-        and not ((m := _locate_module(roots, entry)).found and (not m.is_pkg or m.has_main))
+        and not (
+            (m := _locate_module(roots, entry, target_version, external)).found
+            and (not m.is_pkg or m.has_main)
+        )
     ):
         entry = by_canon[canonicalize_name(entry)]
     raw = entry
@@ -135,6 +140,7 @@ def resolve_entry(
         attr=attr,
         scripts=scripts,
         target_version=target_version,
+        external=external,
     )
     return Entry("call", module, attr) if attr else Entry("module", module)
 
@@ -193,6 +199,7 @@ def _locate_module(
     roots: list[Path],
     module: str,
     target_version: tuple[int, int] | None = None,
+    external: Sequence[str] = (),
 ) -> _ModuleMatch:
     import sys
 
@@ -239,6 +246,8 @@ def _locate_module(
         or _has_compiled(r, parts[0])
         for r in roots
     )
+    if not in_site and parts[0] in _imports.external_modules(external):
+        return _ModuleMatch(found=True)
     py_ver = target_version or sys.version_info[:2]
     std_names = _imports.stdlib(py_ver) or set()
     host_std = _imports.stdlib(sys.version_info[:2]) or set()
@@ -387,12 +396,13 @@ def _validate_entry(
     attr: str,
     scripts: dict[str, str],
     target_version: tuple[int, int] | None = None,
+    external: Sequence[str] = (),
 ) -> None:
     if not site.is_dir() or not any(site.iterdir()):
         return
     roots = _imports.search_roots(site)
     rel = Path(*module.split("."))
-    m = _locate_module(roots, module, target_version)
+    m = _locate_module(roots, module, target_version, external)
     if not m.found:
         raise _missing_module_error(
             site,

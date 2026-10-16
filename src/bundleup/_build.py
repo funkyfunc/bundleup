@@ -153,6 +153,8 @@ def _split_items(
         else:
             parts = [raw.strip()] if raw.strip() else []
         for p in parts:
+            if check_path and "/" not in p and "\\" not in p and not Path(p).exists():
+                p = re.sub(r"^(?:py|cp|python)(3)\.?(\d+)$", r"\1.\2", p, flags=re.IGNORECASE)
             if not dedup or p not in out:
                 out.append(p)
     return out
@@ -538,6 +540,12 @@ def _settle(options: BuildOptions, *, for_check: bool = False) -> tuple[BuildOpt
             "--split cuts a .pyz into parts",
             hint=f"drop --split: a {options.format} output is written as it is",
         )
+    if options.external and (options.format or "pyz") in ("exe", "scie"):
+        raise UsageError(
+            "--external leaves packages to the host Python, and --format exe carries its own "
+            "isolated Python",
+            hint="drop --external to bundle every package into the executable, or build a .pyz",
+        )
     if options.split is not None and options.split <= 0:
         raise UsageError("--split must be more than 0", hint="for example: --split 100MB")
     if options.max_size is not None and options.max_size <= 0:
@@ -545,11 +553,29 @@ def _settle(options: BuildOptions, *, for_check: bool = False) -> tuple[BuildOpt
     return options, _format(options)
 
 
+_FORMAT_HINTS = {
+    "scie": "exe",
+    "onefile": "exe",
+    "binary": "exe",
+    "standalone": "exe",
+    "lambda": "zip",
+    "aws": "zip",
+    "pex": "pyz",
+    "shiv": "pyz",
+    "zipapp": "pyz",
+}
+
+
 def _format(options: BuildOptions) -> Format:
     for fmt in FORMATS:  # the library may be given any string
         if (options.format or "pyz") == fmt:
             return fmt
-    raise UsageError(f"unknown format `{options.format}`", hint=f"use one of {', '.join(FORMATS)}")
+    suggest = _FORMAT_HINTS.get(str(options.format or "").lower())
+    prefix = f"did you mean `{suggest}`? " if suggest else ""
+    raise UsageError(
+        f"unknown format `{options.format}`",
+        hint=f"{prefix}use one of {', '.join(FORMATS)}",
+    )
 
 
 def _count(diags: list[Diagnostic]) -> str:
@@ -752,7 +778,12 @@ def _prepare(
     check_wheel_platforms(site, target)
     if fmt in LOADED or options.entry or script:
         entry = resolve_entry(
-            source, site, entry=options.entry, script=script, target_version=target.version
+            source,
+            site,
+            entry=options.entry,
+            script=script,
+            target_version=target.version,
+            external=options.external,
         )
     else:
         # A directory or a flat zip is imported, and its host decides what runs. A console
