@@ -1,6 +1,6 @@
 [project]
 name = "bundleup"
-version = "0.1.0"
+version = "0.2.0"
 description = "Bundle up your Python app with everything it needs: one .pyz that runs on plain Python, no install step."
 readme = "README.md"
 license = "MIT"

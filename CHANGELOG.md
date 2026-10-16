@@ -3,6 +3,38 @@
 Versions follow uv's scheme until 1.0: a minor version may break things
 ([style guide](docs/cli-style-guide.md) rule 37).
 
+## 0.2.0 (2026-10-16)
+
+Smaller CLI surface, `--external`, undeclared-import detection, inline code frames, and why-included
+dependency chains (ADR-0049, ADR-0050, ADR-0051):
+
+- `--external PKG` (and `external = [...]` in `[tool.bundleup]` or `BUNDLEUP_EXTERNAL`): leave a
+  package out of the bundle (`uv export --no-emit-package`) and let the bundle inherit the host
+  Python's `site-packages` after its own packages at runtime, for host-provided packages (`bpy`,
+  `maya`, `nuke`, system `torch` / CUDA).
+- `undeclared-import` warning: AST-scans the project's own Python files for top-level imports that
+  are neither in the standard library, the project itself, the installed wheels' `RECORD`s, nor
+  `--external`, with a `pip install` / `uv add` mapping for common import-to-PyPI aliases (`yaml` →
+  `PyYAML`, `cv2` → `opencv-python`, `PIL` → `Pillow`, `sklearn` → `scikit-learn`, ...).
+- Diagnostics with `file` and `line` (`syntax-error`, `undeclared-import`, `[tool.bundleup]` line
+  errors) render a 2-line source code frame with a `^` pointer on stderr.
+- `PackageSize.required_by` (`required_by` in `--json` and `(<- pkg)` on the top-5 packages in
+  `bundleup check` and `bundleup build -v`) shows the shortest dependency chain from a direct
+  dependency to each transitive package, respecting target platform and Python markers.
+- `uv export` outputs are cached under `<cache>/build/exports/` keyed by `uv` version, `uv.lock`
+  hash, `pyproject.toml` hash and export flags, speeding up repeated and multi-target builds;
+  `bundleup cache clean --build` clears the build cache.
+- Breaking CLI cleanups:
+  - `--format lambda` is now `--format zip` (generic flat `.zip` of code, packages and `.pyc`
+    without AWS-specific size ceilings; pair with `--max-size` when deploying to Lambda; ADR-0049).
+  - `--also-platform` and `--also-python` are consolidated into repeatable and comma-separated
+    `--python-platform` (`--platform`) and `--python` (`bundleup build --python-platform
+    linux,macos,windows`; ADR-0050).
+  - Removed `--against` and `check --audit` from the core CLI in favor of explicit flags and
+    `pip-audit` / `uvx pip-audit` (ADR-0050).
+- Entry points (`--entry` and `[project.scripts]`) are validated at build time so missing modules or
+  callables fail with `EntryPointError` before shipping.
+
 ## 0.1.0 (2026-10-13)
 
 The first working release. From a project with `uv.lock` or `pylock.toml`, or a PEP 723 script:
