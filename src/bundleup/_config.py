@@ -10,6 +10,7 @@ environment variables win over it; it wins over defaults.
 
 from __future__ import annotations
 
+import re
 from dataclasses import replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -17,6 +18,7 @@ from typing import TYPE_CHECKING, Any
 from . import _toml as tomllib
 from ._errors import ProjectError, UsageError
 from ._formats import FORMATS, parse_size
+from ._imports import code_frame
 
 if TYPE_CHECKING:
     from ._build import BuildOptions
@@ -32,6 +34,7 @@ KEYS = {
     "strict": "strict",
     "max-size": "max_size",
     "split": "split",
+    "external": "external",
 }
 BOOLEANS = {"strict"}
 # Keys that also take a list: a .pyz for several Pythons or platforms (ADR-0038).
@@ -73,8 +76,36 @@ def read(path: Path) -> tuple[dict[str, Any], Path | None]:
     return {}, None
 
 
-def _invalid(where: Path, message: str, hint: str) -> UsageError:
-    return UsageError(f"invalid [tool.bundleup] in {where.name}: {message}", hint=hint)
+def _key_line(where: Path, key: str | None) -> int | None:
+    """1-based line number of `key = ...` inside `[tool.bundleup]` in `where`, if found."""
+    if key is None:
+        return None
+    try:
+        lines = where.read_text(encoding="utf-8-sig", errors="replace").splitlines()
+    except OSError:
+        return None
+    in_section = False
+    header = re.compile(r"^\s*(?:#\s*)?\[\s*tool\.bundleup\s*\]")
+    other_header = re.compile(r"^\s*(?:#\s*)?\[")
+    key_pat = re.compile(rf"^\s*(?:#\s*)?{re.escape(key)}\s*=")
+    for i, raw in enumerate(lines, start=1):
+        if header.match(raw):
+            in_section = True
+        elif in_section and other_header.match(raw):
+            break
+        elif in_section and key_pat.match(raw):
+            return i
+    return None
+
+
+def _invalid(where: Path, message: str, hint: str, *, key: str | None = None) -> UsageError:
+    line = _key_line(where, key)
+    loc = f"{where.name}:{line}" if line else where.name
+    return UsageError(
+        f"invalid [tool.bundleup] in {loc}: {message}",
+        hint=hint,
+        detail=code_frame(where, line),
+    )
 
 
 def apply(options: BuildOptions, *, for_check: bool = False) -> tuple[BuildOptions, list[str]]:
@@ -93,7 +124,10 @@ def apply(options: BuildOptions, *, for_check: bool = False) -> tuple[BuildOptio
     for key, value in table.items():
         if key in PER_RUN:
             raise _invalid(
-                where, f"`{key}` is a per-run setting", f"pass --{key} on the command line"
+                where,
+                f"`{key}` is a per-run setting",
+                f"pass --{key} on the command line",
+                key=key,
             )
         field = KEYS.get(key)
         if field is None:
@@ -101,11 +135,33 @@ def apply(options: BuildOptions, *, for_check: bool = False) -> tuple[BuildOptio
 
             close = difflib.get_close_matches(key, KEYS, n=1)
             hint = f"did you mean `{close[0]}`?" if close else f"keys: {', '.join(sorted(KEYS))}"
-            raise _invalid(where, f"unknown key `{key}`", hint)
+            raise _invalid(where, f"unknown key `{key}`", hint, key=key)
+        if key == "external":
+            if isinstance(value, str) and value.strip():
+                items = [value]
+            elif (
+                isinstance(value, list)
+                and value
+                and all(isinstance(v, str) and v.strip() for v in value)
+            ):
+                items = value
+            else:
+                raise _invalid(
+                    where,
+                    "`external` must be a string or a list of strings",
+                    f"for example: external = {_example('external')}",
+                    key=key,
+                )
+            if not options.external:
+                changes["external"] = tuple(items)
+                used.append(
+                    f'external = "{value}"' if isinstance(value, str) else f"external = {value}"
+                )
+            continue
         if key in LISTS and isinstance(value, list):
             if not value or not all(isinstance(v, str) for v in value):
                 raise _invalid(where, f"`{key}` must be a string or a list of strings",
-                               f'for example: {key} = ["3.11", "3.12"]')  # fmt: skip
+                               f'for example: {key} = ["3.11", "3.12"]', key=key)  # fmt: skip
             more = LISTS[key]
             if getattr(options, field) is None and not getattr(options, more):
                 single_only = (for_check and key == "python") or (
@@ -126,13 +182,16 @@ def apply(options: BuildOptions, *, for_check: bool = False) -> tuple[BuildOptio
                 else ("a string or a list of strings" if key in LISTS else "a string")
             )
             raise _invalid(
-                where, f"`{key}` must be {kind}", f"for example: {key} = {_example(key)}"
+                where,
+                f"`{key}` must be {kind}",
+                f"for example: {key} = {_example(key)}",
+                key=key,
             )
         if key in ("max-size", "split"):  # "30MB", as on the command line
             try:
                 parsed = parse_size(str(value))
             except UsageError as e:
-                raise _invalid(where, str(e), e.hint or "") from None
+                raise _invalid(where, str(e), e.hint or "", key=key) from None
             if getattr(options, field) is None and not (
                 key == "split" and fmt_override is not None and fmt_override != "pyz"
             ):
@@ -140,7 +199,12 @@ def apply(options: BuildOptions, *, for_check: bool = False) -> tuple[BuildOptio
                 used.append(f'{key} = "{value}"')
             continue
         if key == "format" and value not in FORMATS:
-            raise _invalid(where, f"unknown format `{value}`", f"use one of {', '.join(FORMATS)}")
+            raise _invalid(
+                where,
+                f"unknown format `{value}`",
+                f"use one of {', '.join(FORMATS)}",
+                key=key,
+            )
         current = getattr(options, field)
         if field == "strict":
             if value and not current:
@@ -163,4 +227,5 @@ def _example(key: str) -> str:
         "python-platform": '"linux"',
         "max-size": '"30MB"',
         "split": '"100MB"',
+        "external": '["boto3"]',
     }.get(key, '"..."')

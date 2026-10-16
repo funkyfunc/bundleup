@@ -59,3 +59,4 @@ and change only the old one's status line.
 | [0048](0048-an-explicit-cache-is-the-only-cache.md) | An explicit `BUNDLEUP_CACHE` is the only cache folder | Accepted |
 | [0049](0049-zip-format-replaces-lambda.md) | `--format zip` replaces `--format lambda` | Accepted |
 | [0050](0050-consolidate-cli-and-in-process-range-checks.md) | Consolidate CLI flags and check older Pythons' syntax in-process | Accepted |
+| [0051](0051-learnings-from-js-bundlers.md) | Learnings from JavaScript bundlers: `--external`, code frames, dependency chains, and CLI ergonomics | Accepted |

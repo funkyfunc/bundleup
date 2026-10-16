@@ -831,3 +831,6 @@ class Prepared:
     pythons: PythonRange  # the minor versions the bundle runs on (ADR-0030)
     reach: Portability  # whether it runs on any OS and CPU (ADR-0034)
     own: tuple[str, ...] = ()  # a folder app's files, copied in rather than installed (ADR-0041)
+    external: tuple[
+        str, ...
+    ] = ()  # packages the host provides, excluded from the bundle (ADR-0051)

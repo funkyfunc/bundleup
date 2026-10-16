@@ -163,6 +163,13 @@
                   },
                   "native": {
                     "type": "boolean"
+                  },
+                  "required_by": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    },
+                    "description": "Shortest Requires-Dist chain from a direct dependency to this transitive package; empty for the project and direct dependencies (added within version 1, ADR-0051)"
                   }
                 }
               }

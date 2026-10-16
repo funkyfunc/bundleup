@@ -9,7 +9,9 @@ gone in 3.12, `tomllib` arrived in 3.11).
 from __future__ import annotations
 
 import ast
+import re
 import sys
+from collections.abc import Sequence
 from pathlib import Path
 
 # Top-level standard-library modules added and removed in each release, from the "What's new"
@@ -32,6 +34,79 @@ REMOVED: dict[tuple[int, int], set[str]] = {
     },
 }  # fmt: skip
 NEWEST = (3, 14)  # the newest version the tables describe
+
+# Common PyPI distribution names whose top-level import name differs from the package name, used
+# when `--external PKG` tells `check` that the host environment provides `PKG` (ADR-0051).
+EXTERNAL_ALIASES: dict[str, set[str]] = {
+    "attrs": {"attr", "attrs"},
+    "beautifulsoup4": {"bs4"},
+    " gitpython": {"git"},
+    "gitpython": {"git"},
+    "msgpack-python": {"msgpack"},
+    "opencv-contrib-python": {"cv2"},
+    "opencv-python": {"cv2"},
+    "opencv-python-headless": {"cv2"},
+    "pillow": {"PIL"},
+    "protobuf": {"google"},
+    "psycopg2-binary": {"psycopg2"},
+    "pycryptodome": {"Crypto"},
+    "pycryptodomex": {"Cryptodome"},
+    "pyjwt": {"jwt"},
+    "pymysql": {"pymysql"},
+    "pynacl": {"nacl"},
+    "pyopenssl": {"OpenSSL"},
+    "pyserial": {"serial"},
+    "python-dateutil": {"dateutil"},
+    "python-dotenv": {"dotenv"},
+    "python-Levenshtein": {"Levenshtein"},
+    "python-pptx": {"pptx"},
+    "python-docx": {"docx"},
+    "pyusb": {"usb"},
+    "pyyaml": {"yaml"},
+    "pyzmq": {"zmq"},
+    "scikit-image": {"skimage"},
+    "scikit-learn": {"sklearn"},
+}
+
+
+def external_modules(external: Sequence[str]) -> set[str]:
+    """Top-level module names that `--external` distributions provide on the host."""
+    names: set[str] = set()
+    for raw in external:
+        pkg = raw.split("[", 1)[0].strip()
+        if not pkg:
+            continue
+        canon = re.sub(r"[-_.]+", "-", pkg).lower()
+        names.add(canon.replace("-", "_"))
+        names.add(pkg.split(".", 1)[0].replace("-", "_"))
+        names |= EXTERNAL_ALIASES.get(canon, set())
+        names |= EXTERNAL_ALIASES.get(pkg, set())
+    return names
+
+
+def code_frame(path: Path, line: int | None) -> str | None:
+    """A 2-line source snippet (`<line> | <code>` and a `^` underline) for a diagnostic."""
+    if line is None or line < 1:
+        return None
+    try:
+        import tokenize
+
+        with tokenize.open(path) as f:
+            text = f.read().lstrip("\ufeff")
+    except (OSError, SyntaxError, LookupError, UnicodeDecodeError):
+        try:
+            text = path.read_text(encoding="utf-8-sig", errors="replace")
+        except OSError:
+            return None
+    lines = text.splitlines()
+    if line > len(lines):
+        return None
+    raw = lines[line - 1].expandtabs(4).rstrip("\r\n")
+    if not raw.strip():
+        return None
+    caret = len(raw) - len(raw.lstrip(" "))
+    pad = " " * len(str(line))
+    return f"{line} | {raw}\n{pad} | {' ' * caret}^"
 
 
 def stdlib(version: tuple[int, int]) -> set[str] | None:
@@ -69,11 +144,11 @@ CONDITIONAL = (
 OPTIONAL_ERRORS = {None, "ImportError", "ModuleNotFoundError", "Exception", "BaseException"}
 
 
-def imports_in(tree: ast.AST) -> set[str]:
-    """The top-level modules a module's code imports for sure: not relative imports, and not
-    those guarded by `try/except ImportError` or an `if` on TYPE_CHECKING, the platform or the
-    Python version."""
-    names: set[str] = set()
+def imports_in_with_lines(tree: ast.AST) -> dict[str, int]:
+    """The top-level modules a module's code imports for sure -> the first 1-based line number of
+    each: not relative imports, and not those guarded by `try/except ImportError` or an `if` on
+    TYPE_CHECKING, the platform or the Python version."""
+    lines: dict[str, int] = {}
 
     def visit(node: ast.AST, optional: bool) -> None:
         if isinstance(node, ast.Try) or type(node).__name__ == "TryStar":
@@ -91,22 +166,33 @@ def imports_in(tree: ast.AST) -> set[str]:
                 visit(child, True)
             return
         if not optional and isinstance(node, ast.Import):
-            names.update(alias.name.split(".")[0] for alias in node.names)
+            for alias in node.names:
+                lines.setdefault(alias.name.split(".")[0], node.lineno)
         elif not optional and isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            names.add(node.module.split(".")[0])
+            lines.setdefault(node.module.split(".")[0], node.lineno)
         for child in ast.iter_child_nodes(node):
             visit(child, optional)
 
     visit(tree, False)
-    return names
+    return lines
+
+
+def imports_in(tree: ast.AST) -> set[str]:
+    """The top-level modules a module's code imports for sure."""
+    return set(imports_in_with_lines(tree))
+
+
+def imports_with_lines(path: Path) -> dict[str, int]:
+    """What a file imports for sure -> first line number; empty if it doesn't parse."""
+    try:
+        return imports_in_with_lines(ast.parse(path.read_bytes()))
+    except (OSError, SyntaxError, UnicodeDecodeError, ValueError):
+        return {}
 
 
 def imports_of(path: Path) -> set[str]:
     """What a file imports for sure; nothing if it doesn't parse (syntax-error reports that)."""
-    try:
-        return imports_in(ast.parse(path.read_bytes()))
-    except (OSError, SyntaxError, UnicodeDecodeError, ValueError):
-        return set()
+    return set(imports_with_lines(path))
 
 
 def _caught(node: ast.expr | None) -> str | None:

@@ -676,3 +676,238 @@ def test_pass3_hardening_regressions(tmp_path: Path, monkeypatch: pytest.MonkeyP
         assert env is not None and "VIRTUAL_ENV" not in env
         mp.setenv("VIRTUAL_ENV", str(ws_root / ".venv"))
         assert _find_env(ws_member) is None
+
+
+def test_adr0051_js_bundler_learnings(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    private_index: str,
+) -> None:
+    """ADR-0051 learnings from JS bundlers:
+    1. `--external` (CLI, `BuildOptions`, `[tool.bundleup]`, `BUNDLEUP_EXTERNAL`), suppressing
+       `undeclared-import`, stripping from PEP 723 / `requirements.txt` / `pylock.toml`, and setting
+       `EXTERNAL = True` so the `.pyz` runtime defaults `BUNDLEUP_INHERIT_PATH=1`.
+    2. Comma-separated list flags (`--python-platform linux,macos`, `--python 3.11,3.12`,
+       `--external torch,cuda`).
+    3. Muscle-memory CLI hints (`bundleup app.py`, `bundleup dist/app.pyz`, `--platform`,
+       `--target`, `--outfile`, `--entrypoint`, `--externals`, `--onefile`, `--analyze`,
+       `--metafile`).
+    4. 2-line diagnostic code frames on `syntax-error`, `python-range`, `undeclared-import`
+       (including `line`), and `[tool.bundleup]` config errors.
+    5. `check -v` and `check --json` `required_by` dependency chains (`via a → b`) and percentage
+       share of total unpacked size.
+    6. Lock-keyed `uv export` cache (`export_cache_dir()`, `_export_cache_key()`,
+       `clean_cache(build=True)`)."""
+    import subprocess
+    import sys
+    import zipfile
+
+    from bundleup import UsageError, _cache, _check, _cli, _config, _uv, build, check
+    from bundleup._python import PythonRange, Target
+    from bundleup._source import Source
+    from bundleup._verify import record_hash
+
+    # 1. Comma-separated list flags in BuildOptions and CLI
+    opts = BuildOptions(
+        python="3.11,3.12",
+        python_platform="linux,macos",
+        external="torch,cuda,torch",  # type: ignore[arg-type]
+    )
+    assert opts.python == "3.11" and opts.more_pythons == ("3.12",)
+    assert opts.python_platform == "linux" and opts.more_python_platforms == ("macos",)
+    assert opts.external == ("torch", "cuda")
+
+    # 2. Muscle-memory CLI hints
+    assert _cli.main(["app.py"]) == 2
+    assert "did you mean `bundleup build app.py`?" in capsys.readouterr().err
+    assert _cli.main(["dist/app.pyz"]) == 2
+    assert "did you mean `bundleup verify dist/app.pyz`?" in capsys.readouterr().err
+    for bad_flag, expected in [
+        ("--platform=linux", "did you mean `--python-platform`?"),
+        ("--target=3.12", "did you mean `--python`?"),
+        ("--outfile=out.pyz", "did you mean `-o / --output`?"),
+        ("--entrypoint=app:main", "did you mean `-e / --entry`?"),
+        ("--externals=torch", "did you mean `--external`?"),
+        ("--onefile", "did you mean `--format scie`?"),
+        ("--analyze", "try `bundleup check -v`"),
+        ("--metafile", "try `bundleup check --json`"),
+    ]:
+        assert _cli.main(["build", bad_flag]) == 2
+        assert expected in capsys.readouterr().err
+
+    # 3. [tool.bundleup] external configuration + 2-line code frame on config error
+    cfg_dir = tmp_path / "cfg_ext"
+    cfg_dir.mkdir()
+    (cfg_dir / "pyproject.toml").write_text(
+        '[project]\nname = "app"\n\n[tool.bundleup]\nexternal = ["torch", "pyyaml"]\n'
+    )
+    applied, used = _config.apply(BuildOptions(path=cfg_dir))
+    assert applied.external == ("torch", "pyyaml")
+    assert "external = ['torch', 'pyyaml']" in used
+
+    bad_cfg = tmp_path / "bad_cfg"
+    bad_cfg.mkdir()
+    (bad_cfg / "pyproject.toml").write_text(
+        '[project]\nname = "app"\n[tool.bundleup]\nstrict = 1\n'
+    )
+    with pytest.raises(UsageError) as cfg_err:
+        _config.apply(BuildOptions(path=bad_cfg))
+    assert cfg_err.value.detail is not None and "4 | strict = 1" in cfg_err.value.detail
+
+    # 4. --external on PEP 723 script: prunes declared dep (`acme-private`), suppresses
+    # `undeclared-import` for `host-only-mod`, and sets `EXTERNAL = True` in `.pyz` `__main__.py`
+    # so host site-packages remain importable at runtime
+    host_site = tmp_path / "host_site"
+    host_site.mkdir()
+    (host_site / "host_only_mod.py").write_text("GREETING = 'from-host'\n")
+    ext_script = tmp_path / "ext_app.py"
+    ext_script.write_text(
+        private_index
+        + "import host_only_mod\n"
+        + "import undeclared_host_pkg\n"
+        + "print(host_only_mod.GREETING)\n"
+    )
+    rep_without = check(BuildOptions(path=ext_script, external=("acme-private", "host-only-mod")))
+    assert [p.name for p in rep_without.packages] == ["ext-app"]
+    undec = [d for d in rep_without.diagnostics if d.code == "undeclared-import"]
+    assert len(undec) == 1 and undec[0].line == 13
+    assert undec[0].detail is not None and "13 | import undeclared_host_pkg" in undec[0].detail
+
+    # With only host_only_mod imported, strict build succeeds and runs with PYTHONPATH=host_site
+    ext_script.write_text(
+        private_index.replace('"acme-private"', '"acme-private==1.0"')
+        + "import host_only_mod\nprint(host_only_mod.GREETING)\n"
+    )
+    ext_pyz = tmp_path / "ext_app.pyz"
+    res = build(
+        BuildOptions(
+            path=ext_script,
+            output=ext_pyz,
+            external=("acme-private", "host-only-mod"),
+            strict=True,
+        )
+    )
+    assert res.packages == 0  # acme-private was pruned from the bundle
+    with zipfile.ZipFile(res.output) as zf:
+        main_src = zf.read("__main__.py").decode("utf-8")
+    assert "EXTERNAL = True" in main_src
+    env = {"PYTHONPATH": str(host_site), "BUNDLEUP_CACHE": str(tmp_path / "cache"), "PATH": ""}
+    out = subprocess.check_output([sys.executable, str(res.output)], text=True, env=env)
+    assert out.strip() == "from-host"
+
+    # Also test _uv._strip_external and from_pylock with external
+    pylock_file = tmp_path / "pylock.toml"
+    pylock_file.write_text(
+        'lock-version = "1.0"\n'
+        '[[packages]]\nname = "torch"\nversion = "2.2.0"\n'
+        '[[packages.wheels]]\nurl = "https://example.com/torch-2.2.0-py3-none-any.whl"\n'
+        '[[packages]]\nname = "six"\nversion = "1.16.0"\n'
+        '[[packages.wheels]]\nurl = "https://example.com/six-1.16.0-py3-none-any.whl"\n'
+    )
+    stripped_text = _uv._strip_external(pylock_file.read_text(), ("torch",))
+    assert 'name = "torch"' not in stripped_text and 'name = "six"' in stripped_text
+
+    target = Target(
+        executable=sys.executable,
+        version=(3, 12),
+        full_version="3.12.0",
+        platform="linux",
+        machine="x86_64",
+        abiflags=None,
+        implementation="cpython",
+        cache_tag="cpython-312",
+        markers={},
+    )
+    pylock_src = Source(
+        path=tmp_path,
+        name="app",
+        requires_python=None,
+        is_script=False,
+        pep723=False,
+        pylock=pylock_file,
+        declared=None,
+    )
+    work_stage = tmp_path / "work"
+    work_stage.mkdir()
+    _, check_lock = _uv.from_pylock(pylock_src, work_stage, external=("torch",))
+    pylock_reqs = check_lock.read_text()
+    assert 'name = "torch"' not in pylock_reqs and 'name = "six"' in pylock_reqs
+
+    # 5. PackageSize.required_by dependency chains and check -v percentage + via output
+    site = tmp_path / "chain_site"
+    for pkg_name, ver, deps, body in [
+        ("app", "0.1.0", ["rich>=13.0"], "x = 1\n" * 10),
+        ("rich", "13.7.0", ["markdown-it-py>=2.2"], "x = 1\n" * 40),
+        ("markdown_it_py", "3.0.0", ["mdurl~=0.1"], "x = 1\n" * 30),
+        ("mdurl", "0.1.2", [], "x = 1\n" * 20),
+    ]:
+        dinfo = site / f"{pkg_name}-{ver}.dist-info"
+        dinfo.mkdir(parents=True)
+        req_lines = "".join(f"Requires-Dist: {d}\n" for d in deps)
+        meta_name = pkg_name.replace("_", "-")
+        (dinfo / "METADATA").write_text(
+            f"Metadata-Version: 2.1\nName: {meta_name}\nVersion: {ver}\n{req_lines}"
+        )
+        (dinfo / "WHEEL").write_text("Wheel-Version: 1.0\nTag: py3-none-any\n")
+        mod_file = f"{pkg_name}.py"
+        (site / mod_file).write_text(body)
+        h = record_hash(body.encode())
+        (dinfo / "RECORD").write_text(f"{mod_file},{h},{len(body)}\n")
+    owned = _check.owners(site, project="app")
+    sizes = _check.package_sizes(site, owned, project="app")
+    by_name = {p.name: p for p in sizes}
+    assert by_name["app"].required_by == ()
+    assert by_name["rich"].required_by == ()
+    assert by_name["markdown-it-py"].required_by == ("rich",)
+    assert by_name["mdurl"].required_by == ("rich", "markdown-it-py")
+
+    import argparse
+
+    from bundleup._term import Style
+
+    rep = _check.CheckReport(
+        name="app",
+        version="0.1.0",
+        target=target,
+        native=False,
+        packages=sizes,
+        diagnostics=[],
+        duration_s=0.1,
+    )
+    lines = _cli._check_lines(rep, argparse.Namespace(verbose=1), Style(sys.stderr, "never"))
+    joined = "\n".join(lines)
+    assert "%" in joined
+    assert "via rich" in joined
+    assert "medium" not in joined
+
+    # Also check python-range code frame
+    from bundleup import _bytecode
+
+    (site / "app.py").write_text("match 1:\n    case 1:\n        pass\n")
+    pyc = site / _bytecode.pyc_path("app.py", target.cache_tag)
+    pyc.parent.mkdir(parents=True, exist_ok=True)
+    pyc.write_bytes(b"")
+    _, range_diags = _check.oldest_python(
+        site,
+        project="app",
+        script=None,
+        pythons=PythonRange((3, 9), None),
+        target=target,
+        interpreters={(3, 9): None},
+        run=lambda cmd: "",
+    )
+    assert (
+        range_diags[0].detail is not None
+        and "pass" in range_diags[0].detail
+        and "^" in range_diags[0].detail
+    )
+
+    # 6. Lock-keyed uv export cache and clean_cache(build=True)
+    monkeypatch.setenv("BUNDLEUP_CACHE", str(tmp_path / "bcache"))
+    exp_dir = _uv.export_cache_dir()
+    exp_dir.mkdir(parents=True, exist_ok=True)
+    cached_entry = exp_dir / "deadbeef.txt"
+    cached_entry.write_text("six==1.16.0\n")
+    clean_rep = _cache.clean_cache(build=True)
+    assert exp_dir in clean_rep.removed and not cached_entry.exists()

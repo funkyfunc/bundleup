@@ -52,6 +52,9 @@ SHA256 = {}  # type: dict[str, str]
 # `--format py` (ADR-0046): this file is a plain .py, and what a .pyz would hold (the members
 # above and the manifest) is a zip in base64 comment lines at its end.
 EMBEDDED = False
+# `--external` (ADR-0051): at least one dependency is provided by the host Python, so keep the
+# host's site-packages on sys.path after the bundle's.
+EXTERNAL = False
 # --- end config ---
 
 # The bundle file: the .pyz this runs from (as its __main__.py), or this .py itself. A .py piped
@@ -800,6 +803,8 @@ def _activate(site: str) -> None:
         runtime = __import__("_bundleup_runtime")  # type: Any
     finally:
         del sys.path[0]
+    if EXTERNAL:
+        os.environ.setdefault("BUNDLEUP_INHERIT_PATH", "1")
     runtime.activate(site, PTH)
 
 

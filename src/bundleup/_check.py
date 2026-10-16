@@ -70,6 +70,9 @@ class PackageSize:
     version: str | None  # None for a PEP 723 script
     size_bytes: int  # its files once unpacked, compiled bytecode included
     native: bool  # contains compiled code, built for one platform
+    required_by: tuple[
+        str, ...
+    ] = ()  # transitive dependency chain from a direct dependency (ADR-0051)
 
     def to_json_dict(self) -> dict[str, object]:
         return {
@@ -77,6 +80,7 @@ class PackageSize:
             "version": self.version,
             "size_bytes": self.size_bytes,
             "native": self.native,
+            "required_by": list(self.required_by),
         }
 
 
@@ -172,14 +176,73 @@ def _source_of(pyc: str) -> str:
     return f"{head}{stem}.py"
 
 
-def package_sizes(site: Path, owner: dict[str, _Owner]) -> list[PackageSize]:
+def _dependency_chains(site: Path, project: str, installed: set[str]) -> dict[str, tuple[str, ...]]:
+    """For each transitive distribution in `installed`, the shortest `Requires-Dist` chain from a
+    direct dependency (`("rich", "markdown-it-py")` for `mdurl`); `()` for the project itself and
+    its direct dependencies."""
+    from collections import deque
+
+    from packaging.requirements import InvalidRequirement, Requirement
+    from packaging.utils import canonicalize_name
+
+    canon_proj = canonicalize_name(project) if project else ""
+    deps: dict[str, list[str]] = {}
+    for dist in _verify.installed_distributions(site):
+        meta = site / dist.dist_info / "METADATA"
+        if not meta.is_file():
+            continue
+        reqs: set[str] = set()
+        for line in meta.read_text(encoding="utf-8", errors="replace").splitlines():
+            if not line.strip():
+                break
+            if line.lower().startswith("requires-dist:"):
+                spec = line.split(":", 1)[1].strip()
+                try:
+                    req = Requirement(spec)
+                except InvalidRequirement:
+                    continue
+                if req.marker and "extra" in str(req.marker):
+                    continue
+                target_name = canonicalize_name(req.name)
+                if target_name in installed and target_name != dist.name:
+                    reqs.add(target_name)
+        deps[dist.name] = sorted(reqs)
+    third_party = installed - ({canon_proj} if canon_proj else set())
+    if canon_proj and canon_proj in deps:
+        direct = set(deps[canon_proj]) & third_party
+    else:
+        required_by_others = {
+            target_pkg
+            for src_pkg, targets in deps.items()
+            if src_pkg in third_party
+            for target_pkg in targets
+        }
+        direct = third_party - required_by_others
+    chains: dict[str, tuple[str, ...]] = {pkg: () for pkg in direct}
+    if canon_proj:
+        chains[canon_proj] = ()
+    queue: deque[str] = deque(sorted(direct))
+    while queue:
+        cur = queue.popleft()
+        for nxt in deps.get(cur, ()):
+            if nxt not in chains and nxt in third_party:
+                chains[nxt] = (*chains[cur], cur)
+                queue.append(nxt)
+    return chains
+
+
+def package_sizes(site: Path, owner: dict[str, _Owner], *, project: str = "") -> list[PackageSize]:
     """Unpacked size of each distribution, largest first. Bytecode counts towards its source's."""
     sizes: dict[_Owner, int] = defaultdict(int)
     for rel, path in _bytecode.walk_files(site):
         who = owner.get(rel) or (owner.get(_source_of(rel)) if rel.endswith(".pyc") else None)
         if who:
             sizes[who] += os.lstat(path).st_size
-    found = [PackageSize(o.name, o.version, size, o.native) for o, size in sizes.items()]
+    chains = _dependency_chains(site, project, {o.name for o in sizes})
+    found = [
+        PackageSize(o.name, o.version, size, o.native, chains.get(o.name, ()))
+        for o, size in sizes.items()
+    ]
     return sorted(found, key=lambda p: (-p.size_bytes, p.name))
 
 
@@ -274,7 +337,7 @@ def oldest_python(
         return pythons, []
     # Claim only from the oldest version that compiled, or the target's.
     narrowed = PythonRange(verified or target.version, pythons.max)
-    path, line, message = failure
+    path, line, message = failure[:3]
     lineno = line if isinstance(line, int) and not isinstance(line, bool) and line >= 1 else None
     where = f"{str(path).removeprefix(_verify.SCRIPT_DIR + '/')}{f':{lineno}' if lineno else ''}"
     return narrowed, [
@@ -284,6 +347,7 @@ def oldest_python(
             f"{where} doesn't compile on Python {_v(failed_on)} ({message}), which "
             f"requires-python allows, so the bundle runs on Python {narrowed} only",
             hint="raise requires-python to the oldest Python the code works on",
+            detail=_imports.code_frame(site / str(path), lineno),
             package=project,
             file=str(path),
             line=lineno,
@@ -321,7 +385,8 @@ def syntax_errors(
     diags = []
     theirs: dict[_Owner, list[str]] = defaultdict(list)
     first: dict[_Owner, tuple[str, int | None]] = {}
-    for path, line, message in found:
+    for item in found:
+        path, line, message = item[:3]
         assert isinstance(path, str) and isinstance(message, str)
         line = line if isinstance(line, int) and not isinstance(line, bool) and line >= 1 else None
         who = owner.get(path) or _Owner(project, None, False)
@@ -334,6 +399,7 @@ def syntax_errors(
                     f"{where} doesn't compile on {python}: {message}",
                     hint=f"if it needs a newer Python, build for one with --python and raise "
                     f"requires-python so builds for {python} are refused; otherwise fix it",
+                    detail=_imports.code_frame(site / path, line),
                     package=project,
                     file=path,
                     line=line,
@@ -404,11 +470,15 @@ def analyze(
     diags = syntax_errors(site, owner, project=project, target=target, run=run)
     diags += data_files(site, owner)
     diags.sort(key=lambda d: d.level != "error")  # stable: errors first, then in found order
-    return diags, package_sizes(site, owner)
+    return diags, package_sizes(site, owner, project=project)
 
 
 def undeclared_imports(
-    code: list[tuple[str, set[str], set[str]]], provided: set[str], stdlib: set[str] | None
+    code: Sequence[tuple[str, set[str] | dict[str, int], set[str]]],
+    provided: set[str],
+    stdlib: set[str] | None,
+    *,
+    paths: dict[str, Path] | None = None,
 ) -> list[Diagnostic]:
     """Modules the bundled code imports that neither the payload (`provided`) nor the target's
     standard library has: the most common way a bundle fails at run time, since it can't see
@@ -420,8 +490,12 @@ def undeclared_imports(
     have = provided | stdlib | {"__future__", "__main__"}
     diags = []
     for shown, imported, local in code:
-        missing = sorted(imported - have - local)
+        missing = sorted(set(imported) - have - local)
         if missing:
+            lines = imported if isinstance(imported, dict) else {}
+            line = min((lines[m] for m in missing if m in lines), default=None)
+            source_path = (paths or {}).get(shown)
+            frame = _imports.code_frame(source_path, line) if source_path else None
             diags.append(
                 Diagnostic(
                     "undeclared-import",
@@ -430,7 +504,9 @@ def undeclared_imports(
                     f"library has {'it' if len(missing) == 1 else 'them'}",
                     hint="add the packages that provide them to the dependencies (an import in "
                     "`try: ... except ImportError` counts as optional)",
+                    detail=frame,
                     file=shown,
+                    line=line,
                 )
             )
     return diags

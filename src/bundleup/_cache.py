@@ -173,6 +173,7 @@ def clean_cache(
     if build:  # bytecode, Pythons installed to check code (ADR-0035), executables' parts (0047)
         builds = [
             _bytecode.cache_dir(),
+            _bytecode.cache_dir().parent / "exports",
             _bytecode.cache_dir().parent / "pythons",
             _bytecode.cache_dir().parent / "exe",
         ]

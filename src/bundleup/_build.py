@@ -108,24 +108,54 @@ class BuildOptions:
     # [python, *more_pythons] and [python_platform, *more_python_platforms] (ADR-0038).
     more_pythons: tuple[str, ...] = ()
     more_python_platforms: tuple[str, ...] = ()
+    # Packages the host Python already provides (`--external`, ADR-0051): left out of the bundle,
+    # and the runtime keeps the host's site-packages on sys.path after the bundle's.
+    external: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         if isinstance(self.path, str):
             object.__setattr__(self, "path", Path(self.path))
         if isinstance(self.output, str):
             object.__setattr__(self, "output", Path(self.output))
-        if isinstance(self.python, Sequence) and not isinstance(self.python, (str, bytes)):
-            items = list(self.python)
-            object.__setattr__(self, "python", items[0] if items else None)
-            object.__setattr__(self, "more_pythons", (*items[1:], *self.more_pythons))
-        if isinstance(self.python_platform, Sequence) and not isinstance(
-            self.python_platform, (str, bytes)
-        ):
-            items = list(self.python_platform)
-            object.__setattr__(self, "python_platform", items[0] if items else None)
+        if self.python is not None:
+            py_raw = [self.python] if isinstance(self.python, str) else list(self.python)
+            py_items = _split_items([*py_raw, *self.more_pythons], check_path=True)
+            object.__setattr__(self, "python", py_items[0] if py_items else None)
+            object.__setattr__(self, "more_pythons", tuple(py_items[1:]))
+        elif self.more_pythons:
             object.__setattr__(
-                self, "more_python_platforms", (*items[1:], *self.more_python_platforms)
+                self, "more_pythons", tuple(_split_items(self.more_pythons, check_path=True))
             )
+        if self.python_platform is not None:
+            plat_raw = (
+                [self.python_platform]
+                if isinstance(self.python_platform, str)
+                else list(self.python_platform)
+            )
+            plat_items = _split_items([*plat_raw, *self.more_python_platforms])
+            object.__setattr__(self, "python_platform", plat_items[0] if plat_items else None)
+            object.__setattr__(self, "more_python_platforms", tuple(plat_items[1:]))
+        elif self.more_python_platforms:
+            object.__setattr__(
+                self, "more_python_platforms", tuple(_split_items(self.more_python_platforms))
+            )
+        ext_raw = [self.external] if isinstance(self.external, str) else list(self.external)
+        object.__setattr__(self, "external", tuple(_split_items(ext_raw, dedup=True)))
+
+
+def _split_items(
+    items: Sequence[str], *, check_path: bool = False, dedup: bool = False
+) -> list[str]:
+    out: list[str] = []
+    for raw in items:
+        if "," in raw and not (check_path and Path(raw).exists()):
+            parts = [p.strip() for p in raw.split(",") if p.strip()]
+        else:
+            parts = [raw.strip()] if raw.strip() else []
+        for p in parts:
+            if not dedup or p not in out:
+                out.append(p)
+    return out
 
 
 @dataclass(frozen=True)
@@ -678,7 +708,15 @@ def _prepare(
     analyze."""
     steps.start("python")
     uv = find_uv()
-    source = load_source(options.path)
+    source = load_source(options.path, external=options.external)
+    if options.external:
+        me = canonicalize_name(source.name)
+        for ext in options.external:
+            if canonicalize_name(ext.split("[", 1)[0].strip()) == me:
+                raise UsageError(
+                    f"--external {ext}: can't exclude {source.name} itself from the bundle",
+                    hint="--external is for dependencies that the host Python already provides",
+                )
     target = find_python(
         uv,
         source,
@@ -697,6 +735,7 @@ def _prepare(
         python=min(floor, target.version) if floor else target.version,
         stage=stage,
         progress=progress,
+        external=options.external,
     )
     pylock = exported.pylock
     coverage = _wheel_coverage(pylock, target)  # before installing: a precise error, early
@@ -753,16 +792,19 @@ def _prepare(
             )
         )
     code = _own_code(source, site, script=script, own=own, entry=entry)
-    provided = _imports.provided_by(site)
+    provided = _imports.provided_by(site) | _imports.external_modules(options.external)
     imported = [
         (
             shown,
-            _imports.imports_of(path),
+            _imports.imports_with_lines(path),
             _imports.top_level_modules(path.parent) if beside else set(),
         )
         for shown, path, beside in code
     ]
-    diagnostics += _check.undeclared_imports(imported, provided, _imports.stdlib(target.version))
+    code_paths = {shown: path for shown, path, _beside in code}
+    diagnostics += _check.undeclared_imports(
+        imported, provided, _imports.stdlib(target.version), paths=code_paths
+    )
     diagnostics += _format_diagnostics(fmt, site)
     diagnostics += coverage
     diagnostics += _unlocked(source, pinned=exported.pinned)
@@ -777,7 +819,7 @@ def _prepare(
         run=run_python,
     )
     diagnostics += narrowed
-    every_import = set().union(*(names for _shown, names, _local in imported))
+    every_import: set[str] = set().union(*(set(names) for _shown, names, _local in imported))
     pythons, by_stdlib = _check.stdlib_range(pythons, target.version, every_import, provided)
     diagnostics += by_stdlib
     reach = portability(pylock, target=target, pythons=pythons, native=native)
@@ -797,6 +839,7 @@ def _prepare(
         pythons=pythons,
         reach=reach,
         own=tuple(own),
+        external=options.external,
     )
 
 

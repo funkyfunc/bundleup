@@ -11,6 +11,7 @@ options:
   --python VERSION      a version (3.12) or a path; repeatable; default: uv's [env: BUNDLEUP_PYTHON]
   --entry NAME          a script name, module:function, module or python [env: BUNDLEUP_ENTRY]
   --python-platform OS  an OS/CPU, uv's names (linux); repeatable [env: BUNDLEUP_PYTHON_PLATFORM]
+  --external PKG        package the host provides, left out; repeatable [env: BUNDLEUP_EXTERNAL]
   --locked              fail if the lock is out of date (as in uv; the default when there is one)
   --frozen              bundle the lock as it is, without checking it (as in uv)
   --strict              warnings fail too (errors always do)

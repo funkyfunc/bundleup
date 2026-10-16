@@ -4,19 +4,20 @@ from __future__ import annotations
 
 import contextlib
 import functools
+import hashlib
 import json
 import os
 import re
 import shutil
 import subprocess
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
 from packaging.utils import canonicalize_name
 
+from . import _bytecode, _verify
 from . import _toml as tomllib
-from . import _verify
 from ._errors import (
     LockfileOutdatedError,
     NoCompatibleWheelError,
@@ -71,7 +72,32 @@ def find_uv() -> str:
     )
 
 
-def from_pylock(source: Source, stage: Path) -> tuple[list[list[str]], Path]:
+def _strip_external(text: str, external: Sequence[str]) -> str:
+    """Remove `[[packages]]` entries whose canonical name is in `external` from a pylock.toml."""
+    if not external:
+        return text
+    excluded = {canonicalize_name(pkg.split("[", 1)[0].strip()) for pkg in external if pkg.strip()}
+    if not excluded or "[[packages]]" not in text:
+        return text
+    parts = re.split(r"(?m)(?=^\[\[packages\]\]\s*$)", text)
+    head, kept = parts[0], []
+    for block in parts[1:]:
+        try:
+            parsed = tomllib.loads(block).get("packages", [])
+            name = canonicalize_name(str(parsed[0].get("name", ""))) if parsed else ""
+        except tomllib.TOMLDecodeError:
+            name = ""
+        if name not in excluded:
+            kept.append(block)
+    if not kept:
+        head = re.sub(r"(?m)^packages = \[\]\s*$", "", head).rstrip() + "\npackages = []\n"
+        return head
+    return head + "".join(kept)
+
+
+def from_pylock(
+    source: Source, stage: Path, *, external: Sequence[str] = ()
+) -> tuple[list[list[str]], Path]:
     """Install arguments for a project's own pylock.toml, and the lock the check compares the
     bundle with. uv installs the file in place (its relative paths are relative to it). A lock
     from another tool may not list the project itself; then the project is installed alongside
@@ -98,8 +124,17 @@ def from_pylock(source: Source, stage: Path) -> tuple[list[list[str]], Path]:
             "bundle back at this directory",
             hint="export the lock without editable installs (uv: --no-editable)",
         )
-    installs = [["-r", str(source.pylock)]] if packages else []  # uv rejects an empty lock
-    check = stage / "pylock.toml"
+    check = stage.resolve() / "pylock.toml"
+    if external:
+        text = _strip_external(text, external)
+        packages = tomllib.loads(text).get("packages", [])
+        check.write_text(text, encoding="utf-8")
+        relocate_paths(check, source.pylock.parent)
+        text = check.read_text(encoding="utf-8")
+        lock_for_install = check
+    else:
+        lock_for_install = source.pylock
+    installs = [["-r", str(lock_for_install)]] if packages else []  # uv rejects an empty lock
     if not mine:
         installs.append([str(source.path)])
         text = with_project(text, source.name)
@@ -134,6 +169,43 @@ def has_lock(source: Source) -> bool:
     return find_uv_lock(source.path) is not None
 
 
+def export_cache_dir() -> Path:
+    """Where locked `uv export` outputs (pre-relocation) are cached between builds (ADR-0051)."""
+    return _bytecode.cache_dir().parent / "exports"
+
+
+def _export_cache_key(
+    uv: str, source: Source, selection: list[str], mode: str | None
+) -> str | None:
+    """Cache key for `uv export` when a single-project or script lockfile is present."""
+    if mode not in ("locked", "frozen"):
+        return None
+    try:
+        if source.is_script:
+            lock_path = source.path.with_name(source.path.name + ".lock")
+            if not lock_path.is_file():
+                return None
+            manifest_bytes = source.path.read_bytes()
+            lock_bytes = lock_path.read_bytes()
+        else:
+            lock = find_uv_lock(source.path)
+            pyproject = source.path / "pyproject.toml"
+            if lock is None or lock.parent != source.path or not pyproject.is_file():
+                return None
+            manifest_bytes = pyproject.read_bytes()
+            if b"workspace" in manifest_bytes or b"dynamic" in manifest_bytes:
+                return None
+            lock_bytes = lock.read_bytes()
+        uv_mtime = str(os.stat(uv).st_mtime_ns) if os.path.exists(uv) else uv
+    except OSError:
+        return None
+    digest = hashlib.sha256()
+    for part in (uv, uv_mtime, str(source.workdir), *selection):
+        digest.update(part.encode("utf-8", "replace") + b"\0")
+    digest.update(manifest_bytes + b"\0" + lock_bytes)
+    return digest.hexdigest()[:32]
+
+
 @dataclass(frozen=True)
 class Exported:
     """What to install (`uv pip install` argument lists, one call each) and the pylock.toml the
@@ -153,6 +225,7 @@ def export(
     python: tuple[int, int],
     stage: Path,
     progress: Progress,
+    external: Sequence[str] = (),
 ) -> Exported:
     """What to install, as `uv pip install` arguments, and the pylock.toml (PEP 751) the
     lock-vs-bundle check reads. From uv.lock: exported as a pylock.toml, which names each
@@ -160,14 +233,16 @@ def export(
     exactly the locked files from wherever they were locked (a company index too), never a
     same-named package from PyPI. From a project's own pylock.toml: that file (ADR-0026)."""
     if source.pylock:
-        return Exported(*from_pylock(source, stage))
+        return Exported(*from_pylock(source, stage, external=external))
     if not (source.is_script and source.pep723) and not source.locked:
         # Only a requirements.txt (or an input with no dependencies) can turn out to pin
         # everything; an unlocked project can't, so --locked refuses it before resolving anything.
         can_pin = source.declared is None or source.declared.suffix == ".txt"
         exported = None
         if can_pin or lock_mode != "locked":
-            exported = resolve(uv, source, python=python, stage=stage, progress=progress)
+            exported = resolve(
+                uv, source, python=python, stage=stage, progress=progress, external=external
+            )
         if exported is None or (lock_mode == "locked" and not exported.pinned):
             raise NoLockfileError(
                 f"{source.path.name} has no lockfile, and --locked asks for one",
@@ -181,6 +256,10 @@ def export(
     selection = (
         ["--script", str(source.path)] if source.is_script else ["--no-dev", "--no-editable"]
     )
+    for pkg in external:
+        clean = canonicalize_name(pkg.split("[", 1)[0].strip())
+        if clean:
+            selection.extend(["--prune", clean])
     # A lock is checked against pyproject.toml / the script by default: uv would otherwise
     # re-lock a stale one, rewriting uv.lock and bundling versions nobody reviewed (ADR-0033).
     # --frozen uses it as is. A script without a lock has nothing to check (uv refuses --locked).
@@ -188,22 +267,51 @@ def export(
     mode = (lock_mode or "locked") if locked_file else (lock_mode if not source.is_script else None)
     if mode:
         selection.append(f"--{mode}")
-    command = [uv, "export", "--quiet", *selection, "--format", "pylock.toml", "-o", str(pylock)]
-    try:
-        run(command, cwd=source.workdir, what="uv export", progress=progress)
-    except UvError as e:
-        if mode == "locked" and "needs to be updated" in (e.detail or ""):
-            what = f"{source.path.name}.lock" if source.is_script else "uv.lock"
-            fix = f"uv lock --script {source.path.name}" if source.is_script else "uv lock"
-            against = "the script" if source.is_script else "pyproject.toml"
-            raise LockfileOutdatedError(
-                f"{what} is out of date with {against}",
-                hint=f"run `{fix}`, then build again (or --frozen bundles the lock as it is)",
-                detail=e.detail,
-            ) from None
-        raise
+    cache_key = _export_cache_key(uv, source, selection, mode) if locked_file else None
+    cached = export_cache_dir() / f"{cache_key}.toml" if cache_key else None
+    if cached is not None and cached.is_file():
+        shutil.copyfile(cached, pylock)
+    else:
+        command = [
+            uv,
+            "export",
+            "--quiet",
+            *selection,
+            "--format",
+            "pylock.toml",
+            "-o",
+            str(pylock),
+        ]
+        try:
+            run(command, cwd=source.workdir, what="uv export", progress=progress)
+        except UvError as e:
+            if mode == "locked" and "needs to be updated" in (e.detail or ""):
+                what = f"{source.path.name}.lock" if source.is_script else "uv.lock"
+                fix = f"uv lock --script {source.path.name}" if source.is_script else "uv lock"
+                against = "the script" if source.is_script else "pyproject.toml"
+                raise LockfileOutdatedError(
+                    f"{what} is out of date with {against}",
+                    hint=f"run `{fix}`, then build again (or --frozen bundles the lock as it is)",
+                    detail=e.detail,
+                ) from None
+            raise
+        if cached is not None:
+            tmp = cached.with_name(f".{cached.name}.{os.getpid()}.tmp")
+            try:
+                cached.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(pylock, tmp)
+                tmp.replace(cached)
+            except OSError:
+                pass
+            finally:
+                with contextlib.suppress(OSError):
+                    tmp.unlink(missing_ok=True)
     lock = None if source.is_script else find_uv_lock(source.path)
     relocate_paths(pylock, lock.parent if lock else source.workdir)
+    if external:
+        pylock.write_text(
+            _strip_external(pylock.read_text(encoding="utf-8"), external), encoding="utf-8"
+        )
     pinned = mode is not None or (source.is_script and _script_pinned(source, pylock))
     if lock_mode == "locked" and not pinned:
         raise NoLockfileError(
@@ -211,7 +319,9 @@ def export(
             hint=f"run `uv lock --script {source.path.name}`, pin every package in "
             "`dependencies` with ==, or build without --locked",
         )
-    return Exported([["-r", str(pylock), *_refresh_local(pylock)]], pylock, pinned=pinned)
+    has_pkgs = "[[packages]]" in pylock.read_text(encoding="utf-8")
+    installs = [["-r", str(pylock), *_refresh_local(pylock)]] if has_pkgs else []
+    return Exported(installs, pylock, pinned=pinned)
 
 
 EMPTY_PYLOCK = 'lock-version = "1.0"\ncreated-by = "bundleup"\npackages = []\n'
@@ -224,6 +334,7 @@ def resolve(
     python: tuple[int, int],
     stage: Path,
     progress: Progress,
+    external: Sequence[str] = (),
 ) -> Exported:
     """Without a lock (ADR-0041): resolve what `source.declared` lists (a requirements.txt, or a
     project's pyproject.toml, setup.py or setup.cfg) for every platform at once, as uv.lock
@@ -243,7 +354,8 @@ def resolve(
     with untouched(source):  # reading a setup.py project's metadata builds it
         run(cmd, cwd=declared.parent, what="uv pip compile", progress=progress)
     relocate_paths(resolved, declared.parent)
-    text = resolved.read_text(encoding="utf-8")
+    text = _strip_external(resolved.read_text(encoding="utf-8"), external)
+    resolved.write_text(text, encoding="utf-8")
     installs: list[list[str]] = [["-r", str(resolved)]] if "[[packages]]" in text else []
     pinned = False
     if declared.name.endswith(".txt"):
@@ -252,7 +364,7 @@ def resolve(
             canonicalize_name(str(p["name"])) for p in tomllib.loads(text).get("packages", [])
         }
         pinned = pins is not None and compiled <= set(pins)
-        if pinned and hashed:
+        if pinned and hashed and not external:
             # Every line pinned and hashed, nothing missing: install from the file itself,
             # which makes uv check the hashes it lists.
             installs = [["-r", str(declared)]]

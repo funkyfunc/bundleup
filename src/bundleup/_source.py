@@ -4,6 +4,7 @@ its dependencies: a lockfile, or, without one, what declares them (ADR-0041)."""
 from __future__ import annotations
 
 import re
+from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,7 @@ from . import _toml as tomllib
 from . import _verify
 from ._errors import ProjectError
 from ._formats import LOADED, Format
-from ._imports import imports_of, stdlib_ever, top_level_modules
+from ._imports import external_modules, imports_of, stdlib_ever, top_level_modules
 
 PEP723 = re.compile(r"(?m)^# /// (?P<type>[a-zA-Z0-9-]+)$\s(?P<content>(^#(| .*)$\s)+)^# ///$")
 
@@ -47,11 +48,11 @@ class Source:
         return not self.is_script and not self.app and self.declared is None
 
 
-def load_source(path: Path) -> Source:
+def load_source(path: Path, *, external: Sequence[str] = ()) -> Source:
     """Read what's being bundled. Raises ProjectError if it's none of the things bundleup takes."""
     path = path.resolve()
     if path.is_file() and path.suffix == ".py":
-        return _load_script(path)
+        return _load_script(path, external=external)
     if not path.is_dir():
         raise ProjectError(
             f"{path} is not a project directory or a .py script",
@@ -67,7 +68,11 @@ def load_source(path: Path) -> Source:
         return Source(path, _legacy_name(path), None, is_script=False, declared=legacy)
     requirements = path / "requirements.txt"
     if requirements.is_file() or any((path / n).is_file() for n in APP_MAINS):
-        undeclared = [] if requirements.is_file() else third_party_imports(path, local=path)
+        undeclared = (
+            []
+            if requirements.is_file()
+            else third_party_imports(path, local=path, external=external)
+        )
         if undeclared:
             raise ProjectError(
                 f"{path.name} imports {_which(undeclared)} in the standard library, and has "
@@ -100,7 +105,7 @@ def read_python_text(path: Path) -> str:
         return path.read_text(encoding="utf-8-sig", errors="replace")
 
 
-def _load_script(path: Path) -> Source:
+def _load_script(path: Path, *, external: Sequence[str] = ()) -> Source:
     try:
         text = read_python_text(path)
     except OSError as e:
@@ -112,7 +117,7 @@ def _load_script(path: Path) -> Source:
     requirements = path.with_name("requirements.txt")
     if requirements.is_file():
         return Source(path, path.stem, None, is_script=True, declared=requirements, pep723=False)
-    undeclared = third_party_imports(path, local=path.parent)
+    undeclared = third_party_imports(path, local=path.parent, external=external)
     if undeclared:
         name = path.name
         raise ProjectError(
@@ -181,7 +186,7 @@ def _legacy_name(path: Path) -> str:
     return safe_name(path.name)
 
 
-def third_party_imports(path: Path, *, local: Path) -> list[str]:
+def third_party_imports(path: Path, *, local: Path, external: Sequence[str] = ()) -> list[str]:
     """Top-level modules a script (or every .py in a folder) imports for sure that are neither
     in any version's standard library nor beside it. Empty when this Python can't tell (3.9 has
     no sys.stdlib_module_names)."""
@@ -194,7 +199,7 @@ def third_party_imports(path: Path, *, local: Path) -> list[str]:
     for f in files:
         beside = neighbours if f.parent == local else (neighbours | top_level_modules(f.parent))
         found |= imports_of(f) - beside
-    return sorted(found - ever - {"__future__", "__main__"})
+    return sorted(found - ever - external_modules(external) - {"__future__", "__main__"})
 
 
 def _which(names: list[str]) -> str:

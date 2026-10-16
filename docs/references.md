@@ -35,6 +35,11 @@ licenses checked 2026-10-04.
 | [astral-sh/uv](https://github.com/astral-sh/uv), [astral-sh/ruff](https://github.com/astral-sh/ruff) | error messages, `--help` output | The experience we want to match: `error:` / `hint:` messages, fast, quiet defaults | MIT / Apache-2.0 |
 | [pypa/build](https://github.com/pypa/build) | `src/build/__main__.py` vs `src/build/__init__.py` | A tool that is both a library and a CLI, which the roadmap's Python API needs | MIT |
 | [pypa/pipx](https://github.com/pypa/pipx) | `src/pipx/main.py` | A well-liked Python CLI that manages environments for users | MIT |
+| [evanw/esbuild](https://github.com/evanw/esbuild) (`docs/references/esbuild`) | `pkg/api/api.go`, `pkg/cli/cli_impl.go`, `internal/logger/` | Orthogonal CLI/API flags (`--external`), muscle-memory flag hints, code-frame diagnostics, Scan/Link pipeline ([synthesis](findings/2026-10-15-js-bundlers-synthesis.md), [ADR-0051](adr/0051-learnings-from-js-bundlers.md)) | MIT |
+| [egoist/tsup](https://github.com/egoist/tsup) (`docs/references/tsup`) | `src/options.ts`, `src/index.ts`, `src/esbuild/external.ts` | Zero-config CLI/package bundling from project metadata, shebang preservation, comma-separated list flags | MIT |
+| [vercel/ncc](https://github.com/vercel/ncc) (`docs/references/ncc`) | `src/index.js`, `src/cli.js` | Single-file CLI/serverless bundling ("gcc-style"), `--external`, size summaries | MIT |
+| [parcel-bundler/parcel](https://github.com/parcel-bundler/parcel) (`docs/references/parcel`) | `packages/core/diagnostic/` | Structured diagnostics with code frames, hints, and origin chains; lock-keyed build caching | MIT |
+| [rollup/rollup](https://github.com/rollup/rollup) & [rolldown/rolldown](https://github.com/rolldown/rolldown) (`docs/references/rollup`, `docs/references/rolldown`) | `src/Bundle.ts`, `crates/rolldown_error/` | Clean multi-format output model and structured Rust diagnostic builders | MIT |
 
 ## Platforms
 

@@ -30,7 +30,8 @@ can never collide with a project path, and it matches uv and cargo.
    `-v/--verbose`, `-n/--dry-run`, `-h/--help`, `-V/--version`.
 4. **No abbreviations:** `ArgumentParser(allow_abbrev=False)`.
 5. **Booleans come in pairs** (`--compile/--no-compile`, argparse `BooleanOptionalAction`).
-6. **List options repeat** (`--python-platform a --python-platform b`); no comma lists.
+6. **List options repeat or take commas** (`--python-platform a --python-platform b` or
+   `--python-platform a,b`; [ADR-0051](adr/0051-learnings-from-js-bundlers.md)).
 7. **No named targets** ([ADR-0039](adr/0039-recipes-instead-of-target-presets.md)): a
    destination's needs are ordinary flags (`--python-platform`, `--format`, `--max-size`), and
    destinations are documented as [recipes](recipes.md). (Until 2026-10-07: presets that printed

@@ -6,6 +6,16 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-15** · design · Studying six winning JS bundlers (`esbuild`, `rollup`, `parcel`,
+  `@vercel/ncc`, `tsup`, `rolldown`) showed why `bundleup`'s two-zip extract-to-cache architecture
+  avoids `ncc`'s fragile AST `__dirname`/`.node` relocation, while highlighting six high-leverage
+  features to adopt: `--external PKG` (`uv export --prune` + `BUNDLEUP_INHERIT_PATH=1` at runtime so
+  host-provided packages like `boto3` on Lambda or `torch` in sandboxes can be left out cleanly),
+  comma-separated list flags (`--python-platform linux,windows`), muscle-memory flag hints (`esbuild`
+  style), source code frames (`line | code` + `^`) on diagnostics, `Requires-Dist` dependency chains
+  (`required_by`) and percentage size shares in `check -v`, and lock-keyed caching of `uv export`.
+  Evidence: [JS bundlers synthesis](findings/2026-10-15-js-bundlers-synthesis.md),
+  [ADR-0051](adr/0051-learnings-from-js-bundlers.md).
 - **2026-10-13** · review · Three consecutive adversarial review passes after 0.1.0 caught subtle
   cross-cutting edge cases: `compileall -f` re-compiling every cached `.pyc` on warm builds (skipping
   already-cached `.pyc` files cuts warm compile time by ~50 ms and avoids spawning Python at all when

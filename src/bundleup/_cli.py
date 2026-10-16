@@ -227,6 +227,12 @@ def _add_build_options(command: argparse.ArgumentParser, *, output: bool) -> Non
         action="append",
         help=_env_help("an OS/CPU, uv's names (linux); repeatable", "BUNDLEUP_PYTHON_PLATFORM"),
     )
+    command.add_argument(
+        "--external",
+        metavar="PKG",
+        action="append",
+        help=_env_help("package the host provides, left out; repeatable", "BUNDLEUP_EXTERNAL"),
+    )
     lock = command.add_mutually_exclusive_group()
     lock.add_argument(
         "--locked",
@@ -412,6 +418,7 @@ def _options(opts: argparse.Namespace) -> BuildOptions:
     # Repeatable flags; the environment variable is the default when none is given.
     pythons = opts.python or _env_list("BUNDLEUP_PYTHON")
     platforms = opts.python_platform or _env_list("BUNDLEUP_PYTHON_PLATFORM")
+    externals = opts.external or _env_list("BUNDLEUP_EXTERNAL")
     return BuildOptions(
         path=Path(opts.path),
         output=getattr(opts, "output", None),
@@ -421,6 +428,7 @@ def _options(opts: argparse.Namespace) -> BuildOptions:
         lock_mode=opts.lock_mode,  # None: --locked when there's a lock (ADR-0033)
         python_platform=platforms[0] if platforms else None,
         more_python_platforms=tuple(platforms[1:]),
+        external=tuple(externals),
         strict=opts.strict,
         format=opts.format,
         max_size=getattr(opts, "max_size", None),
@@ -523,9 +531,17 @@ def _check_lines(report: CheckReport, opts: argparse.Namespace, style: Style) ->
     lines.append(style.dim(f"  {packages}, {_size(report.size_bytes)} unpacked{more}"))
     if opts.verbose >= 1 and report.packages:
         width = max(len(p.name) for p in report.packages)
+        total = report.size_bytes or 1
+        arrow = f" {style.arrow} "
         for p in report.packages:
+            pct = f"{round(p.size_bytes * 100 / total)}%"
             native = "  native" if p.native else ""
-            lines.append(style.dim(f"    {p.name:<{width}}  {_size(p.size_bytes):>10}{native}"))
+            via = f"  via {arrow.join(p.required_by)}" if p.required_by else ""
+            lines.append(
+                style.dim(
+                    f"    {p.name:<{width}}  {_size(p.size_bytes):>10}  {pct:>4}{native}{via}"
+                )
+            )
     return lines
 
 
@@ -686,6 +702,24 @@ def _run_cache(opts: argparse.Namespace) -> ExitCode:
     return ExitCode.OK
 
 
+_FLAG_ALIASES: dict[str, str] = {
+    "--platform": "--python-platform",
+    "--platforms": "--python-platform",
+    "--target": "--python",
+    "--outfile": "-o / --output",
+    "--out": "-o / --output",
+    "--outdir": "-o / --output",
+    "--out-dir": "-o / --output",
+    "--entrypoint": "-e / --entry",
+    "--entry-point": "-e / --entry",
+    "--main": "-e / --entry",
+    "--externals": "--external",
+    "--onefile": "--format scie",
+    "--analyze": "bundleup check -v",
+    "--metafile": "bundleup check --json",
+}
+
+
 def _usage_error(message: str, argv: list[str]) -> ExitCode:
     words = [a for a in argv if not a.startswith("-")]
     word = words[0] if words else ""
@@ -702,9 +736,14 @@ def _usage_error(message: str, argv: list[str]) -> ExitCode:
 
         # Our own wording: argparse's changes between Python releases, even patch releases.
         message = f"unknown command `{word}`"
-        close = difflib.get_close_matches(word, COMMANDS, n=1)
-        if close:
-            hint = f"did you mean `bundleup {close[0]}`?"
+        if word.endswith((".pyz", ".pex", ".scie")):
+            hint = f"did you mean `bundleup verify {word}`?"
+        elif word == "." or word.endswith((".py", ".toml", ".txt")) or "/" in word or "\\" in word:
+            hint = f"did you mean `bundleup build {word}`?"
+        else:
+            close = difflib.get_close_matches(word, COMMANDS, n=1)
+            if close:
+                hint = f"did you mean `bundleup {close[0]}`?"
     elif (
         word == "cache"
         and len(words) > 1
@@ -722,7 +761,12 @@ def _usage_error(message: str, argv: list[str]) -> ExitCode:
         import difflib
 
         bad = message.split("unrecognized arguments:", 1)[1].strip().split()[0].split("=", 1)[0]
-        if bad.startswith("-"):
+        if bad in _FLAG_ALIASES:
+            alias = _FLAG_ALIASES[bad]
+            verb = "try" if alias.startswith("bundleup ") else "did you mean"
+            q = "" if alias.startswith("bundleup ") else "?"
+            hint = f"{verb} `{alias}`{q} (see `{help_cmd}`)"
+        elif bad.startswith("-"):
             sub = all_parsers.get(sub_name) or all_parsers["bundleup"]
             flags = [opt for opt in sub._option_string_actions if opt.startswith("--")]
             close = difflib.get_close_matches(bad, flags, n=1)

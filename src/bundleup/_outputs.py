@@ -355,6 +355,7 @@ def write_pyz(
         "PARTS": parts,
         "SHA256": {layer.member: layer.digest for layer in layers} if parts else {},
         "EMBEDDED": fmt == "py",
+        "EXTERNAL": bool(first.external),
     }
     loader, loader_pyc = stage / "__main__.py", stage / "__main__.pyc"
     code = ""
