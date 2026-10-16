@@ -1161,3 +1161,353 @@ def test_pass4_iteration3_regressions(tmp_path: Path, capsys: pytest.CaptureFixt
     assert _cli.main(["build", "-e", "pkg:main"]) == _cli.ExitCode.USAGE_ERROR
     err3 = capsys.readouterr().err
     assert "did you mean `--entry`?" in err3
+
+
+def test_blackbox_and_whitebox_audit_regressions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Regressions from the 3-subagent black-box campaign and white-box audit across config,
+    CLI, TOML/PEP 723 parsing, pylock.toml, setup.cfg, verify, and cache."""
+    import json
+    import zipfile
+
+    from bundleup import (
+        BuildOptions,
+        LockfileOutdatedError,
+        NoLockfileError,
+        NotABundleError,
+        ProjectError,
+        UsageError,
+        _bytecode,
+        _cache,
+        _cli,
+        _config,
+        _source,
+        _uv,
+        build,
+        check,
+        verify,
+    )
+
+    # 1. Config per-run keys (`smoke`, `matrix`, `dry-run`), non-table [tool.bundleup],
+    # commented-out _key_line, and config value validation with code frames.
+    p_cfg = tmp_path / "cfg_proj"
+    p_cfg.mkdir()
+    (p_cfg / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1.0"\n[tool.bundleup]\n'
+        '# max-size = "10MB"\nsmoke = true\n'
+    )
+    with pytest.raises(UsageError, match="`smoke` is a per-run setting") as exc:
+        _config.apply(BuildOptions(path=p_cfg))
+    assert exc.value.detail is not None and "smoke = true" in exc.value.detail
+
+    (p_cfg / "pyproject.toml").write_text(
+        '[project]\nname = "app"\nversion = "0.1.0"\n[tool.bundleup]\ndry-run = true\n'
+    )
+    with pytest.raises(UsageError) as exc:
+        _config.apply(BuildOptions(path=p_cfg))
+    assert exc.value.hint == "only 'bundleup cache clean' takes --dry-run"
+
+    (p_cfg / "pyproject.toml").write_text('[project]\nname = "app"\n[tool]\nbundleup = "fast"\n')
+    with pytest.raises(ProjectError, match="must be a table") as p_tbl_exc:
+        _config.apply(BuildOptions(path=p_cfg))
+    assert p_tbl_exc.value.hint is not None and p_tbl_exc.value.detail is not None
+
+    (p_cfg / "pyproject.toml").write_text(
+        '[project]\nname = "app"\n[tool.bundleup]\n# max-size = "10MB"\nmax-size = "0MB"\n'
+    )
+    assert _config._key_line(p_cfg / "pyproject.toml", "max-size") == 5
+    with pytest.raises(UsageError, match="must be greater than 0") as exc:
+        _config.apply(BuildOptions(path=p_cfg))
+    assert exc.value.detail is not None and 'max-size = "0MB"' in exc.value.detail
+
+    (p_cfg / "pyproject.toml").write_text(
+        '[project]\nname = "app"\n[tool.bundleup]\npython-platform = [123]\n'
+    )
+    with pytest.raises(UsageError) as exc:
+        _config.apply(BuildOptions(path=p_cfg))
+    assert exc.value.hint is not None and '["linux", "macos"]' in exc.value.hint
+
+    (p_cfg / "pyproject.toml").write_text(
+        '[project]\nname = "app"\n[tool.bundleup]\npython-platform = ["solaris"]\n'
+    )
+    with pytest.raises(UsageError, match="invalid \\[tool\\.bundleup\\]") as exc:
+        _config.apply(BuildOptions(path=p_cfg))
+    assert exc.value.detail is not None and "solaris" in exc.value.detail
+
+    (p_cfg / "pyproject.toml").write_text(
+        '[project]\nname = "app"\n[tool.bundleup]\nentry = "a:b:c"\n'
+    )
+    with pytest.raises(UsageError, match="invalid \\[tool\\.bundleup\\]") as exc:
+        _config.apply(BuildOptions(path=p_cfg))
+    assert exc.value.detail is not None and "a:b:c" in exc.value.detail
+
+    # Comma-separated python in [tool.bundleup] works with `for_check=True`
+    (p_cfg / "pyproject.toml").write_text(
+        '[project]\nname = "app"\n[tool.bundleup]\npython = ["3.11,3.12"]\n'
+    )
+    checked_opts, _ = _config.apply(BuildOptions(path=p_cfg), for_check=True)
+    assert checked_opts.python == "3.11" and checked_opts.more_pythons == ()
+
+    # 2. Deduplication of python & python_platform in BuildOptions, and empty flag rejection
+    deduped = BuildOptions(
+        path=tmp_path,
+        python="3.12,3.12",
+        more_pythons=("3.12", "3.11"),
+        python_platform="linux,linux",
+        more_python_platforms=("linux", "macos"),
+    )
+    assert deduped.python == "3.12" and deduped.more_pythons == ("3.11",)
+    assert deduped.python_platform == "linux" and deduped.more_python_platforms == ("macos",)
+
+    for flag in ("--python", "--python-platform", "--external"):
+        assert _cli.main(["build", flag, " , "]) == _cli.ExitCode.USAGE_ERROR
+        capsys.readouterr()
+
+    # 3. `bundleup build --smoke <path>` does not swallow the positional project path
+    smoke_script = tmp_path / "smoke_pos.py"
+    smoke_script.write_text('# /// script\n# dependencies = []\n# ///\nprint("ok")\n')
+    assert (
+        _cli.main(["build", "--smoke", str(smoke_script), "-o", str(tmp_path / "sp.pyz"), "-q"])
+        == 0
+    )
+    capsys.readouterr()
+
+    # 4. `cache clean --older-than` validation and `cache list -q`
+    for bad_days in ("-5", "nan", "inf"):
+        assert (
+            _cli.main(["cache", "clean", "--older-than", bad_days, "--json"])
+            == _cli.ExitCode.USAGE_ERROR
+        )
+        doc = json.loads(capsys.readouterr().out)
+        assert not doc["ok"] and doc["diagnostics"][0]["code"] == "usage"
+    with pytest.raises(UsageError):
+        _cache.clean_cache(older_than_days=-1)
+
+    monkeypatch.setenv("BUNDLEUP_CACHE", str(tmp_path / "qcache"))
+    (tmp_path / "qcache" / f"app-{'ab' * 8}").mkdir(parents=True)
+    (tmp_path / "qcache" / f"app-{'ab' * 8}" / "m.py").write_bytes(b"123")
+    assert _cli.main(["cache", "list", "-q"]) == 0
+    out_q, err_q = capsys.readouterr()
+    assert "app" in out_q and err_q == ""
+
+    # 5. Bytecode cache_dir falls back to $BUNDLEUP_CACHE/build/bytecode when
+    # BUNDLEUP_BUILD_CACHE is unset
+    monkeypatch.delenv("BUNDLEUP_BUILD_CACHE", raising=False)
+    monkeypatch.setenv("BUNDLEUP_CACHE", str(tmp_path / "custom_cache"))
+    assert _bytecode.cache_dir() == tmp_path / "custom_cache" / "build" / "bytecode"
+
+    # 6. Malformed TOML / PEP 723 metadata types and PEP 723 TOML error line offset
+    bad_pep = tmp_path / "bad_pep.py"
+    bad_pep.write_text("# line 1\n# line 2\n# /// script\n# dependencies = [1 2]\n# ///\n")
+    with pytest.raises(ProjectError, match="line 4") as p_exc:
+        _source.load_source(bad_pep)
+    assert p_exc.value.detail is not None and p_exc.value.hint is not None
+
+    bad_pep.write_text("# /// script\n# requires-python = 312\n# ///\n")
+    with pytest.raises(ProjectError, match="must be a string"):
+        _source.load_source(bad_pep)
+
+    bad_pep.write_text('# /// script\n# dependencies = "click"\n# ///\n')
+    with pytest.raises(ProjectError, match="must be a list of strings"):
+        _source.load_source(bad_pep)
+
+    # 7. pylock.toml validation, freshness check, and --external with directory = "."
+    pylock_proj = tmp_path / "pylock_proj"
+    (pylock_proj / "src" / "papp").mkdir(parents=True)
+    (pylock_proj / "src" / "papp" / "__init__.py").write_text('def main(): print("papp")\n')
+    (pylock_proj / "pyproject.toml").write_text(
+        '[project]\nname = "papp"\nversion = "0.1.0"\ndependencies = ["click>=8.0"]\n'
+        '[project.scripts]\npapp = "papp:main"\n'
+        '[build-system]\nrequires = ["hatchling"]\nbuild-backend = "hatchling.build"\n'
+    )
+    (pylock_proj / "pylock.toml").write_text(
+        'lock-version = "1.0"\ncreated-by = "hand"\n[[packages]]\nname = "papp"\n'
+        'directory = { path = ".", editable = false }\n'
+    )
+    with pytest.raises(LockfileOutdatedError, match="out of date") as lock_exc:
+        build(BuildOptions(path=pylock_proj, output=tmp_path / "papp.pyz"))
+    assert lock_exc.value.detail is not None and "click>=8.0" in lock_exc.value.detail
+    # With --external click, click is external AND directory = "." builds from stage without failing
+    res_ext = build(
+        BuildOptions(path=pylock_proj, output=tmp_path / "papp.pyz", external=("click",))
+    )
+    assert res_ext.output.exists()
+
+    (pylock_proj / "pylock.toml").write_text('lock-version = "1.0"\npackages = "bad"\n')
+    with pytest.raises(ProjectError, match="`packages` must be a list of tables"):
+        build(BuildOptions(path=pylock_proj, output=tmp_path / "papp2.pyz", lock_mode="frozen"))
+
+    # 8. --frozen on unlocked project raises NoLockfileError
+    unlocked_proj = tmp_path / "unlocked_proj"
+    unlocked_proj.mkdir()
+    (unlocked_proj / "pyproject.toml").write_text('[project]\nname = "u"\nversion = "0.1.0"\n')
+    (unlocked_proj / "u.py").write_text("print(1)\n")
+    with pytest.raises(NoLockfileError):
+        build(BuildOptions(path=unlocked_proj, lock_mode="frozen"))
+
+    # 9. _strip_pyproject_external strips external deps from unlocked pyproject.toml in stage
+    stage_ext = tmp_path / "stage_ext"
+    stage_ext.mkdir()
+    (stage_ext / "pyproject.toml").write_text(
+        '[project]\nname = "u"\nversion = "0.1.0"\ndependencies = ["torch>=2.0", "click>=8.0"]\n'
+    )
+    staged_py = _uv._strip_pyproject_external(stage_ext / "pyproject.toml", {"torch"}, stage_ext)
+    assert staged_py is not None
+    assert "torch" not in staged_py.read_text()
+    assert "click>=8.0" in staged_py.read_text()
+
+    # 10. setup.cfg-only project builds cleanly without leaving setup.py behind
+    cfg_only = tmp_path / "cfg_only"
+    (cfg_only / "capp").mkdir(parents=True)
+    (cfg_only / "capp" / "__init__.py").write_text('def main(): print("from setup.cfg")\n')
+    (cfg_only / "setup.cfg").write_text(
+        "[metadata]\nname = capp\nversion = 0.2.0\n[options]\npackages = capp\n"
+        "[options.entry_points]\nconsole_scripts =\n    capp = capp:main\n"
+    )
+    cfg_res = build(BuildOptions(path=cfg_only, output=tmp_path / "capp.pyz", smoke=()))
+    assert (cfg_res.name, cfg_res.version) == ("capp", "0.2.0")
+    assert cfg_res.smoke is not None and cfg_res.smoke.output.strip() == "from setup.cfg"
+    assert not (cfg_only / "setup.py").exists()
+
+    # 11. verify nonexistent path, extra file in --split .parts/, and symlinked split bundle
+    with pytest.raises(NotABundleError, match="does not exist"):
+        verify(tmp_path / "does_not_exist.pyz")
+
+    split_out = tmp_path / "split_app.pyz"
+    build(BuildOptions(path=smoke_script, output=split_out, split=65536))
+    sym_split = tmp_path / "sub_sym" / "link.pyz"
+    sym_split.parent.mkdir()
+    sym_split.symlink_to(split_out)
+    assert verify(sym_split).ok
+
+    parts_dir = tmp_path / "split_app.pyz.parts"
+    extra_part = parts_dir / "extra.zip"
+    with zipfile.ZipFile(extra_part, "w") as zf:
+        zf.writestr("evil.py", "x = 1\n")
+    rep_split = verify(split_out)
+    assert not rep_split.ok and any("extra.zip" in p for p in rep_split.problems)
+
+    # 12. Single-script undeclared sibling import hint suggests bundling the folder
+    sib_dir = tmp_path / "sib_dir"
+    sib_dir.mkdir()
+    (sib_dir / "helper_mod.py").write_text("X = 1\n")
+    (sib_dir / "run_me.py").write_text(
+        "# /// script\n# dependencies = []\n# ///\nimport helper_mod\nprint(helper_mod.X)\n"
+    )
+    chk_sib = check(BuildOptions(path=sib_dir / "run_me.py"))
+    und = [d for d in chk_sib.diagnostics if d.code == "undeclared-import"]
+    assert len(und) == 1 and und[0].hint is not None and "--entry run_me.py" in und[0].hint
+
+
+def test_runtime_and_loader_audit_regressions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regressions from the Hostile Runtime subagent and loader/runtime white-box audit."""
+    import os
+    import subprocess
+    import sys
+
+    from bundleup import BuildOptions, _runtime, build
+
+    # 1. PYTHONPATH ending in `site-packages` before stdlib must NOT cause site_packages_index()
+    # to delete the stdlib from sys.path!
+    fake_pp = str(tmp_path / "custom" / "site-packages")
+    fake_stdlib = (os.__file__ and os.path.dirname(os.__file__)) or "/stdlib"
+    fake_host_sp = str(tmp_path / "venv" / "lib" / "python3.12" / "site-packages")
+    monkeypatch.setattr(sys, "path", [fake_pp, fake_stdlib, fake_host_sp])
+    idx = _runtime.site_packages_index()
+    assert idx == 2  # after fake_stdlib, never 0!
+
+    bundle_site = tmp_path / "b_site"
+    bundle_site.mkdir()
+    monkeypatch.delenv("BUNDLEUP_RUNTIME_INHERIT", raising=False)
+    monkeypatch.delenv("BUNDLEUP_INHERIT_PATH", raising=False)
+    _runtime.activate(str(bundle_site), [])
+    assert fake_stdlib in sys.path
+    assert fake_pp not in sys.path and fake_host_sp not in sys.path
+
+    # 2. Nested bundle activation evicts parent bundle's modules from sys.modules
+    parent_site = tmp_path / "parent_site"
+    parent_site.mkdir()
+    child_site = tmp_path / "child_site"
+    child_site.mkdir()
+    dummy_mod = type(sys)("dummy_shared_pkg")
+    dummy_mod.__file__ = str(parent_site / "dummy_shared_pkg" / "__init__.py")
+    monkeypatch.setitem(sys.modules, "dummy_shared_pkg", dummy_mod)
+    monkeypatch.setenv("BUNDLEUP_RUNTIME_SITE", str(parent_site))
+    _runtime.activate(str(child_site), [])
+    assert "dummy_shared_pkg" not in sys.modules
+
+    # 3. runs_bundle_code recognizes attached -m<mod> and skips child `--format py` bundles
+    py_bundle_file = tmp_path / "child_bundle.py"
+    py_bundle_file.write_text("#!/usr/bin/env python3\n# /// bundleup\nEMBEDDED = True\n")
+    normal_script = tmp_path / "normal_script.py"
+    normal_script.write_text("print(1)\n")
+    monkeypatch.setenv(_runtime.ENV_SCRIPTS, str(tmp_path))
+    if hasattr(sys, "orig_argv"):
+        monkeypatch.setattr(sys, "argv", ["-m"])
+        monkeypatch.setattr(sys, "orig_argv", ["python3", "-munittest"])
+        assert _runtime.runs_bundle_code(str(bundle_site)) is True
+        monkeypatch.setattr(sys, "argv", [str(py_bundle_file)])
+        monkeypatch.setattr(sys, "orig_argv", ["python3", str(py_bundle_file)])
+        assert _runtime.runs_bundle_code(str(bundle_site)) is False
+        monkeypatch.setattr(sys, "argv", [str(normal_script)])
+        monkeypatch.setattr(sys, "orig_argv", ["python3", str(normal_script)])
+        assert _runtime.runs_bundle_code(str(bundle_site)) is True
+
+    # 4. End-to-end runtime checks:
+    # - `--format py` with hostile `fcntl.py` and `zipfile.py` in the bundle's directory
+    # - `_exec_file` preserving `sys.argv[0]`, absolute `__file__`, `atexit` reading globals,
+    #   and `os.chdir` before importing bundled code
+    # - `--entry python` with attached `-c` / `-m` and `<stdin>`
+    hostile_dir = tmp_path / "hostile"
+    hostile_dir.mkdir()
+    (hostile_dir / "fcntl.py").write_text('raise RuntimeError("PAY_NO_ATTENTION_TO_FCNTL")\n')
+    (hostile_dir / "zipfile.py").write_text('raise RuntimeError("PAY_NO_ATTENTION_TO_ZIPFILE")\n')
+    app_src = tmp_path / "src_app"
+    app_src.mkdir()
+    (app_src / "helper_pkg.py").write_text('VAL = "from_bundle"\n')
+    (app_src / "requirements.txt").write_text("")
+    (app_src / "main.py").write_text(
+        "import atexit, os, sys\n"
+        "os.chdir('/')\n"
+        "import helper_pkg\n"
+        "GREETING = helper_pkg.VAL\n"
+        "def _on_exit():\n"
+        "    print('EXIT:' + GREETING + ':' + str(os.path.isabs(__file__)))\n"
+        "atexit.register(_on_exit)\n"
+        "print('ARGV0:' + os.path.basename(sys.argv[0]))\n"
+    )
+    py_out = hostile_dir / "app_bundle.py"
+    build(BuildOptions(path=app_src, format="py", output=py_out))
+    for _ in range(2):  # cold run + warm run
+        proc = subprocess.run(
+            [sys.executable, str(py_out)],
+            cwd=hostile_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        assert "ARGV0:app_bundle.py" in proc.stdout
+        assert "EXIT:from_bundle:True" in proc.stdout
+
+    # `--entry python` with `-cCODE`, `-mjson.tool`, and `-` stdin `__file__`
+    py_entry_out = tmp_path / "py_entry.pyz"
+    build(BuildOptions(path=app_src, entry="python", output=py_entry_out))
+    r_c = subprocess.run(
+        [sys.executable, str(py_entry_out), "-cimport helper_pkg; print(helper_pkg.VAL)"],
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert r_c.stdout.strip() == "from_bundle"
+
+    r_stdin = subprocess.run(
+        [sys.executable, str(py_entry_out), "-"],
+        input="import sys; print(__file__, sys.argv)\n",
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert r_stdin.stdout.strip() == "<stdin> ['-']"

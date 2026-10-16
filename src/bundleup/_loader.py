@@ -138,15 +138,18 @@ def _rerun_with_another_python(here: "tuple[int, int]") -> None:
         _rerun([best[1], sys.argv[0], *sys.argv[1:]])
 
 
-def _rerun(command: "list[str]") -> "NoReturn":
+def _rerun(command: "list[str]") -> None:
     os.environ[RERUN] = "1"
     sys.stdout.flush()
     sys.stderr.flush()
-    if sys.platform == "win32":  # os.execv doesn't quote arguments on Windows
-        import subprocess
+    try:
+        if sys.platform == "win32":  # os.execv doesn't quote arguments on Windows
+            import subprocess
 
-        sys.exit(subprocess.call(command))
-    os.execv(command[0], command)
+            sys.exit(subprocess.call(command))
+        os.execv(command[0], command)
+    except OSError:
+        os.environ.pop(RERUN, None)
 
 
 def _machine() -> str:
@@ -186,7 +189,10 @@ def _check() -> None:
             wanted = "Python %s to %d.%d" % (want, PYTHON_MAX[0], PYTHON_MAX[1])
         if not rerun:  # once only: then report the mismatch instead of looping
             _rerun_with_another_python(here)
-        nearest = PYTHON if here < PYTHON or PYTHON_MAX is None else PYTHON_MAX
+        if VERSIONS:
+            nearest = min(VERSIONS, key=lambda v: (abs(here[1] - v[1]), -v[1]))
+        else:
+            nearest = PYTHON if here < PYTHON or PYTHON_MAX is None else PYTHON_MAX
         suggest = "%d.%d" % nearest
         _fail(
             "this app was bundled for %s, but it's running on Python %d.%d (%s).\n"
@@ -362,7 +368,7 @@ def _roots(archive: str) -> "list[tuple[str, bool]]":
 
     Never the working directory.
     """
-    explicit = os.environ.get("BUNDLEUP_CACHE")
+    explicit = (os.environ.get("BUNDLEUP_CACHE") or "").strip()
     if explicit:  # the only place, when set: a copy elsewhere must not win (ADR-0048)
         return [(os.path.abspath(explicit), False)]
     roots = []
@@ -534,7 +540,8 @@ def _pyc_path(member: str, final: str) -> "str | None":
     .pyc files go under the prefix instead.
     """
     prefix = getattr(sys, "pycache_prefix", None)
-    if not prefix or "/__pycache__/" not in member:
+    tag = getattr(sys.implementation, "cache_tag", None)
+    if not prefix or not tag or "/__pycache__/" not in member or (".%s." % tag) not in member:
         return None
     head, _, name = member.rpartition("/__pycache__/")
     return os.path.join(prefix, os.path.splitdrive(final)[1].lstrip("\\/"), head, name)
@@ -545,6 +552,11 @@ def _parts() -> "list[str]":
     import hashlib
 
     folder = os.path.join(os.path.dirname(_ARCHIVE), str(PARTS))
+    raw_folder = os.path.join(
+        os.path.dirname(_FILE if EMBEDDED else os.path.dirname(_FILE)), str(PARTS)
+    )
+    if not os.path.isdir(folder) and os.path.isdir(raw_folder):
+        folder = raw_folder
     paths = []
     for member in MEMBERS:
         path = os.path.join(folder, member)
@@ -740,7 +752,16 @@ def _extract() -> str:
                 import shutil
 
                 shutil.rmtree(tmp, ignore_errors=True)
-    if os.environ.get("BUNDLEUP_CACHE"):  # the only folder tried (ADR-0048)
+        except Exception as e:
+            if os.path.isdir(tmp):
+                import shutil
+
+                shutil.rmtree(tmp, ignore_errors=True)
+            _fail(
+                "%s is damaged and couldn't be unpacked (%s: %s). Get a fresh copy of it."
+                % (os.path.basename(_ARCHIVE), type(e).__name__, e)
+            )
+    if (os.environ.get("BUNDLEUP_CACHE") or "").strip():  # the only folder tried (ADR-0048)
         advice = "BUNDLEUP_CACHE is set, so it's the only folder used: point it at a writable "
         advice += "folder where programs can run (not one mounted noexec), or unset it."
     else:
@@ -776,20 +797,25 @@ def _cache_imported(site: str) -> None:
             continue
         if os.path.exists(cached):
             continue
+        part = "%s.%d.tmp" % (cached, os.getpid())
         try:
-            py_compile.compile(origin, cfile=cached, doraise=True)
+            py_compile.compile(origin, cfile=part, doraise=True)
+            os.replace(part, cached)
         except OSError:
+            try:  # noqa: SIM105
+                os.unlink(part)
+            except OSError:
+                pass
             return
         except py_compile.PyCompileError:
+            try:  # noqa: SIM105
+                os.unlink(part)
+            except OSError:
+                pass
             continue
 
 
-def _activate(site: str) -> None:
-    """Put the payload on sys.path (where a venv's site-packages would be) and set up child
-    processes: the payload's own runtime module does both (ADR-0027), so the loader and the
-    children's sitecustomize.py share one implementation."""
-    # The bundle on sys.path (python app.pyz), or a .py bundle's folder (python app.py): the
-    # program imports from its payload, not from whatever sits beside the file.
+def _drop_bundle_from_sys_path() -> None:
     here = os.path.dirname(_ARCHIVE) if EMBEDDED else _ARCHIVE
     raw_here = os.path.dirname(_FILE)
     if (
@@ -798,6 +824,15 @@ def _activate(site: str) -> None:
         and (os.path.realpath(sys.path[0]) == here or os.path.abspath(sys.path[0]) == raw_here)
     ):
         del sys.path[0]
+
+
+def _activate(site: str) -> None:
+    """Put the payload on sys.path (where a venv's site-packages would be) and set up child
+    processes: the payload's own runtime module does both (ADR-0027), so the loader and the
+    children's sitecustomize.py share one implementation."""
+    # The bundle on sys.path (python app.pyz), or a .py bundle's folder (python app.py): the
+    # program imports from its payload, not from whatever sits beside the file.
+    _drop_bundle_from_sys_path()
     sys.path.insert(0, os.path.join(site, "__bundleup__"))
     try:
         runtime = __import__("_bundleup_runtime")  # type: Any
@@ -808,6 +843,44 @@ def _activate(site: str) -> None:
     else:
         os.environ.pop("BUNDLEUP_RUNTIME_INHERIT", None)
     runtime.activate(site, PTH)
+
+
+def _exec_file(path: str, argv0: str, user_script: bool = False) -> None:
+    import importlib.machinery
+    import importlib.util
+
+    if user_script and not os.path.isfile(path):
+        if os.path.exists(path):
+            import runpy
+
+            runpy.run_path(path, run_name="__main__")
+            return
+        me = os.path.basename(_FILE if EMBEDDED else os.path.dirname(_FILE))
+        try:
+            open(path, "rb").close()
+        except OSError as e:
+            sys.stderr.write(
+                "%s: can't open file %r: [Errno %s] %s\n" % (me, argv0, e.errno, e.strerror or e)
+            )
+            sys.exit(2)
+    loader = importlib.machinery.SourceFileLoader("__main__", path)
+    spec = importlib.util.spec_from_loader("__main__", loader, origin=path)
+    if spec is None:
+        import runpy
+
+        runpy.run_path(path, run_name="__main__")
+        return
+    module = importlib.util.module_from_spec(spec)
+    module.__dict__["__file__"] = path
+    module.__dict__["__cached__"] = None
+    module.__dict__["__package__"] = None
+    module.__dict__["__spec__"] = None
+    sys.modules["__main__"] = module
+    if sys.argv:
+        sys.argv[0] = argv0
+    else:
+        sys.argv = [argv0]
+    loader.exec_module(module)
 
 
 def _run(site: str) -> None:
@@ -822,16 +895,21 @@ def _run(site: str) -> None:
     if kind == "python":
         _run_python()
         return
-    import runpy
-
     if kind == "module":
-        runpy.run_module(target, run_name="__main__", alter_sys=True)
+        import runpy
+        import types
+
+        mod_globals = runpy.run_module(target, run_name="__main__", alter_sys=True)
+        main_mod = types.ModuleType("__main__")
+        main_mod.__dict__.update(mod_globals)
+        sys.modules["__main__"] = main_mod
     else:
         script_path = os.path.join(site, target)
         script_dir = os.path.dirname(script_path)
         if script_dir != site and os.path.basename(script_dir) != "__bundleup_script__":
             sys.path.insert(0, script_dir)
-        runpy.run_path(script_path, run_name="__main__")
+        argv0 = sys.argv[0] if sys.argv and sys.argv[0] else script_path
+        _exec_file(script_path, argv0)
 
 
 PYTHON_USAGE = "usage: python %s [SCRIPT.py | -m MODULE | -c CODE | -] [ARGS...]"
@@ -842,32 +920,54 @@ def _run_python() -> None:
     (a skill's, say) run with them, as python runs them: `app.pyz tool.py ARGS`, `-m module`,
     `-c code`, a program on stdin (`-`, or piped), or a prompt."""
     import runpy
+    import types
 
     me = os.path.basename(_FILE if EMBEDDED else os.path.dirname(_FILE))
     args = sys.argv[1:]
+    if args and args[0] == "--":
+        args = args[1:]
     if not args and not sys.stdin.isatty():
         args = ["-"]  # piped: run it, as python does
     if not args:
         import code
 
         sys.path.insert(0, "")
+        _add_env_path("BUNDLEUP_RUNTIME_SCRIPTS", os.path.abspath(os.getcwd()))
         code.interact(banner="Python %s with %s's packages" % (sys.version.split()[0], NAME))
         return
     first = args[0]
     if first in ("-m", "-c") and len(args) < 2:
         _fail("%s needs an argument\n%s" % (first, PYTHON_USAGE % me))
-    if first == "-m":
-        sys.argv = args[1:]
+    if first == "-m" or (first.startswith("-m") and len(first) > 2):
+        if first == "-m":
+            mod_name = args[1]
+            sys.argv = args[1:]
+        else:
+            mod_name = first[2:]
+            sys.argv = [mod_name, *args[1:]]
         cwd = os.path.abspath(os.getcwd())
         sys.path.insert(0, cwd)  # as python -m does: the working directory
         _add_env_path("BUNDLEUP_RUNTIME_SCRIPTS", cwd)
-        runpy.run_module(args[1], run_name="__main__", alter_sys=True)
-    elif first in ("-c", "-"):
-        source = args[1] if first == "-c" else sys.stdin.read()
-        sys.argv = [first, *args[2 if first == "-c" else 1 :]]
+        mod_globals = runpy.run_module(mod_name, run_name="__main__", alter_sys=True)
+        main_mod = types.ModuleType("__main__")
+        main_mod.__dict__.update(mod_globals)
+        sys.modules["__main__"] = main_mod
+    elif first in ("-c", "-") or (first.startswith("-c") and len(first) > 2):
+        if first == "-c":
+            source = args[1]
+            sys.argv = ["-c", *args[2:]]
+            filename = "<string>"
+        elif first.startswith("-c") and len(first) > 2:
+            source = first[2:]
+            sys.argv = ["-c", *args[1:]]
+            filename = "<string>"
+        else:
+            source = sys.stdin.read()
+            sys.argv = ["-", *args[1:]]
+            filename = "<stdin>"
         sys.path.insert(0, "")  # as python -c does: the working directory
         _add_env_path("BUNDLEUP_RUNTIME_SCRIPTS", os.path.abspath(os.getcwd()))
-        _exec_main(source, "<string>" if first == "-c" else "<stdin>")
+        _exec_main(source, filename)
     elif first.startswith("-"):
         _fail(
             "%s is an option for Python itself: put it before the bundle, as in python %s %s ..."
@@ -875,12 +975,15 @@ def _run_python() -> None:
         )
     else:
         sys.argv = args
-        # As python does for a script: its folder comes first, so its own modules import; and
+        # As python does for a script: its real folder comes first, so its own modules import; and
         # scripts under it that it starts with sys.executable see the bundle too (ADR-0040).
-        folder = os.path.dirname(os.path.abspath(first))
-        sys.path.insert(0, folder)
-        _add_env_path("BUNDLEUP_RUNTIME_SCRIPTS", folder)
-        runpy.run_path(first, run_name="__main__")
+        abs_first = os.path.abspath(first)
+        abs_folder = os.path.dirname(abs_first)
+        real_folder = os.path.dirname(os.path.realpath(first))
+        sys.path.insert(0, real_folder)
+        _add_env_path("BUNDLEUP_RUNTIME_SCRIPTS", abs_folder)
+        _add_env_path("BUNDLEUP_RUNTIME_SCRIPTS", real_folder)
+        _exec_file(abs_first, first, user_script=True)
 
 
 def _exec_main(source: str, filename: str) -> None:
@@ -890,6 +993,10 @@ def _exec_main(source: str, filename: str) -> None:
 
     module = types.ModuleType("__main__")
     module.__dict__["__builtins__"] = __builtins__
+    module.__dict__["__package__"] = None
+    module.__dict__["__spec__"] = None
+    if filename == "<stdin>":
+        module.__dict__["__file__"] = filename
     sys.modules["__main__"] = module
     exec(compile(source, filename, "exec"), module.__dict__)
 
@@ -925,6 +1032,10 @@ def _hold(site: str) -> None:
 
 
 if __name__ == "__main__":
+    _drop_bundle_from_sys_path()
+    _scie_argv0 = os.environ.pop("SCIE_ARGV0", None)
+    if _scie_argv0 and sys.argv and os.path.basename(sys.argv[0]) == "app.pyz":
+        sys.argv[0] = _scie_argv0
     _select()
     _check()
     _site = _find() or _extract()

@@ -13,6 +13,7 @@ import subprocess
 from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from packaging.utils import canonicalize_name
 
@@ -101,8 +102,93 @@ def _strip_external(text: str, external: Sequence[str]) -> str:
     return head + "".join(kept)
 
 
+def _load_pylock_packages(text: str, path: Path) -> list[dict[str, Any]]:
+    try:
+        data = tomllib.loads(text)
+    except tomllib.TOMLDecodeError as e:
+        raise ProjectError(f"{path} isn't valid TOML: {e}") from None
+    req_py = data.get("requires-python")
+    if req_py is not None and not isinstance(req_py, str):
+        raise ProjectError(
+            f"{path} has a non-string requires-python: {req_py!r}",
+            hint='write a version specifier string, e.g. `requires-python = ">=3.12"`',
+        )
+    packages = data.get("packages", [])
+    if not isinstance(packages, list) or not all(isinstance(p, dict) for p in packages):
+        raise ProjectError(
+            f"{path} isn't a valid PEP 751 lockfile: `packages` must be a list of tables",
+            hint="re-export or regenerate pylock.toml (e.g. `uv export --format pylock.toml`)",
+        )
+    for p in packages:
+        directory = p.get("directory")
+        if directory is not None and not isinstance(directory, dict):
+            raise ProjectError(
+                f"{path} isn't a valid PEP 751 lockfile: package `directory` must be a table"
+            )
+    return packages
+
+
+def _check_pylock_freshness(
+    source: Source, packages: list[dict[str, Any]], *, external: Sequence[str] = ()
+) -> None:
+    pyproject = source.path / "pyproject.toml"
+    if not pyproject.is_file():
+        return
+    try:
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return
+    project = data.get("project")
+    deps = project.get("dependencies") if isinstance(project, dict) else None
+    if not isinstance(deps, list):
+        return
+    from packaging.requirements import InvalidRequirement, Requirement
+
+    excluded = _clean_external(external)
+    locked = {
+        canonicalize_name(str(p.get("name", ""))): p.get("version")
+        for p in packages
+        if p.get("name")
+    }
+    for raw in deps:
+        if not isinstance(raw, str):
+            continue
+        try:
+            req = Requirement(raw)
+        except InvalidRequirement:
+            continue
+        canon = canonicalize_name(req.name)
+        if canon in excluded:
+            continue
+        if canon not in locked:
+            if req.marker is None:
+                raise LockfileOutdatedError(
+                    "pylock.toml is out of date with pyproject.toml",
+                    hint="regenerate pylock.toml, then build again (or --frozen bundles the lock "
+                    "as it is)",
+                    detail=f"pyproject.toml requires {req}, which is missing from pylock.toml",
+                )
+            continue
+        ver = locked[canon]
+        if (
+            isinstance(ver, str)
+            and req.specifier
+            and not req.specifier.contains(ver, prereleases=True)
+        ):
+            raise LockfileOutdatedError(
+                "pylock.toml is out of date with pyproject.toml",
+                hint="regenerate pylock.toml, then build again (or --frozen bundles the lock "
+                "as it is)",
+                detail=f"pyproject.toml requires {req}, but pylock.toml has {ver}",
+            )
+
+
 def from_pylock(
-    source: Source, stage: Path, *, external: Sequence[str] = ()
+    source: Source,
+    stage: Path,
+    *,
+    external: Sequence[str] = (),
+    lock_mode: str | None = None,
 ) -> tuple[list[list[str]], Path]:
     """Install arguments for a project's own pylock.toml, and the lock the check compares the
     bundle with. uv installs the file in place (its relative paths are relative to it). A lock
@@ -111,16 +197,18 @@ def from_pylock(
     assert source.pylock is not None
     try:
         text = source.pylock.read_text(encoding="utf-8-sig")
-        packages = tomllib.loads(text).get("packages", [])
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+    except (OSError, UnicodeDecodeError) as e:
         raise ProjectError(f"{source.pylock} isn't valid TOML: {e}") from None
+    packages = _load_pylock_packages(text, source.pylock)
+    if lock_mode != "frozen":
+        _check_pylock_freshness(source, packages, external=external)
     me = canonicalize_name(source.name)
     mine = [p for p in packages if canonicalize_name(str(p.get("name", ""))) == me]
     editable = next(
         (
             str(p.get("name") or source.name)
             for p in packages
-            if p.get("directory", {}).get("editable")
+            if isinstance(p.get("directory"), dict) and p.get("directory", {}).get("editable")
         ),
         None,
     )
@@ -133,11 +221,11 @@ def from_pylock(
     check = stage.resolve() / "pylock.toml"
     if external:
         text = _strip_external(text, external)
-        packages = tomllib.loads(text).get("packages", [])
-        check.write_text(text, encoding="utf-8")
-        relocate_paths(check, source.pylock.parent)
-        text = check.read_text(encoding="utf-8")
-        lock_for_install = check
+        packages = _load_pylock_packages(text, source.pylock)
+        lock_for_install = stage.resolve() / "pylock.install.toml"
+        lock_for_install.write_text(text, encoding="utf-8")
+        relocate_paths(lock_for_install, source.pylock.parent)
+        text = lock_for_install.read_text(encoding="utf-8")
     else:
         lock_for_install = source.pylock
     installs = [["-r", str(lock_for_install)]] if packages else []  # uv rejects an empty lock
@@ -152,7 +240,7 @@ def from_pylock(
 def _refresh_local(pylock: Path) -> list[str]:
     """`--refresh-package` for every directory package in `pylock`: uv keys cached builds of local
     folders on pyproject.toml alone, so without this an edit to `src/` re-bundles the old wheel."""
-    packages = tomllib.loads(pylock.read_text(encoding="utf-8")).get("packages", [])
+    packages = _load_pylock_packages(pylock.read_text(encoding="utf-8"), pylock)
     return [
         arg
         for p in packages
@@ -287,21 +375,22 @@ def export(
     exactly the locked files from wherever they were locked (a company index too), never a
     same-named package from PyPI. From a project's own pylock.toml: that file (ADR-0026)."""
     if source.pylock:
-        return Exported(*from_pylock(source, stage, external=external))
+        return Exported(*from_pylock(source, stage, external=external, lock_mode=lock_mode))
     if not (source.is_script and source.pep723) and not source.locked:
         # Only a requirements.txt (or an input with no dependencies) can turn out to pin
-        # everything; an unlocked project can't, so --locked refuses it before resolving anything.
+        # everything; an unlocked project can't, so --locked / --frozen refuses it before resolving.
         can_pin = source.declared is None or source.declared.suffix == ".txt"
         exported = None
-        if can_pin or lock_mode != "locked":
+        if can_pin or lock_mode not in ("locked", "frozen"):
             exported = resolve(
                 uv, source, python=python, stage=stage, progress=progress, external=external
             )
-        if exported is None or (lock_mode == "locked" and not exported.pinned):
+        if exported is None or (lock_mode in ("locked", "frozen") and not exported.pinned):
+            flag = f"--{lock_mode}"
             raise NoLockfileError(
-                f"{source.path.name} has no lockfile, and --locked asks for one",
+                f"{source.path.name} has no lockfile, and {flag} asks for one",
                 hint="lock it (`uv lock`, `pip lock .`, or pin every package in requirements.txt"
-                "), or build without --locked to resolve the versions now",
+                f"), or build without {flag} to resolve the versions now",
             )
         return exported
     # The real path: uv writes local paths relative to the file as spelled, but reads them from
@@ -371,11 +460,12 @@ def export(
     pinned = mode is not None or (
         source.is_script and _script_pinned(source, pylock, external=external)
     )
-    if lock_mode == "locked" and not pinned:
+    if lock_mode in ("locked", "frozen") and not pinned:
+        flag = f"--{lock_mode}"
         raise NoLockfileError(
-            f"{source.path.name} has no lockfile, and --locked asks for one",
+            f"{source.path.name} has no lockfile, and {flag} asks for one",
             hint=f"run `uv lock --script {source.path.name}`, pin every package in "
-            "`dependencies` with ==, or build without --locked",
+            f"`dependencies` with ==, or build without {flag}",
         )
     has_pkgs = "[[packages]]" in pylock.read_text(encoding="utf-8")
     installs = [["-r", str(pylock), *_refresh_local(pylock)]] if has_pkgs else []
@@ -385,11 +475,60 @@ def export(
 EMPTY_PYLOCK = 'lock-version = "1.0"\ncreated-by = "bundleup"\npackages = []\n'
 
 
+def _strip_pyproject_external(declared: Path, excluded: set[str], stage: Path) -> Path | None:
+    """If `declared` is an unlocked `pyproject.toml` and lists packages in `excluded`, write a
+    staged `requirements.in` without them so `uv pip compile` doesn't resolve their transitive
+    dependencies."""
+    from packaging.requirements import InvalidRequirement, Requirement
+
+    try:
+        data = tomllib.loads(declared.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return declared
+    project = data.get("project")
+    tool = data.get("tool")
+    if (
+        not isinstance(project, dict)
+        or "dynamic" in project
+        or (isinstance(tool, dict) and ("uv" in tool or "poetry" in tool))
+    ):
+        return declared
+    deps = project.get("dependencies", [])
+    if not isinstance(deps, list):
+        return declared
+    kept: list[str] = []
+    removed = False
+    for raw in deps:
+        if not isinstance(raw, str):
+            return declared
+        try:
+            req = Requirement(raw)
+        except InvalidRequirement:
+            return declared
+        if req.url is not None:
+            return declared
+        if canonicalize_name(req.name) in excluded:
+            removed = True
+        else:
+            kept.append(raw)
+    if not removed:
+        return declared
+    if not kept:
+        return None
+    staged = stage.resolve() / "requirements.in"
+    staged.write_text("\n".join(kept) + "\n", encoding="utf-8")
+    return staged
+
+
 def _strip_requirements_external(declared: Path, excluded: set[str], stage: Path) -> Path | None:
-    """If `declared` is a `requirements.txt` and lists packages in `excluded`, write a staged copy
-    without them so `uv pip compile` doesn't resolve them or their transitive dependencies. Returns
-    None when every requirement in `declared` is external."""
-    if not excluded or not declared.name.endswith(".txt"):
+    """If `declared` is a `requirements.txt` or `pyproject.toml` and lists packages in `excluded`,
+    write a staged copy without them so `uv pip compile` doesn't resolve them or their transitive
+    dependencies. Returns None when every requirement in `declared` is external."""
+    if not excluded:
+        return declared
+    if declared.name == "pyproject.toml":
+        return _strip_pyproject_external(declared, excluded, stage)
+    if not declared.name.endswith(".txt"):
         return declared
     from packaging.requirements import InvalidRequirement, Requirement
 
@@ -453,9 +592,16 @@ def resolve(
         resolved.write_text(EMPTY_PYLOCK, encoding="utf-8")
     else:
         oldest = _oldest_python(source.requires_python, python)
-        cmd = [uv, "pip", "compile", "--quiet", "--universal", "--format", "pylock.toml"]
-        cmd += ["--python-version", oldest, "-o", str(resolved), str(compile_input)]
-        with untouched(source):  # reading a setup.py project's metadata builds it
+        with untouched(source):  # reading a setup.py/setup.cfg project's metadata builds it
+            actual_input = (
+                declared.parent / "setup.py"
+                if compile_input == declared
+                and declared.name == "setup.cfg"
+                and (declared.parent / "setup.py").is_file()
+                else compile_input
+            )
+            cmd = [uv, "pip", "compile", "--quiet", "--universal", "--format", "pylock.toml"]
+            cmd += ["--python-version", oldest, "-o", str(resolved), str(actual_input)]
             run(cmd, cwd=declared.parent, what="uv pip compile", progress=progress)
         relocate_paths(resolved, declared.parent)
     text = _strip_external(resolved.read_text(encoding="utf-8"), external)
@@ -694,9 +840,23 @@ def untouched(source: Source) -> Iterator[None]:
     """Remove what building the project writes into it (setuptools' build/ and *.egg-info), and
     only what wasn't there before: bundleup never changes a project (ADR-0028)."""
     before = set() if source.is_script else _build_leftovers(source.path)
+    shim = (
+        source.path / "setup.py"
+        if not source.is_script
+        and (source.path / "setup.cfg").is_file()
+        and not (source.path / "setup.py").exists()
+        and not (source.path / "pyproject.toml").exists()
+        else None
+    )
+    if shim is not None:
+        with contextlib.suppress(OSError):
+            shim.write_text("from setuptools import setup\nsetup()\n", encoding="utf-8")
     try:
         yield
     finally:
+        if shim is not None:
+            with contextlib.suppress(OSError):
+                shim.unlink(missing_ok=True)
         if not source.is_script:
             for leftover in _build_leftovers(source.path) - before:
                 shutil.rmtree(leftover, ignore_errors=True)

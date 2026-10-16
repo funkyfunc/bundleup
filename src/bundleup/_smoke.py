@@ -115,7 +115,7 @@ def run(bundle: Path, python: str | None, args: tuple[str, ...]) -> SmokeResult:
                     "error",
                     f"`{shown}` {why} in a fresh home folder"
                     + (" with no network" if blocked else ""),
-                    hint="its output is below; --smoke 'ARGS' runs it with other arguments "
+                    hint="its output is above; --smoke 'ARGS' runs it with other arguments "
                     "(the default is --help)",
                     detail=result.output,
                 )

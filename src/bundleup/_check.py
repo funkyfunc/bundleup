@@ -513,15 +513,28 @@ def undeclared_imports(
             line = min((lines[m] for m in missing if m in lines), default=None)
             source_path = (paths or {}).get(shown)
             frame = _imports.code_frame(source_path, line) if source_path else None
+            siblings = (
+                set(missing) & _imports.top_level_modules(source_path.parent)
+                if source_path is not None and not local
+                else set()
+            )
+            hint = (
+                f"to include {source_path.parent.name}/'s other modules, bundle the folder "
+                f"(`bundleup build {source_path.parent.name} --entry {shown}`); otherwise "
+                if siblings and source_path is not None
+                else ""
+            ) + (
+                f"add the packages that provide them to the dependencies, pass --external "
+                f"{missing[0]} if the host Python provides it, or guard optional imports with "
+                "`try: ... except ImportError`"
+            )
             diags.append(
                 Diagnostic(
                     "undeclared-import",
                     "warning",
                     f"{shown} imports {', '.join(missing)}: neither the bundle nor the standard "
                     f"library has {'it' if len(missing) == 1 else 'them'}",
-                    hint=f"add the packages that provide them to the dependencies, pass --external "
-                    f"{missing[0]} if the host Python provides it, or guard optional imports with "
-                    "`try: ... except ImportError`",
+                    hint=hint,
                     detail=frame,
                     file=shown,
                     line=line,

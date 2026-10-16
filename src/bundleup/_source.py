@@ -15,7 +15,7 @@ from . import _toml as tomllib
 from . import _verify
 from ._errors import ProjectError
 from ._formats import LOADED, Format
-from ._imports import external_modules, imports_of, stdlib_ever, top_level_modules
+from ._imports import code_frame, external_modules, imports_of, stdlib_ever, top_level_modules
 
 PEP723 = re.compile(r"(?m)^# /// (?P<type>[a-zA-Z0-9-]+)$\s(?P<content>(^#(| .*)$\s)+)^# ///$")
 
@@ -105,14 +105,56 @@ def read_python_text(path: Path) -> str:
         return path.read_text(encoding="utf-8-sig", errors="replace")
 
 
+def _toml_error(
+    where: str, error: Exception, path: Path | None = None, offset: int = 0, col_offset: int = 0
+) -> ProjectError:
+    msg = str(error)
+    frame: str | None = None
+    found = re.search(r"\bat line (\d+), column (\d+)\b", msg)
+    if found:
+        line = int(found.group(1)) + offset
+        col = int(found.group(2)) + col_offset
+        if offset or col_offset:
+            msg = f"{msg[: found.start(1)]}{line}, column {col}{msg[found.end(2) :]}"
+        if path is not None:
+            frame = code_frame(path, line, col)
+    return ProjectError(
+        f"{where} isn't valid TOML: {msg}",
+        hint="fix the TOML syntax error shown above",
+        detail=frame,
+    )
+
+
+def _check_requires_python(raw: object, where: str) -> str | None:
+    if raw is None:
+        return None
+    if not isinstance(raw, str):
+        raise ProjectError(
+            f"requires-python in {where} must be a string, not {type(raw).__name__}",
+            hint='write a version specifier string, e.g. `requires-python = ">=3.12"`',
+        )
+    return raw
+
+
 def _load_script(path: Path, *, external: Sequence[str] = ()) -> Source:
     try:
         text = read_python_text(path)
     except OSError as e:
         raise ProjectError(f"can't read {path}: {e.strerror or e}") from None
     if any(m.group("type") == "script" for m in PEP723.finditer(text)):
-        meta = script_metadata(text)
-        return Source(path, path.stem, meta.get("requires-python"), is_script=True)
+        meta = script_metadata(text, path)
+        deps = meta.get("dependencies")
+        if deps is not None and (
+            not isinstance(deps, list) or not all(isinstance(d, str) for d in deps)
+        ):
+            raise ProjectError(
+                f"dependencies in {path.name}'s `# /// script` block must be a list of strings",
+                hint='write e.g. `# dependencies = ["rich>=13"]`',
+            )
+        req_py = _check_requires_python(
+            meta.get("requires-python"), f"{path.name}'s `# /// script` block"
+        )
+        return Source(path, path.stem, req_py, is_script=True)
     # No `# /// script` block: a requirements.txt beside it, or only the standard library.
     requirements = path.with_name("requirements.txt")
     if requirements.is_file():
@@ -132,7 +174,9 @@ def _load_script(path: Path, *, external: Sequence[str] = ()) -> Source:
 def _load_project(path: Path, pyproject: Path) -> Source:
     try:
         data = tomllib.loads(pyproject.read_text(encoding="utf-8-sig"))
-    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError) as e:
+    except tomllib.TOMLDecodeError as e:
+        raise _toml_error(str(pyproject), e, pyproject) from None
+    except (OSError, UnicodeDecodeError) as e:
         raise ProjectError(f"{pyproject} isn't valid TOML: {e}") from None
     raw_project = data.get("project")
     project = raw_project if isinstance(raw_project, dict) else {}
@@ -141,11 +185,17 @@ def _load_project(path: Path, pyproject: Path) -> Source:
     raw_poetry = tool.get("poetry")
     poetry = raw_poetry if isinstance(raw_poetry, dict) else {}
     name = project.get("name") or poetry.get("name")
+    if name is not None and not isinstance(name, str):
+        raise ProjectError(
+            f"[project] name in {pyproject} must be a string, not {type(name).__name__}",
+            hint='write `name = "my-app"` under [project]',
+        )
     if not name and not (path / "setup.py").is_file() and not (path / "setup.cfg").is_file():
         raise ProjectError(
             f"{pyproject} has no [project] name", hint='add `name = "..."` under [project]'
         )
     name = name or _legacy_name(path)
+    req_py = _check_requires_python(project.get("requires-python"), str(pyproject))
     # uv.lock first (it's what uv users have); a standard pylock.toml otherwise (ADR-0026).
     # Without either, the dependencies pyproject.toml declares are resolved at build time, in
     # the stage: bundleup never writes a lock into the project (ADR-0028, ADR-0041).
@@ -156,7 +206,7 @@ def _load_project(path: Path, pyproject: Path) -> Source:
     return Source(
         path,
         name,
-        project.get("requires-python"),
+        req_py,
         is_script=False,
         pylock=pylock,
         declared=declared,
@@ -328,7 +378,9 @@ def _is_member(project: Path, root: Path) -> bool:
     return matched("members") and not matched("exclude")
 
 
-def script_metadata(text: str) -> dict[str, Any]:  # Any: TOML values have no fixed type
+def script_metadata(
+    text: str, path: Path | None = None
+) -> dict[str, Any]:  # Any: TOML values have no fixed type
     """The PEP 723 `script` block, parsed as TOML (empty if there is none)."""
     text = text.lstrip("\ufeff")
     blocks = [m for m in PEP723.finditer(text) if m.group("type") == "script"]
@@ -336,6 +388,7 @@ def script_metadata(text: str) -> dict[str, Any]:  # Any: TOML values have no fi
         raise ProjectError("the script has more than one `# /// script` block")
     if not blocks:
         return {}
+    offset = text[: blocks[0].start("content")].count("\n")
     content = "".join(
         line[2:] if line.startswith("# ") else line[1:]
         for line in blocks[0].group("content").splitlines(keepends=True)
@@ -343,7 +396,9 @@ def script_metadata(text: str) -> dict[str, Any]:  # Any: TOML values have no fi
     try:
         return tomllib.loads(content)
     except tomllib.TOMLDecodeError as e:
-        raise ProjectError(f"the `# /// script` block isn't valid TOML: {e}") from None
+        raise _toml_error(
+            "the `# /// script` block", e, path, offset=offset, col_offset=2
+        ) from None
 
 
 def script_path(source: Source, fmt: Format) -> str | None:

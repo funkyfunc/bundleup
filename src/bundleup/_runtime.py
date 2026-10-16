@@ -60,6 +60,29 @@ def _under(path: str, home: str) -> bool:
     return False
 
 
+_HOST_TAIL = None  # type: Optional[list[str]]
+
+
+def _is_py_bundle(path: str) -> bool:
+    try:
+        with open(path, "rb") as f:
+            head = f.read(128)
+        return b"# /// bundleup" in head
+    except OSError:
+        return False
+
+
+def _orig_module(original: "Sequence[str]") -> "Optional[str]":
+    for i, arg in enumerate(original[1:]):
+        if arg == "--" or not arg.startswith("-"):
+            break
+        if arg == "-m" and i + 2 < len(original):
+            return original[i + 2].split(".")[0]
+        if arg.startswith("-m") and len(arg) > 2:
+            return arg[2:].split(".")[0]
+    return None
+
+
 def runs_bundle_code(site: str) -> bool:
     """For a child process of the bundle's own interpreter: whether it runs the bundle's code
     (then it sees the bundle) or something else installed with that Python, such as a console
@@ -79,23 +102,50 @@ def runs_bundle_code(site: str) -> bool:
         if inherit_site and _same(inherit_site, site):
             return True
         original = getattr(sys, "orig_argv", None)  # 3.10+: the full command line
-        if original and "-m" in original[:-1]:
-            top = original[original.index("-m") + 1].split(".")[0]
+        top = _orig_module(original) if original else None
+        if top is not None:
             if top in STDLIB_RUNNERS:
                 return True
             paths = [p for p in os.environ.get(ENV_PATHS, "").split(os.pathsep) if p] or [site]
             return any(_has_module(d, top) for d in [*paths, *scripts])
         return True  # 3.9 can't tell which module: assume the bundle's own (the common case)
-    homes = [site]
-    if os.path.normcase(first).endswith(".py"):  # a console script (no .py) never counts
-        homes += scripts
-    return any(_under(first, h) for h in homes)
+    if _under(first, site):
+        return True
+    if os.path.normcase(first).endswith(".py") and not _is_py_bundle(first):
+        # A console script (no .py) or another bundleup .py bundle never counts as this bundle's.
+        return any(_under(first, h) for h in scripts)
+    return False
+
+
+def _is_site_entry(p: str) -> bool:
+    if not p:
+        return False
+    norm = os.path.normcase(os.path.abspath(p)).rstrip(os.sep)
+    if norm.endswith(("site-packages", "dist-packages")):
+        return True
+    for marker in (os.sep + "site-packages" + os.sep, os.sep + "dist-packages" + os.sep):
+        if marker in (norm + os.sep):
+            return True
+    return False
+
+
+def _stdlib_end() -> int:
+    stdlib_dir = os.path.normcase(os.path.abspath(os.path.dirname(os.__file__))).rstrip(os.sep)
+    last = -1
+    for i, p in enumerate(sys.path):
+        if not p or _is_site_entry(p):
+            continue
+        norm = os.path.normcase(os.path.abspath(p)).rstrip(os.sep)
+        if norm == stdlib_dir or norm.startswith(stdlib_dir + os.sep):
+            last = i
+    return last
 
 
 def site_packages_index() -> int:
     """Where a venv's site-packages would sit: after the standard library, before other packages."""
+    after = _stdlib_end()
     for i, p in enumerate(sys.path):
-        if p.endswith(("site-packages", "dist-packages")):
+        if i > after and _is_site_entry(p):
             return i
     return len(sys.path)
 
@@ -112,6 +162,7 @@ def activate(site: str, pth: "Optional[Sequence[str]]" = None) -> None:
     --external), run its .pth files, and set up the environment so child processes of this same
     interpreter do the same (via the payload's sitecustomize.py on PYTHONPATH). Other Pythons the
     program starts ignore the bundle."""
+    global _HOST_TAIL
     if any(_same(p, site) for p in sys.path if p):
         return  # already active (e.g. a multiprocessing child that got the parent's sys.path)
     # A bundle started from another bundle inherits the parent's environment: drop what the
@@ -120,17 +171,19 @@ def activate(site: str, pth: "Optional[Sequence[str]]" = None) -> None:
     parent_paths = [p for p in os.environ.get(ENV_PATHS, "").split(os.pathsep) if p]
     if parent and not _same(parent, site):
         sys.path[:] = [p for p in sys.path if p not in parent_paths]
+        for mod_name, mod in list(sys.modules.items()):
+            mod_file = getattr(mod, "__file__", None)
+            if isinstance(mod_file, str) and _under(mod_file, parent):
+                sys.modules.pop(mod_name, None)
         os.environ.pop(ENV_SCRIPTS, None)
         if not (os.environ.get(ENV_INHERIT) and _same(os.environ.get(ENV_INHERIT, ""), site)):
             os.environ.pop(ENV_INHERIT, None)
     parent_shim = os.path.join(parent, SHIM) if parent else None
     shim = os.path.join(site, SHIM)
-    pythonpath = [
-        p
-        for p in os.environ.get("PYTHONPATH", "").split(os.pathsep)
-        if p and p != parent_shim and p != shim
-    ]
-    index = site_packages_index()
+    after = _stdlib_end()
+    early_site = [p for i, p in enumerate(sys.path) if i < after and _is_site_entry(p)]
+    if early_site:
+        sys.path[:] = [p for i, p in enumerate(sys.path) if not (i < after and _is_site_entry(p))]
     raw_inherit = os.environ.get("BUNDLEUP_INHERIT_PATH", "").lower()
     if raw_inherit in ("0", "false", "no"):
         inherit = False
@@ -139,10 +192,19 @@ def activate(site: str, pth: "Optional[Sequence[str]]" = None) -> None:
         inherit = raw_inherit in ("1", "true", "yes") or (
             bool(inherit_site) and _same(inherit_site, site)
         )
+    pythonpath = [
+        p
+        for p in os.environ.get("PYTHONPATH", "").split(os.pathsep)
+        if p and p != parent_shim and p != shim and (not _is_site_entry(p) or inherit)
+    ]
+    index = site_packages_index()
+    if _HOST_TAIL is None:
+        _HOST_TAIL = list(early_site + sys.path[index:])
     # Isolation (ADR-0021): drop the machine's own packages (user and system site-packages, and
     # whatever their .pth files added) unless inheriting; when inheriting, re-append them after
     # the bundle's own .pth directories so the bundle always comes first.
-    tail = sys.path[index:] if inherit else []
+    current_tail = early_site + sys.path[index:]
+    tail = (current_tail or list(_HOST_TAIL or ())) if inherit else []
     del sys.path[index:]
     sys.path.append(site)
     if pth is None:  # a child process: the loader passes the list it got at build time

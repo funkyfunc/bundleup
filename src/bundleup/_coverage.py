@@ -39,7 +39,12 @@ class Gap:
 
 def _wheel_tags(package: Package) -> list[frozenset[Tag]]:
     found = []
-    for wheel in package.get("wheels", []):
+    wheels = package.get("wheels", [])
+    if not isinstance(wheels, list):
+        return found
+    for wheel in wheels:
+        if not isinstance(wheel, dict):
+            continue
         name = (
             wheel.get("name") or str(wheel.get("url") or wheel.get("path") or "").rsplit("/", 1)[-1]
         )
@@ -55,9 +60,14 @@ def gaps(pylock: str, platform: Platform, python: tuple[int, int]) -> list[Gap]:
     supported = platform.supported_tags(python)
     environment = platform.markers(python_full_version=f"{python[0]}.{python[1]}.0")
     found = []
-    for package in tomllib.loads(pylock).get("packages", []):
+    raw_packages = tomllib.loads(pylock).get("packages", [])
+    if not isinstance(raw_packages, list):
+        return found
+    for package in raw_packages:
+        if not isinstance(package, dict) or not isinstance(package.get("name"), str):
+            continue
         marker = package.get("marker")
-        if marker and not Marker(marker).evaluate(environment):
+        if isinstance(marker, str) and not Marker(marker).evaluate(environment):
             continue
         if any(key in package for key in ("directory", "vcs", "archive")):
             continue  # a local project or a URL: built here from source

@@ -328,9 +328,10 @@ def check_requires_python(source: Source, target: Target) -> None:
         return
     try:
         spec = SpecifierSet(source.requires_python)
-    except InvalidSpecifier:
+    except (InvalidSpecifier, TypeError):
         raise ProjectError(
-            f"{source.name} has an invalid requires-python: {source.requires_python!r}"
+            f"{source.name} has an invalid requires-python: {source.requires_python!r}",
+            hint='write a PEP 440 version specifier, e.g. `requires-python = ">=3.12"`',
         ) from None
     if target.full_version not in spec:
         raise PythonMismatchError(

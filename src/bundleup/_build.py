@@ -119,12 +119,14 @@ class BuildOptions:
             object.__setattr__(self, "output", Path(self.output))
         if self.python is not None:
             py_raw = [self.python] if isinstance(self.python, str) else list(self.python)
-            py_items = _split_items([*py_raw, *self.more_pythons], check_path=True)
+            py_items = _split_items([*py_raw, *self.more_pythons], check_path=True, dedup=True)
             object.__setattr__(self, "python", py_items[0] if py_items else None)
             object.__setattr__(self, "more_pythons", tuple(py_items[1:]))
         elif self.more_pythons:
             object.__setattr__(
-                self, "more_pythons", tuple(_split_items(self.more_pythons, check_path=True))
+                self,
+                "more_pythons",
+                tuple(_split_items(self.more_pythons, check_path=True, dedup=True)),
             )
         if self.python_platform is not None:
             plat_raw = (
@@ -132,12 +134,14 @@ class BuildOptions:
                 if isinstance(self.python_platform, str)
                 else list(self.python_platform)
             )
-            plat_items = _split_items([*plat_raw, *self.more_python_platforms])
+            plat_items = _split_items([*plat_raw, *self.more_python_platforms], dedup=True)
             object.__setattr__(self, "python_platform", plat_items[0] if plat_items else None)
             object.__setattr__(self, "more_python_platforms", tuple(plat_items[1:]))
         elif self.more_python_platforms:
             object.__setattr__(
-                self, "more_python_platforms", tuple(_split_items(self.more_python_platforms))
+                self,
+                "more_python_platforms",
+                tuple(_split_items(self.more_python_platforms, dedup=True)),
             )
         ext_raw = [self.external] if isinstance(self.external, str) else list(self.external)
         object.__setattr__(self, "external", tuple(_split_items(ext_raw, dedup=True)))
@@ -527,12 +531,12 @@ def _settle(options: BuildOptions, *, for_check: bool = False) -> tuple[BuildOpt
     options, _configured = _config.apply(options, for_check=for_check)
     if options.smoke is not None and (options.format or "pyz") not in LOADED:
         raise UsageError(
-            "--smoke runs a .pyz or .py",
+            "--smoke runs a .pyz, .py or executable",
             hint=f"drop --smoke: a {options.format} output's host runs it",
         )
     if options.entry == "python" and (options.format or "pyz") not in LOADED:
         raise UsageError(
-            "--entry python makes a .pyz or .py that runs the scripts it's given",
+            "--entry python makes a .pyz, .py or executable that runs the scripts it's given",
             hint=f"drop --entry: a {options.format} output's host decides what runs",
         )
     if options.split is not None and (options.format or "pyz") != "pyz":
@@ -628,7 +632,7 @@ def _own_code(
     neighbours import too, as when python runs a script)."""
     is_py_entry = entry is not None and entry.kind == "python"
     script_target = entry.target if entry is not None and entry.kind == "script" else None
-    code = [(source.path.name, site / script, False)] if script else []
+    code = [(source.path.name, source.path, False)] if script else []
     code += [
         (rel, site / rel, is_py_entry or rel == script_target) for rel in own if rel.endswith(".py")
     ]
@@ -935,9 +939,15 @@ def check(
 def _matrix(pylock: Path, source: Source) -> list[_coverage.MatrixCell]:
     """`check --matrix`: wheel coverage for every platform and every Python the project allows
     (and the lock covers: one resolved at build time starts at the target's version)."""
+    from packaging.specifiers import InvalidSpecifier
+
     text = pylock.read_text(encoding="utf-8")
-    covered = tomllib.loads(text).get("requires-python") or ""
-    spec = SpecifierSet(source.requires_python or "") & SpecifierSet(covered)
+    raw_covered = tomllib.loads(text).get("requires-python")
+    covered = raw_covered if isinstance(raw_covered, str) else ""
+    try:
+        spec = SpecifierSet(source.requires_python or "") & SpecifierSet(covered)
+    except (InvalidSpecifier, TypeError):
+        spec = SpecifierSet()
     pythons = [
         v
         for v in _coverage.MATRIX_PYTHONS

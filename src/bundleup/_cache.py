@@ -12,6 +12,7 @@ running an older version.
 from __future__ import annotations
 
 import contextlib
+import math
 import os
 import re
 import shutil
@@ -22,6 +23,7 @@ from pathlib import Path
 from typing import IO
 
 from . import _bytecode, _loader
+from ._errors import UsageError
 
 DAY = 86400.0
 LEFTOVER_AGE = 3600.0  # an interrupted unpack's temp directory older than this is abandoned
@@ -144,6 +146,11 @@ def clean_cache(
 ) -> CleanReport:
     """Remove unpacked bundles unused for `older_than_days`, abandoned temp directories and stale
     lock files; with `build`, also the build cache. With `dry_run`, only report."""
+    if not math.isfinite(older_than_days) or older_than_days < 0:
+        raise UsageError(
+            f"--older-than must be 0 or greater, not {older_than_days}",
+            hint="pass a non-negative number of days, e.g. --older-than 7",
+        )
     now = time.time()
     doomed: list[Path] = []
     busy: list[Path] = []

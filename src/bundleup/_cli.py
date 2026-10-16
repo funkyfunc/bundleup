@@ -161,7 +161,7 @@ def parsers() -> dict[str, argparse.ArgumentParser]:
     )
     clean.add_argument(
         "--older-than",
-        type=float,
+        type=_older_than,
         default=30,
         metavar="DAYS",
         help="remove copies not used for this many days (default: 30; 0 removes all)",
@@ -305,9 +305,32 @@ def _max_size(text: str) -> int:
     from ._formats import parse_size
 
     try:
-        return parse_size(text)
+        size = parse_size(text)
+        if size <= 0:
+            raise UsageError(
+                f"size must be greater than 0: {text!r}",
+                hint="write a positive size like 50MB or 500KB",
+            )
+        return size
     except UsageError as e:
         raise argparse.ArgumentTypeError(f"{e} ({e.hint})") from None
+
+
+def _older_than(text: str) -> float:
+    import math
+
+    try:
+        days = float(text)
+    except ValueError:
+        raise argparse.ArgumentTypeError(
+            f"invalid number of days: {text!r} (pass a non-negative number, e.g. --older-than 7)"
+        ) from None
+    if not math.isfinite(days) or days < 0:
+        raise argparse.ArgumentTypeError(
+            f"--older-than must be 0 or greater, not {text!r} "
+            "(pass a non-negative number, e.g. --older-than 7)"
+        )
+    return days
 
 
 def _env_list(name: str) -> list[str]:
@@ -414,6 +437,18 @@ def _emit_json(
 
 def _options(opts: argparse.Namespace) -> BuildOptions:
     from ._build import BuildOptions
+
+    for flag, values, hint in (
+        ("--python", opts.python, "pass a Python version or path, e.g. --python 3.12"),
+        (
+            "--python-platform",
+            opts.python_platform,
+            "pass a platform name, e.g. --python-platform linux",
+        ),
+        ("--external", opts.external, "pass a package name, e.g. --external boto3"),
+    ):
+        if values and not [x.strip() for v in values for x in v.split(",") if x.strip()]:
+            raise UsageError(f"{flag} requires a non-empty value", hint=hint)
 
     # Repeatable flags; the environment variable is the default when none is given.
     pythons = opts.python or _env_list("BUNDLEUP_PYTHON")
@@ -680,11 +715,17 @@ def _run_cache(opts: argparse.Namespace) -> ExitCode:
         for b in bundles:
             when = out.dim(f"last used {_ago(now - b.last_used)}")
             print(f"{out.bold(b.name)}  {_size(b.size_bytes)}  {when}  {b.path}")
-        total = sum(b.size_bytes for b in bundles)
-        count = plural(len(bundles), "unpacked bundle")
-        print(style.dim(f"{count}, {_size(total)}"), file=err)
+        if opts.quiet == 0:
+            total = sum(b.size_bytes for b in bundles)
+            count = plural(len(bundles), "unpacked bundle")
+            print(style.dim(f"{count}, {_size(total)}"), file=err)
         return ExitCode.OK
-    report = clean_cache(older_than_days=opts.older_than, build=opts.build, dry_run=opts.dry_run)
+    try:
+        report = clean_cache(
+            older_than_days=opts.older_than, build=opts.build, dry_run=opts.dry_run
+        )
+    except BundleupError as e:
+        return _failed(e, command, opts, style)
     if opts.json:
         _emit_json(command, ExitCode.OK, report.to_json_dict(), [])
     elif opts.quiet == 0:
@@ -822,12 +863,43 @@ def _is_build_flag(token: str, options: set[str]) -> bool:
     return len(token) > 1 and token[0] == "-" and set(token[1:]) <= {"q", "v"}
 
 
+def _positional_count(args: list[str], takes_value: set[str]) -> int:
+    count = 0
+    i = 0
+    while i < len(args):
+        token = args[i]
+        if token == "--":
+            count += len(args) - i - 1
+            break
+        if token in takes_value:
+            i += 2
+            continue
+        if not token.startswith("-"):
+            count += 1
+        i += 1
+    return count
+
+
+def _looks_like_path(token: str) -> bool:
+    if " " in token:
+        return False
+    return (
+        token == "."
+        or token.endswith(".py")
+        or "/" in token
+        or "\\" in token
+        or Path(token).exists()
+    )
+
+
 def _join_smoke(args: list[str], parser: argparse.ArgumentParser) -> list[str]:
     """`argparse` treats a token starting with `-` after `nargs="?"` as one of its own options,
-    so `bundleup build --smoke "--version"` (docs/recipes.md) would fail without joining `=`."""
+    so `bundleup build --smoke "--version"` (docs/recipes.md) would fail without joining `=`.
+    And `bundleup build --smoke app.py` should treat `app.py` as `path`, not `--smoke`'s arg."""
     actions = parser._option_string_actions
     options = set(actions)
     takes_value = {opt for opt, act in actions.items() if act.nargs not in (0, "?", "*")}
+    positionals = _positional_count(args[1:], takes_value) if args and args[0] == "build" else 0
     out: list[str] = []
     i = 0
     while i < len(args):
@@ -847,6 +919,15 @@ def _join_smoke(args: list[str], parser: argparse.ArgumentParser) -> list[str]:
         ):
             out.append(f"--smoke={args[i + 1]}")
             i += 2
+        elif (
+            token == "--smoke"
+            and i + 1 < len(args)
+            and not args[i + 1].startswith("-")
+            and positionals == 1
+            and _looks_like_path(args[i + 1])
+        ):
+            out.append("--smoke=")
+            i += 1
         else:
             out.append(token)
             i += 1

@@ -63,6 +63,8 @@ EXTERNAL_ALIASES: dict[str, set[str]] = {
     "pyusb": {"usb"},
     "pyyaml": {"yaml"},
     "pyzmq": {"zmq"},
+    "ruamel-yaml": {"ruamel"},
+    "scikit-bio": {"skbio"},
     "scikit-image": {"skimage"},
     "scikit-learn": {"sklearn"},
 }
@@ -70,6 +72,8 @@ EXTERNAL_ALIASES: dict[str, set[str]] = {
 
 def external_modules(external: Sequence[str]) -> set[str]:
     """Top-level module names that `--external` distributions provide on the host."""
+    import importlib.metadata
+
     names: set[str] = set()
     for raw in external:
         pkg = re.split(r"[<>=!~;\[\s]", raw, maxsplit=1)[0].strip()
@@ -80,10 +84,17 @@ def external_modules(external: Sequence[str]) -> set[str]:
         names.add(pkg.split(".", 1)[0].replace("-", "_"))
         names |= EXTERNAL_ALIASES.get(canon, set())
         names |= EXTERNAL_ALIASES.get(pkg, set())
+        try:
+            dist = importlib.metadata.distribution(pkg)
+            top = dist.read_text("top_level.txt")
+            if top:
+                names.update(line.strip() for line in top.splitlines() if line.strip())
+        except importlib.metadata.PackageNotFoundError:
+            pass
     return names
 
 
-def code_frame(path: Path, line: int | None) -> str | None:
+def code_frame(path: Path, line: int | None, col: int | None = None) -> str | None:
     """A 2-line source snippet (`<line> | <code>` and a `^` underline) for a diagnostic."""
     if line is None or line < 1:
         return None
@@ -103,7 +114,11 @@ def code_frame(path: Path, line: int | None) -> str | None:
     raw = lines[line - 1].expandtabs(4).rstrip("\r\n")
     if not raw.strip():
         return None
-    caret = len(raw) - len(raw.lstrip(" "))
+    caret = (
+        max(0, min(col - 1, len(raw)))
+        if col is not None and col >= 1
+        else len(raw) - len(raw.lstrip(" "))
+    )
     if len(raw) > 120:
         raw = raw[:117] + "..."
         caret = min(caret, 116)

@@ -76,9 +76,12 @@ class Distribution:
 
 def cache_dir() -> Path:
     """Where compiled bytecode is kept between builds (BUNDLEUP_BUILD_CACHE overrides it)."""
-    override = os.environ.get("BUNDLEUP_BUILD_CACHE")
+    override = os.environ.get("BUNDLEUP_BUILD_CACHE", "").strip()
     if override:
         return Path(override) / "bytecode"
+    cache_override = os.environ.get("BUNDLEUP_CACHE", "").strip()
+    if cache_override:
+        return Path(cache_override) / "build" / "bytecode"
     if sys.platform == "darwin":
         base = Path.home() / "Library" / "Caches"
     elif sys.platform == "win32":

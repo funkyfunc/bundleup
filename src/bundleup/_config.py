@@ -40,7 +40,7 @@ BOOLEANS = {"strict"}
 # Keys that also take a list: a .pyz for several Pythons or platforms (ADR-0038).
 LISTS = {"python": "more_pythons", "python-platform": "more_python_platforms"}
 # Per-run settings: flags and environment only (rule 29).
-PER_RUN = {"json", "quiet", "verbose", "color", "dry-run", "locked", "frozen"}
+PER_RUN = {"json", "quiet", "verbose", "color", "dry-run", "locked", "frozen", "smoke", "matrix"}
 
 
 def read(path: Path) -> tuple[dict[str, Any], Path | None]:
@@ -57,7 +57,7 @@ def read(path: Path) -> tuple[dict[str, Any], Path | None]:
     if path.is_file() and path.suffix == ".py":
         try:
             text = read_python_text(path)
-            tool = script_metadata(text).get("tool")
+            tool = script_metadata(text, path).get("tool")
         except (OSError, ProjectError):
             return {}, None  # reported when the script is loaded
         if isinstance(tool, dict) and "bundleup" in tool:
@@ -78,18 +78,23 @@ def read(path: Path) -> tuple[dict[str, Any], Path | None]:
 
 def _key_line(where: Path, key: str | None) -> int | None:
     """1-based line number of `key = ...` inside `[tool.bundleup]` in `where`, if found."""
-    if key is None:
-        return None
     try:
         lines = where.read_text(encoding="utf-8-sig", errors="replace").splitlines()
     except OSError:
         return None
+    prefix = r"^\s*#\s?" if where.suffix == ".py" else r"^\s*"
+    header = re.compile(rf"{prefix}\[\s*tool\.bundleup\s*\]")
+    if key is None:
+        table_assign = re.compile(rf"{prefix}(?:tool\.)?bundleup\s*=")
+        for i, raw in enumerate(lines, start=1):
+            if header.match(raw) or table_assign.match(raw):
+                return i
+        return None
     in_section = False
-    header = re.compile(r"^\s*(?:#\s*)?\[\s*tool\.bundleup\s*\]")
-    other_header = re.compile(r"^\s*(?:#\s*)?\[\s*\[?\s*[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\s*\]")
-    key_pat = re.compile(rf"^\s*(?:#\s*)?(?:['\"])?{re.escape(key)}(?:['\"])?\s*=")
+    other_header = re.compile(rf"{prefix}\[\s*\[?\s*[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*\s*\]")
+    key_pat = re.compile(rf"{prefix}(?:['\"])?{re.escape(key)}(?:['\"])?\s*=")
     dotted_pat = re.compile(
-        rf"^\s*(?:#\s*)?(?:tool\.)?bundleup\.(?:['\"])?{re.escape(key)}(?:['\"])?\s*="
+        rf"{prefix}(?:tool\.)?bundleup\.(?:['\"])?{re.escape(key)}(?:['\"])?\s*="
     )
     fallback: int | None = None
     for i, raw in enumerate(lines, start=1):
@@ -114,6 +119,33 @@ def _invalid(where: Path, message: str, hint: str, *, key: str | None = None) ->
     )
 
 
+def _validate_platforms(where: Path, items: list[str], key: str) -> None:
+    from . import _platforms
+
+    for item in items:
+        try:
+            _platforms.parse(item)
+        except UsageError as e:
+            raise _invalid(where, str(e), e.hint or "", key=key) from None
+
+
+def _validate_entry_syntax(where: Path, value: str, key: str) -> None:
+    if not value.strip():
+        raise _invalid(
+            where,
+            "entry point is empty",
+            "write module:callable (or module, or a [project.scripts] name)",
+            key=key,
+        )
+    if value.count(":") > 1 or value.startswith(":") or value.endswith(":"):
+        raise _invalid(
+            where,
+            f"invalid entry point: {value!r}",
+            "write module:callable (for example: my_app.cli:main)",
+            key=key,
+        )
+
+
 def apply(options: BuildOptions, *, for_check: bool = False) -> tuple[BuildOptions, list[str]]:
     """Fill every option not set by a flag or the environment from [tool.bundleup]. Returns the
     options and the settings taken from the file, as `key = value` lines for -v."""
@@ -121,7 +153,12 @@ def apply(options: BuildOptions, *, for_check: bool = False) -> tuple[BuildOptio
     if where is None:
         return options, []
     if not isinstance(table, dict):
-        raise ProjectError(f"[tool.bundleup] in {where.name} must be a table")
+        line = _key_line(where, None)
+        raise ProjectError(
+            f"[tool.bundleup] in {where.name} must be a table",
+            hint="use a [tool.bundleup] section header",
+            detail=code_frame(where, line),
+        )
     if not table:
         return options, []
     fmt_override = options.format
@@ -129,12 +166,12 @@ def apply(options: BuildOptions, *, for_check: bool = False) -> tuple[BuildOptio
     used = []
     for key, value in table.items():
         if key in PER_RUN:
-            raise _invalid(
-                where,
-                f"`{key}` is a per-run setting",
-                f"pass --{key} on the command line",
-                key=key,
+            hint = (
+                "only 'bundleup cache clean' takes --dry-run"
+                if key == "dry-run"
+                else f"pass --{key} on the command line"
             )
+            raise _invalid(where, f"`{key}` is a per-run setting", hint, key=key)
         field = KEYS.get(key)
         if field is None:
             import difflib  # only on this error path
@@ -143,7 +180,7 @@ def apply(options: BuildOptions, *, for_check: bool = False) -> tuple[BuildOptio
             hint = f"did you mean `{close[0]}`?" if close else f"keys: {', '.join(sorted(KEYS))}"
             raise _invalid(where, f"unknown key `{key}`", hint, key=key)
         if key == "external":
-            if isinstance(value, str) and value.strip():
+            if isinstance(value, str) and [x.strip() for x in value.split(",") if x.strip()]:
                 items = [value]
             elif (
                 isinstance(value, list)
@@ -165,19 +202,33 @@ def apply(options: BuildOptions, *, for_check: bool = False) -> tuple[BuildOptio
                 )
             continue
         if key in LISTS and isinstance(value, list):
-            if not value or not all(isinstance(v, str) for v in value):
-                raise _invalid(where, f"`{key}` must be a string or a list of strings",
-                               f'for example: {key} = ["3.11", "3.12"]', key=key)  # fmt: skip
+            if not value or not all(isinstance(v, str) and v.strip() for v in value):
+                raise _invalid(
+                    where,
+                    f"`{key}` must be a string or a list of strings",
+                    f"for example: {key} = {_list_example(key)}",
+                    key=key,
+                )
+            flat = [x.strip() for v in value for x in v.split(",") if x.strip()]
+            if not flat:
+                raise _invalid(
+                    where,
+                    f"`{key}` must be a string or a list of strings",
+                    f"for example: {key} = {_list_example(key)}",
+                    key=key,
+                )
+            if key == "python-platform":
+                _validate_platforms(where, flat, key)
             more = LISTS[key]
             if getattr(options, field) is None and not getattr(options, more):
                 single_only = (for_check and key == "python") or (
                     not for_check and fmt_override is not None and fmt_override not in ("pyz", "py")
                 )
                 if single_only:
-                    changes[field] = value[0]
-                    used.append(f'{key} = "{value[0]}"')
+                    changes[field] = flat[0]
+                    used.append(f'{key} = "{flat[0]}"')
                 else:
-                    changes[field], changes[more] = value[0], tuple(value[1:])
+                    changes[field], changes[more] = flat[0], tuple(flat[1:])
                     used.append(f"{key} = {value}")
             continue
         wanted = bool if key in BOOLEANS else str
@@ -198,6 +249,13 @@ def apply(options: BuildOptions, *, for_check: bool = False) -> tuple[BuildOptio
                 parsed = parse_size(str(value))
             except UsageError as e:
                 raise _invalid(where, str(e), e.hint or "", key=key) from None
+            if parsed <= 0:
+                raise _invalid(
+                    where,
+                    f"{key} must be greater than 0: {value!r}",
+                    "write a positive size like 50MB or 500KB",
+                    key=key,
+                )
             if getattr(options, field) is None and not (
                 key == "split" and fmt_override is not None and fmt_override != "pyz"
             ):
@@ -211,6 +269,26 @@ def apply(options: BuildOptions, *, for_check: bool = False) -> tuple[BuildOptio
                 f"use one of {', '.join(FORMATS)}",
                 key=key,
             )
+        if key in LISTS and isinstance(value, str):
+            parts = [x.strip() for x in value.split(",") if x.strip()]
+            if not parts:
+                raise _invalid(
+                    where,
+                    f"`{key}` must be a string or a list of strings",
+                    f"for example: {key} = {_example(key)}",
+                    key=key,
+                )
+            if key == "python-platform":
+                _validate_platforms(where, parts, key)
+            if (
+                (for_check and key == "python")
+                or (
+                    not for_check and fmt_override is not None and fmt_override not in ("pyz", "py")
+                )
+            ) and len(parts) > 1:
+                value = parts[0]
+        if key == "entry" and isinstance(value, str):
+            _validate_entry_syntax(where, value, key)
         current = getattr(options, field)
         if field == "strict":
             if value and not current:
@@ -234,4 +312,13 @@ def _example(key: str) -> str:
         "max-size": '"30MB"',
         "split": '"100MB"',
         "external": '["boto3"]',
+        "entry": '"my_app.cli:main"',
+        "output": '"dist/my-app.pyz"',
     }.get(key, '"..."')
+
+
+def _list_example(key: str) -> str:
+    return {
+        "python": '["3.11", "3.12"]',
+        "python-platform": '["linux", "macos"]',
+    }.get(key, _example(key))

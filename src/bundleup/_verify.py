@@ -76,13 +76,17 @@ def record_hash(data: bytes) -> str:
 def _lock_packages(pylock: str) -> tuple[tuple[str, str | None, Marker | None], ...]:
     """(name, version, marker) of every package in a pylock.toml, parsed once per text: the range
     and portability checks evaluate one lock for dozens of environments."""
+    raw = tomllib.loads(pylock).get("packages", [])
+    if not isinstance(raw, list):
+        return ()
     return tuple(
         (
             canonicalize_name(package["name"]),
             package.get("version"),
-            Marker(package["marker"]) if package.get("marker") else None,
+            Marker(package["marker"]) if isinstance(package.get("marker"), str) else None,
         )
-        for package in tomllib.loads(pylock).get("packages", [])
+        for package in raw
+        if isinstance(package, dict) and isinstance(package.get("name"), str)
     )
 
 
@@ -480,6 +484,11 @@ def _str_dict(value: object) -> bool:
 
 
 def _read_manifest(bundle: Path) -> dict[str, Any]:  # Any: JSON
+    if not bundle.exists():
+        raise NotABundleError(
+            f"{bundle} does not exist",
+            hint="give the path to a bundle file or directory",
+        )
     if bundle.is_dir():
         try:
             manifest = json.loads((bundle / DIR_MANIFEST).read_text(encoding="utf-8-sig"))
@@ -633,6 +642,13 @@ def _check_layer(
         return [f"corrupted: {member} can't be read ({type(e).__name__}: {e})"]
 
 
+def _parts_dir(bundle: Path, parts: str) -> Path:
+    real_parts = bundle.resolve().parent / parts
+    if not real_parts.is_dir() and (bundle.parent / parts).is_dir():
+        return bundle.parent / parts
+    return real_parts
+
+
 def _check_bundle(bundle: Path, manifest: dict[str, Any]) -> list[str]:  # Any: JSON
     """The bundle file against its manifest, and a split bundle's parts folder (ADR-0045).
     Corruption is a problem to report, not a crash."""
@@ -647,10 +663,16 @@ def _check_bundle(bundle: Path, manifest: dict[str, Any]) -> list[str]:  # Any: 
             problems += _check_loader(outer, manifest.get("loader") or {}, code)
             parts = manifest.get("parts")
             # A split bundle's layers are files in the folder beside the real bundle file.
-            source = (bundle.resolve().parent / parts).joinpath if parts else None
-            for member, layer in sorted(_layers(manifest).items()):
+            parts_dir = _parts_dir(bundle, parts) if parts else None
+            source = parts_dir.joinpath if parts_dir else None
+            layers = _layers(manifest)
+            for member, layer in sorted(layers.items()):
                 opener = (lambda m: source(m).open("rb")) if source else outer.open
                 problems += _check_layer(opener, member, layer)
+            if parts_dir is not None and parts_dir.is_dir():
+                for entry in sorted(parts_dir.iterdir()):
+                    if entry.name not in layers:
+                        problems.append(f"extra file: {parts}/{entry.name} isn't in the manifest")
             return problems
     except (OSError, zipfile.BadZipFile, zlib.error, EOFError) as e:
         problems = _check_exe(bundle) if _is_exe(bundle) else []
