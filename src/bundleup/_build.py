@@ -606,10 +606,12 @@ def _wheel_coverage(pylock: Path, target: Target) -> list[Diagnostic]:
     if platform is None:
         return []
     lock = pylock.read_text(encoding="utf-8")
+    abiflags = target.abiflags or ""
     found = _coverage.diagnostics(
-        _coverage.gaps(lock, platform, target.version, abiflags=target.abiflags or ""),
+        _coverage.gaps(lock, platform, target.version, abiflags=abiflags),
         platform,
         lock,
+        abiflags=abiflags,
     )
     errors = [d for d in found if d.level == "error"]
     if errors:
@@ -625,13 +627,15 @@ def _wheel_coverage(pylock: Path, target: Target) -> list[Diagnostic]:
 def _also_platforms(pylock: Path, target: Target, names: Sequence[str]) -> list[Diagnostic]:
     """`bundleup check` with more `--python-platform` targets: the lock-only coverage check."""
     lock = pylock.read_text(encoding="utf-8")
+    abiflags = target.abiflags or ""
     found: list[Diagnostic] = []
     for name in names:
         platform = _platforms.parse(name)
         found += _coverage.diagnostics(
-            _coverage.gaps(lock, platform, target.version, abiflags=target.abiflags or ""),
+            _coverage.gaps(lock, platform, target.version, abiflags=abiflags),
             platform,
             lock,
+            abiflags=abiflags,
         )
     return found
 

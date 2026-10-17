@@ -23,6 +23,7 @@ import io
 import json
 import os
 import stat as stat_mod
+import struct
 import tempfile
 import zipfile
 import zlib
@@ -508,11 +509,12 @@ def _check_exe(bundle: Path, outer: zipfile.ZipFile | None = None) -> list[str]:
         if outer is not None and not problems and len(files) == 2 and trailer_offset >= 22:
             app_start = jump_size + files[0][1]
             infos = outer.infolist()
-            offset = (infos[0].header_offset - app_start) if infos else 0
+            offset = (min(i.header_offset for i in infos) - app_start) if infos else 0
             f.seek(app_start)
             prefix = f.read(min(max(offset, 0), 65537)) if offset > 0 else b""
             f.seek(trailer_offset - 22)
             tail = f.read(22)
+            gaps = _has_zip_gaps(outer, f, trailer_offset)
             if (
                 offset < 0
                 or offset > 65536
@@ -527,16 +529,56 @@ def _check_exe(bundle: Path, outer: zipfile.ZipFile | None = None) -> list[str]:
                 )
             ):
                 problems.append("changed file: __main__.py (the loader)")
-            if len(tail) != 22 or tail[:4] != b"PK\x05\x06" or tail[-2:] != b"\x00\x00":
+            if len(tail) != 22 or tail[:4] != b"PK\x05\x06" or tail[-2:] != b"\x00\x00" or gaps:
                 problems.append(f"corrupted: {bundle.name} has trailing data after the zip archive")
     return problems
+
+
+def _has_zip_gaps(zf: zipfile.ZipFile, f: IO[bytes], zip_end: int) -> bool:
+    """Whether `zf` has unreferenced byte gaps between local entries, before the central
+    directory, or between the central directory and `zip_end`."""
+    infos = sorted(zf.infolist(), key=lambda i: i.header_offset)
+    if not infos:
+        return True
+    pos = infos[0].header_offset
+    for info in infos:
+        if info.header_offset != pos or (info.flag_bits & 0x08):
+            return True
+        f.seek(pos)
+        lh = f.read(30)
+        if len(lh) != 30 or lh[:4] != b"PK\x03\x04":
+            return True
+        fname_len, extra_len = struct.unpack("<HH", lh[26:30])
+        pos += 30 + fname_len + extra_len + info.compress_size
+    start_dir = getattr(zf, "start_dir", None)
+    if not isinstance(start_dir, int) or pos != start_dir:
+        return True
+    cd_size = sum(
+        46
+        + len(
+            getattr(i, "orig_filename", i.filename).encode(
+                "utf-8" if i.flag_bits & 0x800 else "cp437"
+            )
+        )
+        + len(i.extra)
+        + len(i.comment)
+        for i in infos
+    )
+    tail_len = zip_end - (start_dir + cd_size)
+    if tail_len == 22:
+        return False
+    if tail_len == 98:
+        f.seek(start_dir + cd_size)
+        z64 = f.read(76)
+        return len(z64) != 76 or z64[:4] != b"PK\x06\x06" or z64[56:60] != b"PK\x06\x07"
+    return True
 
 
 def _check_outer_zip(bundle: Path, outer: zipfile.ZipFile, *, allow_shebang: bool) -> list[str]:
     """Check that no unverified prefix or trailing bytes wrap the outer zip archive."""
     problems: list[str] = []
     infos = outer.infolist()
-    offset = infos[0].header_offset if infos else 0
+    offset = min(i.header_offset for i in infos) if infos else 0
     try:
         size = bundle.stat().st_size
         with bundle.open("rb") as f:
@@ -545,6 +587,7 @@ def _check_outer_zip(bundle: Path, outer: zipfile.ZipFile, *, allow_shebang: boo
             if size >= 22:
                 f.seek(size - 22)
                 tail = f.read(22)
+            gaps = _has_zip_gaps(outer, f, size)
     except OSError as e:
         return [f"corrupted: {bundle.name} can't be read ({type(e).__name__}: {e})"]
     if offset < 0 or offset > 65536 or (offset > 0 and not allow_shebang):
@@ -556,7 +599,7 @@ def _check_outer_zip(bundle: Path, outer: zipfile.ZipFile, *, allow_shebang: boo
         and b"python" in prefix.lower()
     ):
         problems.append("changed file: __main__.py (the loader)")
-    if len(tail) != 22 or tail[:4] != b"PK\x05\x06" or tail[-2:] != b"\x00\x00":
+    if len(tail) != 22 or tail[:4] != b"PK\x05\x06" or tail[-2:] != b"\x00\x00" or gaps:
         problems.append(f"corrupted: {bundle.name} has trailing data after the zip archive")
     return problems
 
@@ -597,13 +640,32 @@ def _open(bundle: Path) -> tuple[zipfile.ZipFile, bytes | None]:
                 raise zipfile.BadZipFile("the data at the end of the file is damaged") from None
         if data[:4] != b"PK\x03\x04" or data[-22:-18] != b"PK\x05\x06" or data[-2:] != b"\x00\x00":
             tampered = True
+        buf = io.BytesIO(data)
+        zf = zipfile.ZipFile(buf)
+        infos = zf.infolist()
+        if (
+            not infos
+            or min(i.header_offset for i in infos) != 0
+            or _has_zip_gaps(zf, buf, len(data))
+        ):
+            tampered = True
         code = text[:start] + (b"\x00" if tampered else b"")
-        return zipfile.ZipFile(io.BytesIO(data)), code
+        return zf, code
 
 
 def _str_dict(value: object) -> bool:
     return isinstance(value, dict) and all(
         isinstance(k, str) and isinstance(v, str) for k, v in value.items()
+    )
+
+
+def _safe_dirname(value: object) -> bool:
+    return (
+        isinstance(value, str)
+        and bool(value)
+        and value not in (".", "..")
+        and "/" not in value
+        and "\\" not in value
     )
 
 
@@ -678,10 +740,9 @@ def _read_manifest(bundle: Path) -> dict[str, Any]:  # Any: JSON
         if not missing and (
             not payloads
             or not all(
-                isinstance(p.get("cache_dir"), str)
-                and bool(p.get("cache_dir"))
+                _safe_dirname(p.get("cache_dir"))
                 and isinstance(p.get("members"), list)
-                and all(isinstance(m, str) for m in p["members"])
+                and all(_safe_dirname(m) for m in p["members"])
                 for p in payloads
             )
             or not all(
@@ -699,7 +760,7 @@ def _read_manifest(bundle: Path) -> dict[str, Any]:  # Any: JSON
             not _str_dict(manifest.get("files"))
             or not isinstance(manifest.get("payload"), dict)
             or not isinstance(manifest["payload"].get("sha256"), str)
-            or not (manifest.get("cache_dir") is None or isinstance(manifest.get("cache_dir"), str))
+            or not (manifest.get("cache_dir") is None or _safe_dirname(manifest.get("cache_dir")))
         ):
             raise NotABundleError(f"{bundle}'s manifest is incomplete")
     if missing:
@@ -708,7 +769,7 @@ def _read_manifest(bundle: Path) -> dict[str, Any]:  # Any: JSON
     if (
         not isinstance(manifest.get("name"), str)
         or not (manifest.get("loader") is None or _str_dict(manifest.get("loader")))
-        or not (parts is None or (isinstance(parts, str) and bool(parts)))
+        or not (parts is None or _safe_dirname(parts))
     ):
         raise NotABundleError(f"{bundle}'s manifest is incomplete")
     return manifest

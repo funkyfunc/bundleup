@@ -34,7 +34,7 @@ SYSTEMS = {"linux": "Linux", "darwin": "Darwin", "win32": "Windows"}
 TAG_OS = {"linux": ("linux",), "darwin": ("macosx",), "win32": ("win",)}
 TAG_CPU = {
     "x86_64": ("x86_64", "amd64", "universal2", "universal", "intel", "fat64", "fat3"),
-    "aarch64": ("aarch64", "arm64", "universal2", "universal"),
+    "aarch64": ("aarch64", "arm64", "universal2"),
     "i686": ("i686", "win32"),
 }
 EXAMPLES = (
@@ -275,7 +275,7 @@ def _levels(
         filtered = [p for p in parts if platform._accepts_one(p)]
         if filtered:
             parts = filtered
-    elif target_arch in TAG_CPU:
+    if target_arch in TAG_CPU:
         cpu_words = TAG_CPU[target_arch]
         filtered = [p for p in parts if any(w in p for w in cpu_words)]
         if filtered:

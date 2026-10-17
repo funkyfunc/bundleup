@@ -234,9 +234,10 @@ def activate(site: str, pth: "Optional[Sequence[str]]" = None) -> None:
     # parent added to sys.path and its shim from PYTHONPATH.
     parent = os.environ.get(ENV_SITE)
     parent_paths = [p for p in os.environ.get(ENV_PATHS, "").split(os.pathsep) if p]
+    parent_scripts = [p for p in os.environ.get(ENV_SCRIPTS, "").split(os.pathsep) if p]
     if parent and not _same(parent, site):
-        evict_roots = [parent, *parent_paths]
-        sys.path[:] = [p for p in sys.path if not (p and any(_same(p, r) for r in evict_roots))]
+        evict_roots = [parent, *parent_paths, *parent_scripts]
+        sys.path[:] = [p for p in sys.path if not any(_same(p or ".", r) for r in evict_roots)]
         for mod_name, mod in list(sys.modules.items()):
             mod_file = getattr(mod, "__file__", None)
             mod_paths = getattr(mod, "__path__", None)
@@ -341,7 +342,8 @@ def add_pth(sitedir: str, name: str, known: "set[str]") -> None:
                 sys.stderr.write("bundleup: error in %s line %d: %r\n" % (name, number, e))
                 return
             continue
-        path = os.path.normcase(_abspath(os.path.join(sitedir, line.rstrip())))
-        if path not in known and os.path.exists(path):
-            sys.path.append(path)
-            known.add(path)
+        raw_path = _abspath(os.path.join(sitedir, line.rstrip()))
+        norm_path = os.path.normcase(raw_path)
+        if norm_path not in known and os.path.exists(raw_path):
+            sys.path.append(raw_path)
+            known.add(norm_path)

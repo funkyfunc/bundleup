@@ -413,9 +413,8 @@ def search_roots(site: Path) -> list[Path]:
         except OSError:
             continue
         for line in text.splitlines():
-            line = line.strip()
-            if line and not line.startswith(("#", "import ", "import\t")):
-                sub = site / line
+            if line.strip() and not line.startswith(("#", "import ", "import\t")):
+                sub = site / line.rstrip()
                 if sub.is_dir():
                     roots.append(sub)
     return roots

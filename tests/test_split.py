@@ -132,3 +132,127 @@ def test_split_layer_exact_budget_boundary(tmp_path: Path) -> None:
     parts = _payload.split_layer(layer, single_min, stage2)
     assert len(parts) == 2
     assert all(p.path.stat().st_size <= single_min for p in parts)
+
+    # 3. Exact ZIP64 budget boundary when file_size >= LIMIT but compress_size < LIMIT
+    orig_limit = _zipwriter.LIMIT
+    try:
+        _zipwriter.LIMIT = 500
+        z64_all = tmp_path / "z64-all.zip"
+        z64_one = tmp_path / "z64-one.zip"
+        m1 = _zipwriter.Member("a.bin", lambda: b"x" * 600)
+        m2 = _zipwriter.Member("b.bin", lambda: b"y" * 100)
+        d_all, w_all = _zipwriter.write_zip(z64_all, [m1, m2], level=6, hasher=_verify.record_hash)
+        _zipwriter.write_zip(z64_one, [m1], level=6, hasher=_verify.record_hash)
+        exact_one = z64_one.stat().st_size
+        z64_layer = _payload.Layer("layer-z64.zip", z64_all, d_all, w_all, (0,))
+        stage3 = tmp_path / "stage3"
+        stage3.mkdir()
+        z64_parts = _payload.split_layer(z64_layer, exact_one, stage3)
+        assert len(z64_parts) == 2
+        assert z64_parts[0].path.stat().st_size == exact_one
+        assert all(p.path.stat().st_size <= exact_one for p in z64_parts)
+    finally:
+        _zipwriter.LIMIT = orig_limit
+
+    # 4. Non-ASCII, spaces, quotes, and % in member filenames across split_layer
+    weird_names = [
+        "café/naïve_🚀.py",
+        "dir with spaces/file 'quoted' 100%.txt",
+    ]
+    weird_zip = tmp_path / "weird.zip"
+    weird_members = [_zipwriter.Member(n, lambda: b"hello" * 80) for n in weird_names]
+    w_digest, w_written = _zipwriter.write_zip(
+        weird_zip, weird_members, level=6, hasher=_verify.record_hash
+    )
+    with zipfile.ZipFile(weird_zip) as zf:
+        assert zf.getinfo("café/naïve_🚀.py").flag_bits & 0x800
+    w_layer = _payload.Layer("layer-weird.zip", weird_zip, w_digest, w_written, (0,))
+    stage4 = tmp_path / "stage4"
+    stage4.mkdir()
+    w_parts = _payload.split_layer(w_layer, weird_zip.stat().st_size - 10, stage4)
+    assert len(w_parts) == 2
+    unpacked_names = []
+    for part in w_parts:
+        with zipfile.ZipFile(part.path) as zf:
+            unpacked_names.extend(zf.namelist())
+    assert unpacked_names == weird_names
+
+
+def test_zip64_formats_and_outer_zip_gap_verification(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Bug 1 & Bug 2 regressions:
+    - Building `--format zip`, `--format pyz`, and `--format py` with lowered `_zipwriter.LIMIT`
+      preserves ZIP64 EOCD records (`PK\\x06\\x06`) and passes `verify()`.
+    - Injecting unreferenced gap bytes into `.pyz`/`.zip` or prepending `PK\\x03\\x04` inside a
+      `--format py` base64 zip is caught by `verify()`.
+    - Path traversal in `manifest.json` (`cache_dir` or `parts`) raises `NotABundleError`.
+    """
+    import base64
+    import struct
+
+    from bundleup import NotABundleError, _loader, _zipwriter
+
+    script = tmp_path / "hello.py"
+    script.write_text('print("hello zip64")\n', encoding="utf-8")
+
+    monkeypatch.setattr(_zipwriter, "LIMIT", 50)
+    out_zip = tmp_path / "out" / "hello.zip"
+    out_pyz = tmp_path / "out" / "hello.pyz"
+    out_py = tmp_path / "out" / "hello.py"
+    build(BuildOptions(path=script, output=out_zip, python=HERE, format="zip"))
+    build(BuildOptions(path=script, output=out_pyz, python=HERE, format="pyz"))
+    build(BuildOptions(path=script, output=out_py, python=HERE, format="py"))
+
+    # Bug 2: stage_zip preserves _zipwriter's ZIP64 EOCD and Locator
+    raw_zip = out_zip.read_bytes()
+    assert b"PK\x06\x06" in raw_zip and b"PK\x06\x07" in raw_zip
+    assert verify(out_zip).ok
+    assert verify(out_pyz).ok
+    assert verify(out_py).ok
+    monkeypatch.undo()
+
+    # Bug 1A: Inject unreferenced bytes between local entries and Central Directory in .pyz
+    raw_pyz = out_pyz.read_bytes()
+    with zipfile.ZipFile(out_pyz) as zf:
+        start_dir = zf.start_dir
+    cd_offset = struct.unpack("<I", raw_pyz[-6:-2])[0]
+    injected = b"UNVERIFIED_GAP_BYTES"
+    new_eocd = raw_pyz[-22:-6] + struct.pack("<I", cd_offset + len(injected)) + raw_pyz[-2:]
+    tampered_pyz = tmp_path / "tampered_gap.pyz"
+    tampered_pyz.write_bytes(raw_pyz[:start_dir] + injected + raw_pyz[start_dir:-22] + new_eocd)
+    rep_pyz = verify(tampered_pyz)
+    assert not rep_pyz.ok
+    assert any("trailing data after the zip archive" in p for p in rep_pyz.problems)
+
+    # Bug 1B: Prepend PK\x03\x04 before embedded zip in --format py base64 block
+    raw_py = out_py.read_bytes()
+    s_idx = raw_py.rfind(_loader.DATA_START)
+    e_idx = raw_py.rfind(_loader.DATA_END)
+    body = raw_py[s_idx + len(_loader.DATA_START) : e_idx]
+    b64_bytes = b"".join(line[1:] for line in body.splitlines() if line.startswith(b"#"))
+    inner_zip = base64.b64decode(b64_bytes)
+    prefixed_zip = b"PK\x03\x04HIDDEN_PREFIX" + inner_zip
+    new_lines = b"".join(
+        b"#" + line + b"\n" for line in base64.encodebytes(prefixed_zip).splitlines()
+    )
+    tampered_py = tmp_path / "tampered_prefix.py"
+    tampered_py.write_bytes(
+        raw_py[: s_idx + len(_loader.DATA_START)] + b"\n" + new_lines + raw_py[e_idx:]
+    )
+    rep_py = verify(tampered_py)
+    assert not rep_py.ok
+    assert any("the code before its data" in p for p in rep_py.problems)
+
+    # Bug 1C: Path traversal in manifest.json cache_dir / parts
+    bad_manifest_pyz = tmp_path / "bad_manifest.pyz"
+    with zipfile.ZipFile(out_pyz) as src_zf, zipfile.ZipFile(bad_manifest_pyz, "w") as dst_zf:
+        for item in src_zf.infolist():
+            data = src_zf.read(item.filename)
+            if item.filename == "manifest.json":
+                doc = json.loads(data)
+                doc["cache_dir"] = "../escape"
+                data = json.dumps(doc).encode("utf-8")
+            dst_zf.writestr(item, data)
+    with pytest.raises(NotABundleError, match="incomplete"):
+        verify(bad_manifest_pyz)

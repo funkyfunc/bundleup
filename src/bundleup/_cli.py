@@ -718,7 +718,10 @@ def _run_cache(opts: argparse.Namespace) -> ExitCode:
     style = Style(err, opts.color)
     command = f"cache {opts.cache_command}"
     if opts.cache_command == "list":
-        bundles = list_cache()
+        try:
+            bundles = list_cache()
+        except BundleupError as e:
+            return _failed(e, command, opts, style)
         if opts.json:
             result: dict[str, object] = {"bundles": [b.to_json_dict() for b in bundles]}
             _emit_json(command, ExitCode.OK, result, [])
@@ -778,9 +781,27 @@ _FLAG_ALIASES: dict[str, str] = {
 
 
 def _usage_error(message: str, argv: list[str]) -> ExitCode:
-    words = [a for a in argv if not a.startswith("-")]
-    word = words[0] if words else ""
     all_parsers = parsers()
+    takes_value = {
+        opt
+        for p in all_parsers.values()
+        for opt, act in p._option_string_actions.items()
+        if act.nargs not in (0, "?", "*")
+    }
+    words: list[str] = []
+    i = 0
+    while i < len(argv):
+        tok = argv[i]
+        if tok == "--":
+            words.extend(argv[i + 1 :])
+            break
+        if tok in takes_value:
+            i += 2
+            continue
+        if not tok.startswith("-"):
+            words.append(tok)
+        i += 1
+    word = words[0] if words else ""
     sub_name = (
         f"cache {words[1]}"
         if word == "cache" and len(words) > 1 and f"cache {words[1]}" in all_parsers
@@ -846,7 +867,7 @@ def _usage_error(message: str, argv: list[str]) -> ExitCode:
                     hint = f"did you mean `{close[0]}`? (see `{help_cmd}`)"
     diag = Diagnostic("usage", "error", message, hint)
     if "--json" in argv:
-        _emit_json(sub_name, ExitCode.USAGE_ERROR, None, [diag])
+        _emit_json(sub_name or "bundleup", ExitCode.USAGE_ERROR, None, [diag])
     else:
         _print_diagnostic(diag, Style(sys.stderr, "auto"), sys.stderr)
     return ExitCode.USAGE_ERROR
@@ -903,6 +924,17 @@ def _safe_exists(token: str) -> bool:
 def _looks_like_path(token: str) -> bool:
     if " " in token:
         return False
+    try:
+        p = Path(token)
+        if p.is_dir():
+            return True
+        if p.is_file():
+            return token.endswith(".py")
+    except OSError:
+        pass
+    ext = os.path.splitext(token)[1]
+    if ext and ext != ".py":
+        return False
     return (
         token == "."
         or token.endswith(".py")
@@ -918,7 +950,20 @@ def _is_entry_python(args: list[str]) -> bool:
             return True
         if tok == "--entry" and idx + 1 < len(args) and args[idx + 1] == "python":
             return True
-    return os.environ.get("BUNDLEUP_ENTRY", "").strip() == "python"
+    if os.environ.get("BUNDLEUP_ENTRY", "").strip() == "python":
+        return True
+    try:
+        text = Path("pyproject.toml").read_text(encoding="utf-8", errors="ignore")
+        return (
+            "[tool.bundleup]" in text
+            and "python" in text
+            and any(
+                line.partition("#")[0].replace("'", '"').replace(" ", "") == 'entry="python"'
+                for line in text.splitlines()
+            )
+        )
+    except OSError:
+        return False
 
 
 def _is_project_or_pep723(token: str) -> bool:

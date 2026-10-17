@@ -104,6 +104,9 @@ def _kill_tree(proc: subprocess.Popen[bytes]) -> None:
 
 
 def _make_writable(root: Path) -> None:
+    with contextlib.suppress(OSError):
+        if not os.path.islink(root):
+            os.chmod(root, os.lstat(root).st_mode | 0o700)
     for dirpath, dirnames, filenames in os.walk(root):
         for name in (*dirnames, *filenames):
             p = os.path.join(dirpath, name)
@@ -126,7 +129,7 @@ def run(bundle: Path, python: str | None, args: tuple[str, ...]) -> SmokeResult:
         and (os.sep in python or (os.altsep and os.altsep in python) or os.path.exists(python))
         else python
     )
-    with tempfile.TemporaryDirectory(prefix="bundleup-smoke-", dir=_runnable()) as tmp:
+    with tempfile.TemporaryDirectory(prefix="bundleup-smoke-", dir=_runnable(bundle)) as tmp:
         root = Path(tmp)
         try:
             for name in ("home", "cache", "work", "tmp"):
@@ -195,7 +198,7 @@ def run(bundle: Path, python: str | None, args: tuple[str, ...]) -> SmokeResult:
     return result
 
 
-def _runnable() -> str | None:
+def _runnable(bundle: Path | None = None) -> str | None:
     """Where the fresh home and cache go: the temp folder, unless it's mounted noexec (a
     hardened host), where a bundle with compiled code can't run from its cache; then bundleup's
     build cache folder (eighth review: the cache is only where BUNDLEUP_CACHE says, ADR-0048)."""
@@ -207,9 +210,15 @@ def _runnable() -> str | None:
         return None
     from ._bytecode import cache_dir
 
-    folder = cache_dir().parent / "smoke"
-    folder.mkdir(parents=True, exist_ok=True)
-    return str(folder)
+    candidates = [cache_dir().parent / "smoke", *([bundle.parent] if bundle is not None else [])]
+    for folder in candidates:
+        try:
+            folder.mkdir(parents=True, exist_ok=True)
+            if not (os.statvfs(folder).f_flag & flag):
+                return str(folder)
+        except OSError:
+            continue
+    return None
 
 
 def _offline(command: list[str]) -> tuple[list[str], bool]:

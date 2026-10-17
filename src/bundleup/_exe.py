@@ -28,6 +28,7 @@ import urllib.request
 import zlib
 from pathlib import Path
 
+from . import _loader
 from ._bytecode import cache_dir
 from ._errors import BundleupError, CheckFailedError, Diagnostic, UsageError
 from ._formats import describe_size
@@ -446,7 +447,7 @@ def precompiled(archive: Path, target: Target, stage: Path) -> Path:
         except OSError:
             pass
     local_archive = stage / archive.name
-    if local_archive != archive:
+    if local_archive != archive and not (local_archive.is_file() and _valid_gzip(local_archive)):
         try:
             shutil.copyfile(archive, local_archive)
         except OSError as e:
@@ -456,6 +457,7 @@ def precompiled(archive: Path, target: Target, stage: Path) -> Path:
             ) from None
     version = f"{target.version[0]}.{target.version[1]}"
     tree = stage / "python-stdlib"
+    _loader._rmtree(str(tree))
     try:
         with tarfile.open(local_archive) as src:
             members = src.getmembers()
@@ -469,7 +471,7 @@ def precompiled(archive: Path, target: Target, stage: Path) -> Path:
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_bytes(src.extractfile(m).read())  # type: ignore[union-attr]  # a file
     except (tarfile.TarError, EOFError, zlib.error, OSError) as e:
-        shutil.rmtree(tree, ignore_errors=True)
+        _loader._rmtree(str(tree))
         raise BundleupError(
             f"cached Python archive {archive.name} is corrupted ({e})",
             hint=_CLEAR,
@@ -480,11 +482,18 @@ def precompiled(archive: Path, target: Target, stage: Path) -> Path:
     # The recorded source path without this build's temporary folder (Python replaces it with
     # the real one on import): the same bytes from any build.
     compile_all += ["--invalidation-mode", "unchecked-hash", "-s", str(tree), str(tree)]
-    done = subprocess.run(
-        compile_all, capture_output=True, text=True, check=False, env=compile_env()
-    )
+    try:
+        done = subprocess.run(
+            compile_all, capture_output=True, text=True, check=False, env=compile_env()
+        )
+    except OSError as e:
+        _loader._rmtree(str(tree))
+        raise BundleupError(
+            f"couldn't compile the standard library of {archive.name} ({e})",
+            hint=f"{target.executable} couldn't be started",
+        ) from None
     if done.returncode:  # the stdlib compiles cleanly (checked on 3.12's): a failure is real
-        shutil.rmtree(tree, ignore_errors=True)
+        _loader._rmtree(str(tree))
         raise BundleupError(
             f"couldn't compile the standard library of {archive.name}",
             detail=(done.stdout + done.stderr)[-2000:],
@@ -526,7 +535,7 @@ def precompiled(archive: Path, target: Target, stage: Path) -> Path:
             hint=_CLEAR,
         ) from None
     finally:
-        shutil.rmtree(tree, ignore_errors=True)
+        _loader._rmtree(str(tree))
     part = out.with_name(f".{out.name}.{os.getpid()}.{os.urandom(4).hex()}.part")
     try:
         out.parent.mkdir(parents=True, exist_ok=True)

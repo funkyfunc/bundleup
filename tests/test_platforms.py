@@ -226,6 +226,13 @@ def test_phase3_platform_levels_prerelease_python_runtime_and_cli(
     assert p._level("aarch64-apple-darwin") == (13, 0)
     monkeypatch.setenv("MACOSX_DEPLOYMENT_TARGET", "-1.0")
     assert p._level("aarch64-apple-darwin") == (13, 0)
+    monkeypatch.setenv("MACOSX_DEPLOYMENT_TARGET", "11.0")
+    mac_arm = p.parse("aarch64-apple-darwin")
+    assert not mac_arm.accepts("py3-none-macosx_10_6_universal")
+    assert mac_arm.accepts("py3-none-macosx_10_9_universal2")
+    assert p.runtime_needs(
+        [["cp312-cp312-macosx_10_9_x86_64.macosx_12_0_arm64"]], platform=mac_arm
+    ).macos == (12, 0)
     monkeypatch.delenv("MACOSX_DEPLOYMENT_TARGET", raising=False)
 
     # 2. Pre-release Python accepted by check_requires_python; non-JSON probe raises ProjectError
@@ -269,7 +276,7 @@ def test_phase3_platform_levels_prerelease_python_runtime_and_cli(
     assert upper_dir.exists()
 
     # 4. _runtime: _is_py_bundle with >128B shebang, sys.path[0] .pth insertion, _HOST_TAIL reload,
-    # and deactivate()
+    # parent script eviction, and deactivate()
     long_shebang_bundle = tmp_path / "long_bundle.py"
     long_shebang_bundle.write_bytes(
         b"#!" + b"/nix/store/" + b"a" * 180 + b"/bin/python3\n# /// bundleup\n"
@@ -284,14 +291,20 @@ def test_phase3_platform_levels_prerelease_python_runtime_and_cli(
     front_dir = site_a / "front_pth"
     front_dir.mkdir()
     (site_a / "front.pth").write_text(f"import sys; sys.path.insert(0, {str(front_dir)!r})\n")
+    script_dir_a = tmp_path / "script_dir_a"
+    script_dir_a.mkdir()
     site_b = tmp_path / "site_b"
     site_b.mkdir()
+    mixed_case_sub = site_b / "MixedCaseSub"
+    mixed_case_sub.mkdir()
+    (site_b / "sub.pth").write_text("MixedCaseSub  \n")
 
     monkeypatch.setattr(sys, "path", [stdlib_dir, str(host_sp)])
     monkeypatch.setattr(_runtime, "_HOST_TAIL", None)
     monkeypatch.delitem(sys.__dict__, "_bundleup_host_tail", raising=False)
     monkeypatch.delenv("BUNDLEUP_RUNTIME_SITE", raising=False)
     monkeypatch.delenv("BUNDLEUP_RUNTIME_PATHS", raising=False)
+    monkeypatch.delenv("BUNDLEUP_RUNTIME_SCRIPTS", raising=False)
     monkeypatch.delenv("BUNDLEUP_RUNTIME_INHERIT", raising=False)
     monkeypatch.delenv("BUNDLEUP_INHERIT_PATH", raising=False)
 
@@ -299,13 +312,17 @@ def test_phase3_platform_levels_prerelease_python_runtime_and_cli(
     assert str(front_dir) in os.environ["BUNDLEUP_RUNTIME_PATHS"].split(os.pathsep)
     assert str(host_sp) not in sys.path
 
-    # Simulate reloading _bundleup_runtime in child bundle_b that needs host packages (--external)
+    # Simulate parent bundle_a adding a script directory before running child bundle_b (--external)
+    sys.path.insert(0, str(script_dir_a))
+    monkeypatch.setenv("BUNDLEUP_RUNTIME_SCRIPTS", str(script_dir_a))
     monkeypatch.setattr(_runtime, "_HOST_TAIL", None)
     monkeypatch.setenv("BUNDLEUP_RUNTIME_INHERIT", str(site_b))
-    _runtime.activate(str(site_b), [])
+    _runtime.activate(str(site_b), ["sub.pth"])
     assert str(front_dir) not in sys.path
+    assert str(script_dir_a) not in sys.path
     assert str(site_a) not in sys.path
     assert str(site_b) in sys.path
+    assert str(mixed_case_sub) in sys.path
     assert str(host_sp) in sys.path
 
     shim_b = os.path.join(str(site_b), _runtime.SHIM)
@@ -314,7 +331,8 @@ def test_phase3_platform_levels_prerelease_python_runtime_and_cli(
     assert os.environ.get("PYTHONPATH") == "/custom/pp"
     assert _runtime.ENV_SITE not in os.environ
 
-    # 5. _cli: whitespace env vars, overly long path tokens, and BrokenPipeError
+    # 5. _cli: whitespace env vars, overly long path tokens, flag values before subcommand,
+    # and BrokenPipeError
     monkeypatch.setenv("BUNDLEUP_MAX_SIZE", "   ")
     monkeypatch.setenv("BUNDLEUP_SPLIT", "   ")
     monkeypatch.setenv("BUNDLEUP_OUTPUT", "   ")
@@ -323,9 +341,123 @@ def test_phase3_platform_levels_prerelease_python_runtime_and_cli(
     assert _cli._looks_like_path(long_token) is False
     assert _cli._is_project_or_pep723(long_token) is False
     assert _cli._usage_error("invalid choice", [long_token]) == ExitCode.USAGE_ERROR
+    assert (
+        _cli._usage_error(
+            "unrecognized arguments: --matrix",
+            ["--color", "never", "build", "--matrix"],
+        )
+        == ExitCode.USAGE_ERROR
+    )
 
     def raise_broken_pipe(_opts: object) -> ExitCode:
         raise BrokenPipeError
 
     monkeypatch.setattr(_cli, "_run_cache", raise_broken_pipe)
     assert _cli.main(["cache", "list"]) == ExitCode.OK
+
+    # 6. Bug 3: _loader._bundle_root() resolves _SCIE_EXE to <real_exe_dir>/.bundleup
+    exe_dir = tmp_path / "exe_bin"
+    exe_dir.mkdir()
+    fake_exe = exe_dir / "mytool"
+    fake_exe.write_bytes(b"fake")
+    nce_dir = tmp_path / "nce" / "hash"
+    nce_dir.mkdir(parents=True)
+    monkeypatch.delenv("BUNDLEUP_CACHE", raising=False)
+    monkeypatch.setattr(_loader, "_ARCHIVE", str(nce_dir / "app.pyz"))
+    monkeypatch.setattr(_loader, "_SCIE_EXE", str(fake_exe))
+    roots = _loader._roots(_loader._bundle_root())
+    assert roots[-1] == (os.path.join(os.path.realpath(str(exe_dir)), ".bundleup"), True)
+
+    # 7. Bug 4A: _smoke._runnable(bundle) falls back to bundle.parent when both TMPDIR and
+    # cache_dir().parent / "smoke" are mounted noexec
+    from bundleup import _smoke
+
+    flag = getattr(os, "ST_NOEXEC", 0)
+    if flag:
+        smoke_dir = tmp_path / "noexec_cache" / "smoke"
+        bundle_dir = tmp_path / "exec_dist"
+        bundle_dir.mkdir(parents=True)
+        bundle_file = bundle_dir / "app.pyz"
+        bundle_file.write_bytes(b"")
+        monkeypatch.setenv("BUNDLEUP_CACHE", str(tmp_path / "noexec_cache" / "bundles"))
+
+        class _FakeStatVfs:
+            def __init__(self, f_flag: int) -> None:
+                self.f_flag = f_flag
+
+        def fake_statvfs(p: object) -> _FakeStatVfs:
+            s = os.fspath(p)  # type: ignore[arg-type]
+            if str(bundle_dir) in s:
+                return _FakeStatVfs(0)
+            return _FakeStatVfs(flag)
+
+        monkeypatch.setattr(os, "statvfs", fake_statvfs)
+        assert _smoke._runnable(bundle_file) == str(bundle_dir)
+        assert smoke_dir.is_dir()
+
+    # 8. Bug 4B: _cli._looks_like_path rejects non-.py files and _is_entry_python reads
+    # [tool.bundleup] entry = "python" from pyproject.toml
+    readme = tmp_path / "README.md"
+    readme.write_text("# readme\n", encoding="utf-8")
+    assert _cli._looks_like_path(str(readme)) is False
+    assert _cli._looks_like_path("data/input.txt") is False
+    build_parser = _cli.parsers()["build"]
+    assert _cli._join_smoke(["build", "--smoke", "data/input.txt"], build_parser) == [
+        "build",
+        "--smoke",
+        "data/input.txt",
+    ]
+    proj_py = tmp_path / "proj_entry_py"
+    proj_py.mkdir()
+    (proj_py / "pyproject.toml").write_text(
+        '[project]\nname = "x"\nversion = "0.1.0"\n[tool.bundleup]\nentry = "python"\n',
+        encoding="utf-8",
+    )
+    (proj_py / "tool.py").write_text("print(1)\n", encoding="utf-8")
+    monkeypatch.chdir(proj_py)
+    monkeypatch.delenv("BUNDLEUP_ENTRY", raising=False)
+    assert _cli._is_entry_python(["build", "--smoke", "tool.py"]) is True
+    assert _cli._join_smoke(["build", "--smoke", "tool.py"], build_parser) == [
+        "build",
+        "--smoke",
+        "tool.py",
+    ]
+
+    # 9. _coverage.diagnostics forwards abiflags="t" to suggestion()
+    from bundleup import _coverage
+
+    pylock_gil_only = """
+version = "1.0"
+[[packages]]
+name = "nativepkg"
+version = "1.0.0"
+wheels = [
+    { name = "nativepkg-1.0.0-cp313-cp313-manylinux_2_28_x86_64.whl" },
+]
+"""
+    p_217 = parse("x86_64-manylinux_2_17")
+    gaps_t = _coverage.gaps(pylock_gil_only, p_217, (3, 13), abiflags="t")
+    diags_t = _coverage.diagnostics(gaps_t, p_217, pylock_gil_only, abiflags="t")
+    assert len(diags_t) == 1
+    assert "would work" not in (diags_t[0].hint or "")
+
+    # 10. _python._find_env ignores broken local .venv when active VIRTUAL_ENV is valid
+    import contextlib
+
+    broken_local = tmp_path / "broken_local_proj"
+    (broken_local / ".venv" / "bin").mkdir(parents=True)
+    with contextlib.suppress(OSError):
+        (broken_local / ".venv" / "bin" / "python").symlink_to(tmp_path / "missing_python")
+        valid_active = tmp_path / "valid_active_venv"
+        valid_active.mkdir()
+        monkeypatch.setenv("VIRTUAL_ENV", str(valid_active))
+        monkeypatch.delenv("CONDA_PREFIX", raising=False)
+        assert _python._find_env(broken_local) is None
+
+    # 11. _runtime.activate evicts "" (cwd) from sys.path when switching from parent bundle
+    monkeypatch.setattr(sys, "path", ["", stdlib_dir])
+    monkeypatch.setenv("BUNDLEUP_RUNTIME_SITE", str(site_a))
+    monkeypatch.setenv("BUNDLEUP_RUNTIME_PATHS", str(site_a))
+    monkeypatch.setenv("BUNDLEUP_RUNTIME_SCRIPTS", os.path.abspath("."))
+    _runtime.activate(str(site_b), [])
+    assert "" not in sys.path

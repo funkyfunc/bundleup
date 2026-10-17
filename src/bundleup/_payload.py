@@ -6,7 +6,7 @@ import hashlib
 import os
 import sys
 import zipfile
-from collections.abc import Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
@@ -634,7 +634,12 @@ def precompile(target: Target, site: Path, *, progress: Progress, checked: bool 
     )
 
 
-def write_payload(site: Path, payload: Path) -> tuple[str, dict[str, str]]:
+def write_payload(
+    site: Path,
+    payload: Path,
+    *,
+    trailer: Callable[[dict[str, str]], Iterable[_zipwriter.Member]] | None = None,
+) -> tuple[str, dict[str, str]]:
     """Zip the installed tree reproducibly, compressing on several threads.
 
     Returns the archive's sha256, and each zipped file's RECORD-style hash, for the integrity
@@ -648,7 +653,12 @@ def write_payload(site: Path, payload: Path) -> tuple[str, dict[str, str]]:
     # Level 6 (zlib's default): with compression spread over threads it costs ~5% more time than
     # level 1 on a large tree and saves ~8-13% of the size (findings 2026-10-05-faster-builds).
     return _zipwriter.write_zip(
-        payload, members, level=6, workers=workers, hasher=_verify.record_hash
+        payload,
+        members,
+        level=6,
+        workers=workers,
+        hasher=_verify.record_hash,
+        trailer=trailer,
     )
 
 
@@ -710,8 +720,7 @@ def split_layer(layer: Layer, budget: int, stage: Path) -> list[Layer]:
         return [replace(layer, member=f"layer-{layer.digest[:16]}.zip")]
     with zipfile.ZipFile(layer.path) as zf:
         infos = zf.infolist()
-        end = END + (76 if len(infos) >= 0xFFFF or budget >= _zipwriter.LIMIT else 0)
-        too_big = [i for i in infos if end + _cost(i, budget) > budget]
+        too_big = [i for i in infos if _archive_size(*_entry_sizes(i, 0), 1) > budget]
         if too_big:
             biggest = max(too_big, key=lambda i: i.compress_size)
             raise UsageError(
@@ -720,14 +729,22 @@ def split_layer(layer: Layer, budget: int, stage: Path) -> list[Layer]:
                 hint="a file can't be cut in two: give --split a bigger size",
             )
         pieces: list[list[zipfile.ZipInfo]] = [[]]
-        size = end
+        local_total = 0
+        central_total = 0
         for info in infos:
-            cost = _cost(info, budget)
-            if size + cost > budget and pieces[-1]:
+            lb, cb = _entry_sizes(info, local_total)
+            if (
+                pieces[-1]
+                and _archive_size(local_total + lb, central_total + cb, len(pieces[-1]) + 1)
+                > budget
+            ):
                 pieces.append([])
-                size = end
+                local_total = 0
+                central_total = 0
+                lb, cb = _entry_sizes(info, 0)
             pieces[-1].append(info)
-            size += cost
+            local_total += lb
+            central_total += cb
         if len(pieces) == 1:
             return [replace(layer, member=f"layer-{layer.digest[:16]}.zip")]
         out = []
@@ -745,13 +762,21 @@ def split_layer(layer: Layer, budget: int, stage: Path) -> list[Layer]:
         return out
 
 
-def _cost(info: zipfile.ZipInfo, budget: int = 0) -> int:
-    big = (
-        info.file_size >= _zipwriter.LIMIT
-        or info.compress_size >= _zipwriter.LIMIT
-        or budget >= _zipwriter.LIMIT
-    )
-    return info.compress_size + PER_FILE + (48 if big else 0) + 2 * len(info.filename.encode())
+def _entry_sizes(info: zipfile.ZipInfo, offset: int) -> tuple[int, int]:
+    name_len = len(info.filename.encode())
+    limit = _zipwriter.LIMIT
+    local_extra = 20 if (info.file_size >= limit or info.compress_size >= limit) else 0
+    local_bytes = 30 + name_len + local_extra + info.compress_size
+    z64 = (info.file_size >= limit) + (info.compress_size >= limit) + (offset >= limit)
+    central_extra = (4 + 8 * z64) if z64 else 0
+    central_bytes = 46 + name_len + central_extra
+    return local_bytes, central_bytes
+
+
+def _archive_size(local_total: int, central_total: int, count: int) -> int:
+    limit = _zipwriter.LIMIT
+    end = END + (76 if (count >= 0xFFFF or local_total >= limit or central_total >= limit) else 0)
+    return local_total + central_total + end
 
 
 def verify_payload(

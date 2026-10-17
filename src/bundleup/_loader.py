@@ -82,9 +82,19 @@ try:
 except OSError:
     _ARCHIVE = _FILE if EMBEDDED else os.path.dirname(_FILE)
 _SCIE = None  # type: str | None
+_SCIE_EXE = None  # type: str | None
 # The lines around a .py bundle's data (found from the end: these constants come first).
 DATA_START = b"# --- bundleup data: base64 of a zip, read by the code above ---"
 DATA_END = b"# --- end of bundleup data ---"
+
+
+def _bundle_root() -> str:
+    if _SCIE_EXE:
+        try:
+            return os.path.realpath(_SCIE_EXE)
+        except OSError:
+            return _SCIE_EXE
+    return _ARCHIVE
 
 
 def _me() -> str:
@@ -505,7 +515,7 @@ def _private(root: str) -> bool:
 
 
 def _find() -> "str | None":
-    for root, shared in _roots(_ARCHIVE):
+    for root, shared in _roots(_bundle_root()):
         if not _loads_code(root):
             continue
         path = os.path.join(root, DIRNAME)
@@ -826,7 +836,7 @@ def _extract() -> str:
     problems = []  # type: list[str]
     if EMBEDDED:
         _embedded()  # damaged data: say so, rather than blame every cache folder
-    for root, shared in _roots(_ARCHIVE):
+    for root, shared in _roots(_bundle_root()):
         if not _loads_code(root):
             problems.append("  %s: mounted noexec, so compiled modules can't load from it" % root)
             continue
@@ -949,12 +959,12 @@ def _activate(site: str) -> None:
         runtime = __import__("_bundleup_runtime")  # type: Any
     finally:
         del sys.path[0]
-    os.environ.pop("BUNDLEUP_RUNTIME_SCRIPTS", None)
     if EXTERNAL:
         os.environ["BUNDLEUP_RUNTIME_INHERIT"] = site
     else:
         os.environ.pop("BUNDLEUP_RUNTIME_INHERIT", None)
     runtime.activate(site, PTH)
+    os.environ.pop("BUNDLEUP_RUNTIME_SCRIPTS", None)
 
 
 def _exec_file(path: str, argv0: str, user_script: bool = False) -> None:
@@ -1238,7 +1248,8 @@ def _hold(site: str) -> bool:
 
 if __name__ == "__main__":
     _drop_bundle_from_sys_path()
-    _SCIE = os.environ.pop("SCIE_ARGV0", None)
+    _SCIE_EXE = os.environ.pop("SCIE", None)
+    _SCIE = os.environ.pop("SCIE_ARGV0", None) or _SCIE_EXE
     if _SCIE and sys.argv and os.path.basename(sys.argv[0]) == "app.pyz":
         sys.argv[0] = _SCIE
     _select()

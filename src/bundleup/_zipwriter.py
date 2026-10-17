@@ -83,6 +83,7 @@ def write_zip(
     level: int = 1,
     workers: int = 8,
     hasher: Callable[[bytes], str],
+    trailer: Callable[[dict[str, str]], Iterable[Member]] | None = None,
 ) -> tuple[str, dict[str, str]]:
     """Write `members` to `path` in the given order.
 
@@ -99,9 +100,12 @@ def write_zip(
                 entries.append(_write_local(out, pending.pop(0).result()))
         for future in pending:
             entries.append(_write_local(out, future.result()))
-        _write_central(out, entries)
         for entry in entries:
             hashes[entry.packed.name.decode("utf-8")] = entry.packed.data_hash
+        if trailer is not None:
+            for member in trailer(hashes):
+                entries.append(_write_local(out, _pack(member, level, hasher)))
+        _write_central(out, entries)
     return out.sha256.hexdigest(), hashes
 
 

@@ -27,7 +27,7 @@ import zipfile
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 
-from . import __version__, _bytecode, _loader, _verify
+from . import __version__, _bytecode, _loader, _verify, _zipwriter
 from ._errors import (
     BundleupError,
     CheckFailedError,
@@ -187,7 +187,7 @@ def write_bundle(
                 for member, payload in sorted(payloads.items()) if not parts else []:
                     info = zipfile.ZipInfo(member, FIXED_TIME)
                     info.external_attr = 0o100644 << 16
-                    big = payload.stat().st_size > 0x7FFFFFFF
+                    big = payload.stat().st_size >= min(0x7FFFFFFF, _zipwriter.LIMIT)
                     with open(payload, "rb") as src, zf.open(info, "w", force_zip64=big) as dest:
                         shutil.copyfileobj(src, dest, 1 << 20)
                 for path, name in ((loader, "__main__.py"), (loader_pyc, "__main__.pyc")):
@@ -480,7 +480,7 @@ def write_py(
         for member, payload in sorted(payloads.items()):
             info = zipfile.ZipInfo(member, FIXED_TIME)
             info.external_attr = 0o100644 << 16
-            big = payload.stat().st_size > 0x7FFFFFFF
+            big = payload.stat().st_size >= min(0x7FFFFFFF, _zipwriter.LIMIT)
             with open(payload, "rb") as src, zf.open(info, "w", force_zip64=big) as dest:
                 shutil.copyfileobj(src, dest, 1 << 20)
         info = zipfile.ZipInfo(MANIFEST, FIXED_TIME)
@@ -648,15 +648,14 @@ def stage_zip(p: Prepared, *, stage: Path, steps: Steps) -> Path:
     precompiled for the target Python; the manifest alongside."""
     steps.start("zip")
     staged = stage / "payload.zip"
-    _digest, written = write_payload(p.site, staged)
-    steps.start("verify")
-    manifest_json = _plain_manifest(p, "zip", written)
-    steps.start("write")
-    with zipfile.ZipFile(staged, "a") as zf:
-        info = zipfile.ZipInfo(DIR_MANIFEST, FIXED_TIME)
-        info.external_attr = 0o100644 << 16
-        info.compress_type = zipfile.ZIP_DEFLATED
-        zf.writestr(info, manifest_json)
+
+    def _manifest_member(written: dict[str, str]) -> list[_zipwriter.Member]:
+        steps.start("verify")
+        manifest_json = _plain_manifest(p, "zip", written)
+        steps.start("write")
+        return [_zipwriter.Member(DIR_MANIFEST, lambda: manifest_json)]
+
+    write_payload(p.site, staged, trailer=_manifest_member)
     return staged
 
 

@@ -7,6 +7,7 @@ import json
 import os
 import re
 import tempfile
+from collections.abc import Iterator
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -155,7 +156,7 @@ def find_python(
             # A version that isn't installed: fetch it into bundleup's own directory (ADR-0035),
             # so `--python 3.11 --python 3.13` works without setting anything up (ADR-0038).
             fetched = None
-            if request and re.fullmatch(r"\d+\.\d+", request):
+            if request and re.fullmatch(r"\d+\.\d+(?:\.\d+(?:(?:a|b|rc)\d+)?)?", request):
                 outside = Path(tempfile.gettempdir())  # uv answers a project's venv from inside it
                 fetched = fetch_interpreter(uv, request, cwd=outside, progress=progress)
             if not fetched:
@@ -261,13 +262,15 @@ def _find_cmd(uv: str, source: Source, *, request: str | None) -> list[str]:
 
 def _belongs_to(val: str, workdir: Path) -> bool:
     try:
-        if Path(os.path.abspath(val)).is_relative_to(Path(os.path.abspath(workdir))):
+        if Path(os.path.normcase(os.path.abspath(val))).is_relative_to(
+            Path(os.path.normcase(os.path.abspath(workdir)))
+        ):
             return True
-        resolved = Path(val).resolve()
-        if resolved.is_relative_to(workdir.resolve()):
+        resolved = Path(os.path.normcase(str(Path(val).resolve())))
+        if resolved.is_relative_to(Path(os.path.normcase(str(workdir.resolve())))):
             return True
         venv = workdir / ".venv"
-        return venv.exists() and resolved == venv.resolve()
+        return venv.exists() and resolved == Path(os.path.normcase(str(venv.resolve())))
     except (OSError, RuntimeError):
         return False
 
@@ -275,6 +278,8 @@ def _belongs_to(val: str, workdir: Path) -> bool:
 def _usable_venv(val: str) -> bool:
     try:
         root = Path(os.path.abspath(val))
+        if root.is_symlink() and not root.exists():
+            return False
         return not (
             root.is_dir()
             and any(
@@ -299,7 +304,9 @@ def _find_env(workdir: Path, *, is_script: bool = False) -> dict[str, str] | Non
         roots = [workdir, *([lock.parent] if lock and lock.parent != workdir else [])]
         try:
             has_local = any(
-                (r / ".venv").exists() or (r / ".python-version").is_file() for r in roots
+                ((r / ".venv").exists() and _usable_venv(str(r / ".venv")))
+                or (r / ".python-version").is_file()
+                for r in roots
             )
         except OSError:
             has_local = False
@@ -346,6 +353,38 @@ def private_pythons() -> Path:
     return cache_dir().parent / "pythons"
 
 
+@contextlib.contextmanager
+def _install_lock(folder: Path) -> Iterator[None]:
+    handle = None
+    try:
+        folder.mkdir(parents=True, exist_ok=True)
+        handle = open(folder / ".lock", "a+b")  # noqa: SIM115
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)  # type: ignore[attr-defined]
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+    except OSError:
+        if handle is not None:
+            handle.close()
+            handle = None
+    try:
+        yield
+    finally:
+        if handle is not None:
+            if os.name == "nt":
+                with contextlib.suppress(OSError):
+                    import msvcrt
+
+                    handle.seek(0)
+                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)  # type: ignore[attr-defined]
+            handle.close()
+
+
 def fetch_interpreter(uv: str, version: str, *, cwd: Path, progress: Progress) -> str | None:
     """An interpreter of `version`: an installed one, one bundleup installed before, or one
     installed now into bundleup's private directory. None if that's impossible (offline, or
@@ -353,7 +392,8 @@ def fetch_interpreter(uv: str, version: str, *, cwd: Path, progress: Progress) -
     found = find_interpreter(uv, version, cwd=cwd, progress=progress)
     if found:
         return found
-    env = {**_clean_venv_env(), "UV_PYTHON_INSTALL_DIR": str(private_pythons())}
+    pythons_dir = private_pythons()
+    env = {**_clean_venv_env(), "UV_PYTHON_INSTALL_DIR": str(pythons_dir)}
     find = [uv, "python", "find", "--no-project", version, "--managed-python"]
     try:  # installed by an earlier build: no download, nothing to say
         existing = _real(run(find, cwd=cwd, what="uv python find", progress=progress, env=env))
@@ -361,22 +401,29 @@ def fetch_interpreter(uv: str, version: str, *, cwd: Path, progress: Progress) -
             return existing
     except UvError:
         pass
-    # Said, not done silently (the owner, accepting ADR-0035): a build that downloads something
-    # should tell you, and how to stop it.
-    progress(
-        ProgressEvent(
-            "note",
-            f"downloading Python {version} into bundleup's own folder (once); "
-            "UV_PYTHON_DOWNLOADS=never turns this off",
+    with _install_lock(pythons_dir):
+        try:
+            existing = _real(run(find, cwd=cwd, what="uv python find", progress=progress, env=env))
+            if existing:
+                return existing
+        except UvError:
+            pass
+        # Said, not done silently (the owner, accepting ADR-0035): a build that downloads something
+        # should tell you, and how to stop it.
+        progress(
+            ProgressEvent(
+                "note",
+                f"downloading Python {version} into bundleup's own folder (once); "
+                "UV_PYTHON_DOWNLOADS=never turns this off",
+            )
         )
-    )
-    install = [uv, "python", "install", version, "--no-bin", "--no-registry"]
-    with contextlib.suppress(UvError):
-        run(install, cwd=cwd, what="uv python install", progress=progress, env=env)
-    try:
-        return _real(run(find, cwd=cwd, what="uv python find", progress=progress, env=env))
-    except UvError:
-        return None
+        install = [uv, "python", "install", version, "--no-bin", "--no-registry"]
+        with contextlib.suppress(UvError):
+            run(install, cwd=cwd, what="uv python install", progress=progress, env=env)
+        try:
+            return _real(run(find, cwd=cwd, what="uv python find", progress=progress, env=env))
+        except UvError:
+            return None
 
 
 def _real(found: str) -> str | None:

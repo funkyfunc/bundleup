@@ -178,11 +178,13 @@ def describe(gap: Gap) -> str:
     return f"{name}: wheels only for {shown}"
 
 
-def diagnostics(found: list[Gap], platform: Platform, pylock: str) -> list[Diagnostic]:
+def diagnostics(
+    found: list[Gap], platform: Platform, pylock: str, *, abiflags: str = ""
+) -> list[Diagnostic]:
     """Errors for packages that can't be bundled for `platform`; warnings for source-only ones
     (fine if they're pure Python, which only a build can tell)."""
     diags = []
-    better = suggestion(found, platform, pylock)
+    better = suggestion(found, platform, pylock, abiflags=abiflags)
     python = f"Python {found[0].python[0]}.{found[0].python[1]}" if found else ""
     for gap in found:
         if gap.source_only:
