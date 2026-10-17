@@ -1511,3 +1511,532 @@ def test_runtime_and_loader_audit_regressions(
         check=True,
     )
     assert r_stdin.stdout.strip() == "<stdin> ['-']"
+
+
+def test_blackbox_subagent_and_whitebox_regressions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Regressions for bugs found across the 3 parallel black-box subagents and white-box audit."""
+    import os
+    import subprocess
+    import sys
+
+    from bundleup import (
+        BuildOptions,
+        EntryPointError,
+        ProjectError,
+        UsageError,
+        _cli,
+        _config,
+        _loader,
+        _runtime,
+        _source,
+        _uv,
+        build,
+        verify,
+    )
+
+    # 1. Host .pth entries after stdlib are stripped even without a site-packages folder
+    orig_sys_path = list(sys.path)
+    fake_stdlib = (os.__file__ and os.path.dirname(os.__file__)) or "/stdlib"
+    leaked_editable = str(tmp_path / "some_editable_src")
+    monkeypatch.setattr(sys, "path", [fake_stdlib, leaked_editable])
+    assert _runtime.site_packages_index() == 1
+
+    # 2. PEP 420 namespace packages from parent bundle are evicted when child bundle activates
+    parent_site = tmp_path / "p_site"
+    parent_site.mkdir()
+    child_site = tmp_path / "c_site"
+    child_site.mkdir()
+    ns_mod = type(sys)("ns_shared")
+    ns_mod.__file__ = None
+    ns_mod.__path__ = [str(parent_site / "ns_shared")]  # type: ignore[attr-defined]
+    monkeypatch.setitem(sys.modules, "ns_shared", ns_mod)
+    monkeypatch.setenv("BUNDLEUP_RUNTIME_SITE", str(parent_site))
+    monkeypatch.delenv("BUNDLEUP_RUNTIME_INHERIT", raising=False)
+    monkeypatch.delenv("BUNDLEUP_INHERIT_PATH", raising=False)
+    _runtime.activate(str(child_site), [])
+    assert "ns_shared" not in sys.modules
+    monkeypatch.setattr(sys, "path", orig_sys_path)
+    monkeypatch.delenv("BUNDLEUP_RUNTIME_SITE", raising=False)
+
+    # 3. _orig_module skips value args of -W, -X, and --check-hash-based-pycs
+    assert (
+        _runtime._orig_module(
+            [
+                "python3",
+                "-W",
+                "ignore",
+                "-X",
+                "dev",
+                "--check-hash-based-pycs",
+                "always",
+                "-m",
+                "my_mod",
+            ]
+        )
+        == "my_mod"
+    )
+
+    # 4. _loader._roots() resolves relative HOME / XDG_CACHE_HOME and ignores empty HOME=""
+    saved_home = os.environ.get("HOME")
+    monkeypatch.delenv("BUNDLEUP_CACHE_DIR", raising=False)
+    monkeypatch.delenv("BUNDLEUP_CACHE", raising=False)
+    monkeypatch.setenv("HOME", "")
+    monkeypatch.setenv("XDG_CACHE_HOME", "rel_xdg_cache")
+    roots = _loader._roots(str(tmp_path / "app.pyz"))
+    assert all(os.path.isabs(r) for r, _ in roots)
+    monkeypatch.delenv("XDG_CACHE_HOME", raising=False)
+    if saved_home is not None:
+        monkeypatch.setenv("HOME", saved_home)
+    monkeypatch.setenv("BUNDLEUP_CACHE_DIR", str(tmp_path / "cache"))
+
+    # 5. _cli._join_smoke with --entry python and implicit "." project path passes script to --smoke
+    joined = _cli._join_smoke(
+        ["build", "--entry", "python", "--smoke", "scripts/tool.py"], _cli.parsers()["build"]
+    )
+    parsed = _cli.parser().parse_args(joined)
+    assert parsed.smoke == "scripts/tool.py" and parsed.path == "."
+
+    # 6. `bundleup check` honors `strict = true` in `[tool.bundleup]`
+    strict_script = tmp_path / "strict_script.py"
+    strict_script.write_text(
+        "# /// script\n"
+        '# requires-python = ">=3.11"\n'
+        "# dependencies = []\n"
+        "# [tool.bundleup]\n"
+        "# strict = true\n"
+        "# ///\n"
+        "import nonexistent_mod_xyz_for_strict_test\n"
+    )
+    assert _cli.main(["check", str(strict_script)]) == 1
+    capsys.readouterr()
+
+    # 7. _strip_script_external handles bracketed extras in PEP 723 deps and output = "path/..."
+    pep723_ext = tmp_path / "pep723_ext.py"
+    pep723_ext.write_text(
+        "# /// script\n"
+        '# requires-python = ">=3.11"\n'
+        "# dependencies = [\n"
+        '#   "rich[jupyter]>=13.0",\n'
+        "# ]\n"
+        "# [tool.bundleup]\n"
+        '# output = "dist/path/out.pyz"\n'
+        "# ///\n"
+        "print('ok')\n"
+    )
+    stage_dir = tmp_path / "stage_ext"
+    stage_dir.mkdir()
+    stripped_script = _uv._strip_script_external(pep723_ext, {"rich"}, stage_dir)
+    text = stripped_script.read_text()
+    assert "dependencies = []" in text
+    assert 'output = "dist/path/out.pyz"' in text
+
+    # 8. _strip_requirements_external and pinned_requirements handle tab-preceded comments
+    req_dir = tmp_path / "req_tab"
+    req_dir.mkdir()
+    req_file = req_dir / "requirements.txt"
+    req_file.write_text("my-ext-pkg==1.0.0\t# inline comment after tab\nother-pkg==2.0.0\t# keep\n")
+    (req_dir / "app.py").write_text("print(1)\n")
+    pins, _ = _uv.pinned_requirements(req_file)
+    assert pins == {"my-ext-pkg": "1.0.0", "other-pkg": "2.0.0"}
+    stripped_req = _uv._strip_requirements_external(req_file, {"my-ext-pkg"}, stage_dir)
+    assert stripped_req is not None
+    assert "my-ext-pkg" not in stripped_req.read_text()
+    assert "other-pkg==2.0.0" in stripped_req.read_text()
+
+    # 9. Empty/whitespace output rejected and [[tool.bundleup]] array-of-tables shows code frame
+    with pytest.raises(UsageError, match="has no file name"):
+        build(BuildOptions(path=req_dir, output=Path("   ")))
+    aot_dir = tmp_path / "aot_cfg"
+    aot_dir.mkdir()
+    (aot_dir / "pyproject.toml").write_text(
+        '[project]\nname = "a"\n[[tool.bundleup]]\nformat = "pyz"\n'
+    )
+    with pytest.raises(ProjectError) as aot_err:
+        _config.apply(BuildOptions(path=aot_dir))
+    assert aot_err.value.detail is not None and "[[tool.bundleup]]" in aot_err.value.detail
+
+    # 10. Source scanner skips nested `--format dir`, `.parts/`, and `--format py` outputs
+    nested_proj = tmp_path / "nested_proj"
+    nested_proj.mkdir()
+    (nested_proj / "requirements.txt").write_text("")
+    (nested_proj / "main.py").write_text("print('hi')\n")
+    (nested_proj / "my_mod.py").write_text("X = 1\n")
+    fake_dir_bundle = nested_proj / "out_dir"
+    fake_dir_bundle.mkdir()
+    (fake_dir_bundle / "bundleup-manifest.json").write_text("{}")
+    (fake_dir_bundle / "bad.py").write_text("import nonexistent_dir_pkg\n")
+    fake_parts = nested_proj / "app.pyz.parts"
+    fake_parts.mkdir()
+    (fake_parts / "part.py").write_text("import nonexistent_parts_pkg\n")
+    (nested_proj / "bundled_out.py").write_text(
+        "#!/usr/bin/env python3\n# /// bundleup\nimport nonexistent_py_pkg\n"
+    )
+    scanned_names = {rel for rel, _ in _source.python_files(nested_proj)}
+    assert scanned_names == {"main.py", "my_mod.py"}
+
+    # 11. Hyphenated `--entry my-mod` gives EntryPointError with suggestion
+    with pytest.raises(EntryPointError) as ep_err:
+        build(BuildOptions(path=nested_proj, entry="my-mod", output=tmp_path / "hyphen.pyz"))
+    assert ep_err.value.hint is not None and "my_mod" in ep_err.value.hint
+
+    # 12. `--entry <module>` preserves sys.argv[0] as bundle path and keeps __main__ for atexit
+    mod_proj = tmp_path / "mod_proj"
+    mod_proj.mkdir()
+    (mod_proj / "requirements.txt").write_text("")
+    (mod_proj / "runner.py").write_text(
+        "import atexit, os, sys\n"
+        "STATE = 'alive'\n"
+        "atexit.register(lambda: print('ATEXIT:' + STATE + ':' + os.path.basename(sys.argv[0])))\n"
+    )
+    mod_pyz = tmp_path / "mod_runner.pyz"
+    build(BuildOptions(path=mod_proj, entry="runner", output=mod_pyz))
+    r_mod = subprocess.run(
+        [sys.executable, str(mod_pyz)], capture_output=True, text=True, check=True
+    )
+    assert r_mod.stdout.strip() == "ATEXIT:alive:mod_runner.pyz"
+
+    # 13. `--entry python` runs `.pyz` zipapps, handles `-- -dash.py`, and honors PYTHONSAFEPATH=1
+    py_bundle = tmp_path / "py_runtime.pyz"
+    build(BuildOptions(path=mod_proj, entry="python", output=py_bundle))
+    r_zip = subprocess.run(
+        [sys.executable, str(py_bundle), str(mod_pyz)], capture_output=True, text=True, check=True
+    )
+    assert r_zip.stdout.strip() == "ATEXIT:alive:mod_runner.pyz"
+
+    dash_script = tmp_path / "-dash.py"
+    dash_script.write_text("import os, sys; print('DASH:' + os.path.basename(sys.argv[0]))\n")
+    r_dash = subprocess.run(
+        [sys.executable, str(py_bundle), "--", "-dash.py"],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert r_dash.stdout.strip() == "DASH:-dash.py"
+
+    safe_dir = tmp_path / "safe_dir"
+    safe_dir.mkdir()
+    (safe_dir / "runner.py").write_text("STATE = 'hijacked'\n")
+    (safe_dir / "check_safe.py").write_text("import runner; print(runner.STATE)\n")
+    env_safe = {**os.environ, "PYTHONSAFEPATH": "1"}
+    r_safe = subprocess.run(
+        [sys.executable, "-P", str(py_bundle), str(safe_dir / "check_safe.py")],
+        cwd=safe_dir,
+        env=env_safe,
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert r_safe.stdout.splitlines()[0] == "alive"
+
+    # 14. `verify` ignores extra `.pyc` in `--format dir` and checks all unpacked caches
+    dir_out = tmp_path / "dir_bundle"
+    build(BuildOptions(path=mod_proj, entry="runner", format="dir", output=dir_out))
+    (dir_out / "extra_foreign.pyc").write_bytes(b"0123")
+    v_dir = verify(dir_out)
+    assert v_dir.ok and v_dir.files > 0
+    (dir_out / "tampered.py").write_text("x = 1\n")
+    assert not verify(dir_out).ok
+
+
+def test_systems_correctness_audit_regressions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regression suite for concurrency/cache, multi-target/verify, lockfile/import analysis,
+    and multiprocessing/runtime edge cases."""
+    import ast
+    import os
+    import shutil
+    import subprocess
+    import sys
+    import time
+    import zipfile
+
+    from bundleup import (
+        LockfileOutdatedError,
+        _cache,
+        _check,
+        _coverage,
+        _errors,
+        _imports,
+        _loader,
+        _payload,
+        _platforms,
+        _runtime,
+        _source,
+        _uv,
+        _verify,
+        check,
+        verify,
+    )
+
+    # 1. Package `__main__.py` entry with multiprocessing `spawn` and relative imports
+    mp_proj = tmp_path / "mp_proj"
+    pkg_dir = mp_proj / "mypkg"
+    pkg_dir.mkdir(parents=True)
+    (mp_proj / "pyproject.toml").write_text(
+        "[build-system]\n"
+        'requires = ["setuptools"]\n'
+        'build-backend = "setuptools.build_meta"\n'
+        "[project]\n"
+        'name = "mypkg"\n'
+        'version = "0.1.0"\n'
+        'requires-python = ">=3.9"\n'
+    )
+    (pkg_dir / "__init__.py").write_text(" MULT = 3\n".lstrip())
+    (pkg_dir / "helper.py").write_text("OFFSET = 7\n")
+    (pkg_dir / "__main__.py").write_text(
+        "import concurrent.futures as cf, multiprocessing as mp\n"
+        "from . import MULT\n"
+        "from .helper import OFFSET\n"
+        "def work(x):\n"
+        "    return x * MULT + OFFSET\n"
+        "if __name__ == '__main__':\n"
+        "    ctx = mp.get_context('spawn')\n"
+        "    with cf.ProcessPoolExecutor(max_workers=1, mp_context=ctx) as ex:\n"
+        "        print('MP_OUT:', list(ex.map(work, [2, 4])))\n"
+    )
+    mp_pyz = tmp_path / "mp_app.pyz"
+    build(BuildOptions(path=mp_proj, output=mp_pyz))
+    mp_cache = tmp_path / "mp_cache"
+    r_mp = subprocess.run(
+        [sys.executable, str(mp_pyz)],
+        env={**os.environ, "BUNDLEUP_CACHE": str(mp_cache)},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert r_mp.stdout.strip() == "MP_OUT: [13, 19]"
+
+    # 2. `export()` cache relocation across single-target `check()` and multi-target `build()`
+    uv_bin = _uv.find_uv()
+    subprocess.run([uv_bin, "lock"], cwd=mp_proj, check=True, capture_output=True)
+    exp_cache = tmp_path / "build_cache"
+    monkeypatch.setenv("BUNDLEUP_BUILD_CACHE", str(exp_cache))
+    chk_rep = check(BuildOptions(path=mp_proj))
+    assert chk_rep.ok
+    other_plat = "linux" if sys.platform == "win32" else "windows"
+    multi_res = build(
+        BuildOptions(
+            path=mp_proj,
+            output=tmp_path / "mp_multi.pyz",
+            more_python_platforms=(other_plat,),
+        )
+    )
+    assert multi_res.output.is_file()
+    # Pure-Python multi-platform build without explicit `--python` deduplicates payloads
+    assert multi_res.payloads == []
+
+    # 3. `clean_cache()` and `_loader._rmtree()` remove 0o555/0o444/0o000 subdirectories cleanly
+    #    and never chmod external symlink targets
+    monkeypatch.setenv("BUNDLEUP_CACHE", str(mp_cache))
+    unpacked_dirs = [p for p in mp_cache.iterdir() if p.is_dir() and not p.name.startswith(".")]
+    assert len(unpacked_dirs) == 1
+    ext_target = tmp_path / "external_symlink_target.txt"
+    ext_target.write_text("do not chmod")
+    ext_target.chmod(0o644)
+    ro_sub = unpacked_dirs[0] / "readonly_sub"
+    ro_sub.mkdir()
+    ro_file = ro_sub / "data.txt"
+    ro_file.write_text("locked")
+    ro_file.chmod(0o444)
+    (ro_sub / "link.txt").symlink_to(ext_target)
+    zero_sub = ro_sub / "zero_sub"
+    zero_sub.mkdir()
+    (zero_sub / "inner.txt").write_text("inner")
+    zero_sub.chmod(0o000)
+    ro_sub.chmod(0o444)
+    clean_rep = _cache.clean_cache(older_than_days=0)
+    assert unpacked_dirs[0] in clean_rep.removed
+    assert not unpacked_dirs[0].exists()
+    assert not [p for p in mp_cache.iterdir() if p.name.startswith(".tmp-")]
+    if os.name != "nt":
+        assert (ext_target.stat().st_mode & 0o777) == 0o644
+
+    # 3b. Thundering-herd concurrent cold extraction stress test (12 processes)
+    herd_cache = tmp_path / "herd_cache"
+    procs = [
+        subprocess.Popen(
+            [sys.executable, str(mp_pyz)],
+            env={**os.environ, "BUNDLEUP_CACHE": str(herd_cache)},
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        for _ in range(12)
+    ]
+    outs = [p.communicate(timeout=60) for p in procs]
+    assert all(
+        p.returncode == 0 and out.strip() == "MP_OUT: [13, 19]" for p, (out, _) in zip(procs, outs)
+    )
+    assert not [p for p in herd_cache.iterdir() if p.name.startswith(".tmp-")]
+
+    # 4. `_loader._lock()` returns immediately when `final` already exists while lock is held,
+    #    and `_loader._hold()` closes its file handle if `flock` fails
+    if os.name != "nt":
+        import fcntl
+
+        lock_root = tmp_path / "lock_root"
+        lock_root.mkdir()
+        target_site = lock_root / _loader.DIRNAME
+        target_site.mkdir()
+        lock_file = lock_root / f".lock-{_loader.DIRNAME}"
+        with open(lock_file, "a+b") as held:
+            fcntl.flock(held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            t0 = time.monotonic()
+            assert _loader._lock(str(lock_root)) is None
+            assert time.monotonic() - t0 < 1.0
+            before_in_use = len(_loader._IN_USE)
+            _loader._hold(str(target_site))
+            assert len(_loader._IN_USE) == before_in_use
+
+    # 5. `verify()` catches trailing code, uncommented lines, trailing base64 after EOCD, and
+    #    non-base64 chars in `--format py`, plus extra zip members in `.pyz`
+    py_out = tmp_path / "script_bundle.py"
+    build(BuildOptions(path=mp_proj, format="py", output=py_out))
+    assert verify(py_out).ok
+    r_py_mp = subprocess.run(
+        [sys.executable, str(py_out)],
+        env={**os.environ, "BUNDLEUP_CACHE": str(tmp_path / "py_mp_cache")},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert r_py_mp.stdout.strip() == "MP_OUT: [13, 19]"
+    orig_bytes = py_out.read_bytes()
+    for bad_replacement in (
+        orig_bytes + b"print('unhashed trailing code')\n",
+        orig_bytes.replace(_loader.DATA_END, b"print('injected')\n" + _loader.DATA_END),
+        orig_bytes.replace(_loader.DATA_END, b"#AAAA\n" + _loader.DATA_END),
+        orig_bytes.replace(_loader.DATA_END, b"# $$$$\n" + _loader.DATA_END),
+    ):
+        py_out.write_bytes(bad_replacement)
+        v_bad = verify(py_out)
+        assert not v_bad.ok and any("the code before its data" in p for p in v_bad.problems)
+    py_out.write_bytes(orig_bytes)
+
+    extra_pyz = tmp_path / "extra_member.pyz"
+    shutil.copyfile(mp_pyz, extra_pyz)
+    with zipfile.ZipFile(extra_pyz, "a") as zf:
+        zf.writestr("unexpected.txt", "extra")
+    v_extra = verify(extra_pyz)
+    assert not v_extra.ok and "extra file: unexpected.txt isn't in the manifest" in v_extra.problems
+
+    # 6. Forked `[[packages]]` entries in `pylock.toml` across freshness, coverage, and verify
+    forked_pylock = (
+        'lock-version = "1.0"\n'
+        "[[packages]]\n"
+        'name = "demo-pkg"\n'
+        'version = "1.0.0"\n'
+        "marker = \"python_version < '3.10'\"\n"
+        'wheels = [{ name = "demo_pkg-1.0.0-cp39-cp39-win_amd64.whl" }]\n'
+        "[[packages]]\n"
+        'name = "demo-pkg"\n'
+        'version = "2.0.0"\n'
+        'wheels = [{ name = "demo_pkg-2.0.0-py3-none-any.whl" }]\n'
+    )
+    linux_plat = _platforms.parse("x86_64-unknown-linux-gnu")
+    assert _coverage.gaps(forked_pylock, linux_plat, (3, 9)) == []
+    env_39 = linux_plat.markers(python_full_version="3.9.0")
+    locked_39 = _verify.locked_packages(forked_pylock, env_39)
+    assert len(locked_39) == 1 and locked_39[0].name == "demo-pkg"
+    fork_proj = tmp_path / "fork_proj"
+    fork_proj.mkdir()
+    (fork_proj / "pyproject.toml").write_text(
+        '[project]\nname = "fork-proj"\nversion = "0.1.0"\n'
+        'dependencies = ["demo-pkg>=2.0", "opt-pkg; extra == \'dev\'"]\n'
+    )
+    gated_pylock = forked_pylock + "marker = \"python_version >= '3.10'\"\n"
+    (fork_proj / "pylock.toml").write_text(gated_pylock)
+    pkgs = _uv._load_pylock_packages(gated_pylock, fork_proj / "pylock.toml")
+    _uv._check_pylock_freshness(
+        _source.load_source(fork_proj),
+        pkgs,
+        markers=linux_plat.markers(python_full_version="3.12.0"),
+    )
+    with pytest.raises(LockfileOutdatedError):
+        _uv._check_pylock_freshness(_source.load_source(fork_proj), pkgs, markers=env_39)
+
+    # 7. Import analysis guards (`if False/True/TYPE_CHECKING/not TYPE_CHECKING`, `suppress`,
+    #    early-return platform guards), namespace `--external`, nested `_has_attr`, `_orig_module`
+    tree = ast.parse(
+        "if False:\n    import dead_a\nelse:\n    import live_a\n"
+        "if True:\n    import live_b\nelse:\n    import dead_b\n"
+        "if TYPE_CHECKING:\n    import dead_tc\nelse:\n    import live_tc\n"
+        "if not TYPE_CHECKING:\n    import live_ntc\nelse:\n    import dead_ntc\n"
+        "if version_info >= (3, 11):\n    import fake_ver_mod\n"
+        "if importlib.util.find_spec('fake_spec_mod'):\n    import fake_spec_mod\n"
+        "with contextlib.suppress(ImportError):\n    import suppressed_mod\n"
+        "def f():\n"
+        "    if sys.platform != 'win32':\n        return\n"
+        "    import win_only_mod\n"
+    )
+    assert _imports.imports_in(tree) == {"live_a", "live_b", "live_tc", "live_ntc"}
+    ext_mods = _imports.external_modules(
+        ["google-cloud-storage", "zope-interface", "opentelemetry-api"]
+    )
+    assert {"google", "zope", "opentelemetry"} <= ext_mods
+
+    nested_init = tmp_path / "a" / "b" / "__init__.py"
+    nested_init.parent.mkdir(parents=True)
+    nested_init.write_text("import a.b.c\n")
+    ok_attr, _, defined_attrs = _payload._has_attr(nested_init, "c", module="a.b")
+    assert ok_attr and "c" in defined_attrs
+
+    assert _runtime._orig_module(["python", "-um", "pkg.sub", "arg"]) == "pkg"
+    assert _runtime._orig_module(["python", "-uBmpkg.sub", "arg"]) == "pkg"
+    assert _runtime._orig_module(["python", "-uc", "import os", "-m", "ignored"]) is None
+
+    # 8. `_check._dependency_chains` resolves cyclic `Requires-Dist` graphs and extras in O(V+E)
+    cycle_site = tmp_path / "cycle_site"
+    cycle_site.mkdir()
+    for dname, ver, reqs_lines in (
+        ("pkg_a", "1.0", ["Requires-Dist: pkg-b", "Requires-Dist: pkg-ext[fast]"]),
+        ("pkg_b", "1.0", ["Requires-Dist: pkg-a", "Requires-Dist: pkg-c"]),
+        ("pkg_c", "1.0", []),
+        ("pkg_ext", "1.0", ["Provides-Extra: fast", "Requires-Dist: pkg-fast ; extra == 'fast'"]),
+        ("pkg_fast", "1.0", []),
+    ):
+        di = cycle_site / f"{dname}-{ver}.dist-info"
+        di.mkdir()
+        (di / "METADATA").write_text(
+            f"Metadata-Version: 2.1\nName: {dname.replace('_', '-')}\nVersion: {ver}\n"
+            + "".join(f"{r}\n" for r in reqs_lines)
+            + "\n"
+        )
+    chains = _check._dependency_chains(
+        cycle_site, "", {"pkg-a", "pkg-b", "pkg-c", "pkg-ext", "pkg-fast"}
+    )
+    assert chains["pkg-a"] == ()
+    assert chains["pkg-b"] == ("pkg-a",)
+    assert chains["pkg-c"] == ("pkg-a", "pkg-b")
+    assert chains["pkg-fast"] == ("pkg-a", "pkg-ext")
+
+    # 9. Bit-for-bit reproducibility across distinct paths, timestamps, and cold/warm caches
+    repro_a = tmp_path / "repro_a"
+    repro_b = tmp_path / "repro_b"
+    for p_dir, ts in ((repro_a, 1_700_000_000), (repro_b, 1_750_000_000)):
+        (p_dir / "src" / "rpkg").mkdir(parents=True)
+        (p_dir / "pyproject.toml").write_text(
+            '[project]\nname = "rpkg"\nversion = "0.1.0"\nrequires-python = ">=3.9"\n'
+            'dependencies = []\n[project.scripts]\nrpkg = "rpkg:main"\n'
+            '[build-system]\nrequires = ["uv_build>=0.12,<0.13"]\nbuild-backend = "uv_build"\n'
+        )
+        init_f = p_dir / "src" / "rpkg" / "__init__.py"
+        init_f.write_text("def main():\n    return 0\n")
+        os.utime(p_dir / "pyproject.toml", (ts, ts))
+        os.utime(init_f, (ts, ts))
+    monkeypatch.setenv("BUNDLEUP_BUILD_CACHE", str(tmp_path / "repro_bcache_1"))
+    out_a = build(BuildOptions(path=repro_a, output=tmp_path / "repro_a.pyz")).output.read_bytes()
+    # Warm build from a different directory path and different mtimes
+    out_b = build(BuildOptions(path=repro_b, output=tmp_path / "repro_b.pyz")).output.read_bytes()
+    assert out_a == out_b
+
+    # 10. Symlink loop handling in `load_source`
+    if os.name != "nt":
+        loop_link = tmp_path / "loop.py"
+        loop_link.symlink_to(loop_link)
+        with pytest.raises(_errors.ProjectError):
+            _source.load_source(loop_link)

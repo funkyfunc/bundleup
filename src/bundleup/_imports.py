@@ -70,6 +70,20 @@ EXTERNAL_ALIASES: dict[str, set[str]] = {
 }
 
 
+NAMESPACE_PREFIXES = (
+    "azure",
+    "backports",
+    "google",
+    "jaraco",
+    "mpl-toolkits",
+    "opentelemetry",
+    "repoze",
+    "ruamel",
+    "sphinxcontrib",
+    "zope",
+)
+
+
 def external_modules(external: Sequence[str]) -> set[str]:
     """Top-level module names that `--external` distributions provide on the host."""
     import importlib.metadata
@@ -82,6 +96,9 @@ def external_modules(external: Sequence[str]) -> set[str]:
         canon = re.sub(r"[-_.]+", "-", pkg).lower()
         names.add(canon.replace("-", "_"))
         names.add(pkg.split(".", 1)[0].replace("-", "_"))
+        for ns in NAMESPACE_PREFIXES:
+            if canon.startswith(f"{ns}-"):
+                names.add(ns.replace("-", "_"))
         names |= EXTERNAL_ALIASES.get(canon, set())
         names |= EXTERNAL_ALIASES.get(pkg, set())
         try:
@@ -89,6 +106,16 @@ def external_modules(external: Sequence[str]) -> set[str]:
             top = dist.read_text("top_level.txt")
             if top:
                 names.update(line.strip() for line in top.splitlines() if line.strip())
+            else:
+                rec = dist.read_text("RECORD") or ""
+                for line in rec.splitlines():
+                    rel = line.split(",", 1)[0].strip()
+                    head = rel.split("/", 1)[0]
+                    if head.endswith((".dist-info", ".data", ".egg-info")) or head == "..":
+                        continue
+                    mod = head.split(".", 1)[0]
+                    if mod.isidentifier():
+                        names.add(mod)
         except importlib.metadata.PackageNotFoundError:
             pass
     return names
@@ -157,8 +184,50 @@ CONDITIONAL = (
     "platform.machine",
     "os.name",
     "sys.version_info",
+    "version_info",
+    "find_spec",
 )
 OPTIONAL_ERRORS = {None, "ImportError", "ModuleNotFoundError", "Exception", "BaseException"}
+
+
+def _is_type_checking(node: ast.expr) -> bool:
+    if isinstance(node, ast.Name):
+        return node.id == "TYPE_CHECKING"
+    return isinstance(node, ast.Attribute) and node.attr == "TYPE_CHECKING"
+
+
+def _suppresses_import_error(node: ast.With | ast.AsyncWith) -> bool:
+    for item in node.items:
+        call = item.context_expr
+        if not isinstance(call, ast.Call):
+            continue
+        func = call.func
+        name = (
+            func.id
+            if isinstance(func, ast.Name)
+            else (func.attr if isinstance(func, ast.Attribute) else "")
+        )
+        if name == "suppress" and any(_caught(arg) in OPTIONAL_ERRORS for arg in call.args):
+            return True
+    return False
+
+
+def _terminates(stmts: list[ast.stmt]) -> bool:
+    if not stmts:
+        return False
+    last = stmts[-1]
+    if isinstance(last, (ast.Return, ast.Raise, ast.Break, ast.Continue)):
+        return True
+    if isinstance(last, ast.Expr) and isinstance(last.value, ast.Call):
+        func = last.value.func
+        name = (
+            func.id
+            if isinstance(func, ast.Name)
+            else (func.attr if isinstance(func, ast.Attribute) else "")
+        )
+        if name in ("exit", "skip", "fail"):
+            return True
+    return False
 
 
 def imports_in_with_lines(tree: ast.AST) -> dict[str, int]:
@@ -167,20 +236,67 @@ def imports_in_with_lines(tree: ast.AST) -> dict[str, int]:
     TYPE_CHECKING, the platform or the Python version."""
     lines: dict[str, int] = {}
 
+    def visit_stmts(stmts: Sequence[ast.stmt], optional: bool) -> None:
+        cur_opt = optional
+        for stmt in stmts:
+            visit(stmt, cur_opt)
+            if (
+                not cur_opt
+                and isinstance(stmt, ast.If)
+                and not stmt.orelse
+                and _terminates(stmt.body)
+            ):
+                unparsed = ast.unparse(stmt.test)
+                if any(c in unparsed for c in CONDITIONAL):
+                    cur_opt = True
+
     def visit(node: ast.AST, optional: bool) -> None:
         if isinstance(node, ast.Try) or type(node).__name__ == "TryStar":
             handlers = getattr(node, "handlers", ())
             guarded = bool({_caught(h.type) for h in handlers} & OPTIONAL_ERRORS)
-            for child in [*getattr(node, "body", ()), *getattr(node, "orelse", ())]:
-                visit(child, optional or guarded)
+            visit_stmts(getattr(node, "body", ()), optional or guarded)
+            visit_stmts(getattr(node, "orelse", ()), optional or guarded)
             for handler in handlers:
                 visit(handler, optional or (_caught(handler.type) in OPTIONAL_ERRORS))
-            for child in getattr(node, "finalbody", ()):
-                visit(child, optional)
+            visit_stmts(getattr(node, "finalbody", ()), optional)
             return
-        if isinstance(node, ast.If) and any(c in ast.unparse(node.test) for c in CONDITIONAL):
-            for child in [*node.body, *node.orelse]:
-                visit(child, True)
+        if isinstance(node, (ast.With, ast.AsyncWith)) and _suppresses_import_error(node):
+            for item in node.items:
+                visit(item, optional)
+            visit_stmts(node.body, True)
+            return
+        if isinstance(node, ast.If):
+            test = node.test
+            if isinstance(test, ast.Constant):
+                visit_stmts(node.body, optional or not bool(test.value))
+                visit_stmts(node.orelse, optional or bool(test.value))
+                return
+            if _is_type_checking(test):
+                visit_stmts(node.body, True)
+                visit_stmts(node.orelse, optional)
+                return
+            if (
+                isinstance(test, ast.UnaryOp)
+                and isinstance(test.op, ast.Not)
+                and _is_type_checking(test.operand)
+            ):
+                visit_stmts(node.body, optional)
+                visit_stmts(node.orelse, True)
+                return
+            unparsed = ast.unparse(test)
+            if any(c in unparsed for c in CONDITIONAL):
+                visit_stmts(node.body, True)
+                visit_stmts(node.orelse, True)
+                return
+            visit(test, optional)
+            visit_stmts(node.body, optional)
+            visit_stmts(node.orelse, optional)
+            return
+        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+            for child in ast.iter_child_nodes(node):
+                if child not in node.body:
+                    visit(child, optional)
+            visit_stmts(node.body, optional)
             return
         if not optional and isinstance(node, ast.Import):
             for alias in node.names:
@@ -224,16 +340,27 @@ def _caught(node: ast.expr | None) -> str | None:
     return node.attr if isinstance(node, ast.Attribute) else ""
 
 
+_SKIP_DIRS = ("__pycache__", "__bundleup__", "__bundleup_script__")
+
+
 def top_level_modules(folder: Path) -> set[str]:
     """What `import x` finds in a folder on sys.path: packages (folders, namespace ones too),
     modules and extension modules. Symlinks aren't followed."""
     names = set()
     for item in folder.iterdir() if folder.is_dir() else []:
-        if item.is_dir() and not item.is_symlink():
-            if not item.name.endswith((".dist-info", ".data")) and item.name.isidentifier():
+        if item.is_symlink():
+            continue
+        if item.is_dir():
+            if (
+                item.name not in _SKIP_DIRS
+                and not item.name.endswith((".dist-info", ".data", ".egg-info"))
+                and item.name.isidentifier()
+            ):
                 names.add(item.name)
-        elif item.suffix in (".py", ".so", ".pyd") or ".cpython-" in item.name:
-            names.add(item.name.split(".")[0])
+        elif item.is_file() and (item.suffix in (".py", ".so", ".pyd") or ".cpython-" in item.name):
+            mod = item.name.split(".")[0]
+            if mod.isidentifier():
+                names.add(mod)
     return names
 
 

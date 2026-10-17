@@ -50,8 +50,22 @@ def _has_module(folder: str, top: str) -> bool:
     return any(n.startswith(prefix) and n.endswith((".so", ".pyd")) for n in entries)
 
 
+def _abspath(p: str) -> str:
+    try:
+        return os.path.abspath(p)
+    except OSError:
+        return os.path.normpath(p)
+
+
+def _realpath(p: str) -> str:
+    try:
+        return os.path.realpath(p)
+    except OSError:
+        return _abspath(p)
+
+
 def _under(path: str, home: str) -> bool:
-    for fn in (os.path.abspath, os.path.realpath):
+    for fn in (_abspath, _realpath):
         p = os.path.normcase(fn(path))
         h = os.path.normcase(fn(home))
         prefix = h if h.endswith(os.sep) else h + os.sep
@@ -72,14 +86,36 @@ def _is_py_bundle(path: str) -> bool:
         return False
 
 
+_VALUE_FLAGS = ("-W", "-X", "--check-hash-based-pycs")
+
+
 def _orig_module(original: "Sequence[str]") -> "Optional[str]":
-    for i, arg in enumerate(original[1:]):
-        if arg == "--" or not arg.startswith("-"):
+    i = 1
+    while i < len(original):
+        arg = original[i]
+        if arg == "--" or not arg.startswith("-") or arg == "-":
             break
-        if arg == "-m" and i + 2 < len(original):
-            return original[i + 2].split(".")[0]
-        if arg.startswith("-m") and len(arg) > 2:
-            return arg[2:].split(".")[0]
+        if arg in _VALUE_FLAGS:
+            i += 2
+            continue
+        if arg.startswith("--"):
+            i += 1
+            continue
+        for idx, ch in enumerate(arg[1:], 1):
+            if ch == "c":
+                return None
+            if ch in ("W", "X"):
+                if idx + 1 == len(arg):
+                    i += 1
+                break
+            if ch == "m":
+                rest = arg[idx + 1 :]
+                if rest:
+                    return rest.split(".")[0]
+                return original[i + 1].split(".")[0] if i + 1 < len(original) else None
+            if ch not in "bBdEiIOPqsStuvVx":
+                break
+        i += 1
     return None
 
 
@@ -120,7 +156,7 @@ def runs_bundle_code(site: str) -> bool:
 def _is_site_entry(p: str) -> bool:
     if not p:
         return False
-    norm = os.path.normcase(os.path.abspath(p)).rstrip(os.sep)
+    norm = os.path.normcase(_abspath(p)).rstrip(os.sep)
     if norm.endswith(("site-packages", "dist-packages")):
         return True
     for marker in (os.sep + "site-packages" + os.sep, os.sep + "dist-packages" + os.sep):
@@ -129,14 +165,27 @@ def _is_site_entry(p: str) -> bool:
     return False
 
 
+def _is_stdlib_entry(p: str) -> bool:
+    if not p or _is_site_entry(p):
+        return False
+    stdlib_dir = os.path.normcase(_abspath(os.path.dirname(os.__file__))).rstrip(os.sep)
+    norm = os.path.normcase(_abspath(p)).rstrip(os.sep)
+    if norm == stdlib_dir or norm.startswith(stdlib_dir + os.sep):
+        return True
+    if norm.endswith(".zip") and os.path.basename(norm).startswith("python"):
+        return True
+    if os.path.dirname(norm) == os.path.dirname(stdlib_dir) and os.path.basename(norm) == "dlls":
+        return True
+    for prefix in (getattr(sys, "base_prefix", None), getattr(sys, "base_exec_prefix", None)):
+        if prefix and norm == os.path.normcase(_abspath(prefix)).rstrip(os.sep):
+            return True
+    return False
+
+
 def _stdlib_end() -> int:
-    stdlib_dir = os.path.normcase(os.path.abspath(os.path.dirname(os.__file__))).rstrip(os.sep)
     last = -1
     for i, p in enumerate(sys.path):
-        if not p or _is_site_entry(p):
-            continue
-        norm = os.path.normcase(os.path.abspath(p)).rstrip(os.sep)
-        if norm == stdlib_dir or norm.startswith(stdlib_dir + os.sep):
+        if _is_stdlib_entry(p):
             last = i
     return last
 
@@ -147,13 +196,13 @@ def site_packages_index() -> int:
     for i, p in enumerate(sys.path):
         if i > after and _is_site_entry(p):
             return i
-    return len(sys.path)
+    return after + 1 if after >= 0 else len(sys.path)
 
 
 def _same(a: str, b: str) -> bool:
-    return os.path.normcase(os.path.abspath(a)) == os.path.normcase(
-        os.path.abspath(b)
-    ) or os.path.normcase(os.path.realpath(a)) == os.path.normcase(os.path.realpath(b))
+    return os.path.normcase(_abspath(a)) == os.path.normcase(_abspath(b)) or os.path.normcase(
+        _realpath(a)
+    ) == os.path.normcase(_realpath(b))
 
 
 def activate(site: str, pth: "Optional[Sequence[str]]" = None) -> None:
@@ -173,17 +222,45 @@ def activate(site: str, pth: "Optional[Sequence[str]]" = None) -> None:
         sys.path[:] = [p for p in sys.path if p not in parent_paths]
         for mod_name, mod in list(sys.modules.items()):
             mod_file = getattr(mod, "__file__", None)
-            if isinstance(mod_file, str) and _under(mod_file, parent):
+            mod_paths = getattr(mod, "__path__", None)
+            if (isinstance(mod_file, str) and _under(mod_file, parent)) or (
+                mod_paths is not None
+                and any(isinstance(p, str) and _under(p, parent) for p in mod_paths)
+            ):
                 sys.modules.pop(mod_name, None)
         os.environ.pop(ENV_SCRIPTS, None)
         if not (os.environ.get(ENV_INHERIT) and _same(os.environ.get(ENV_INHERIT, ""), site)):
             os.environ.pop(ENV_INHERIT, None)
     parent_shim = os.path.join(parent, SHIM) if parent else None
     shim = os.path.join(site, SHIM)
+    raw_pp = [
+        p
+        for p in os.environ.get("PYTHONPATH", "").split(os.pathsep)
+        if p and p != parent_shim and p != shim
+    ]
+    raw_pp_norms = set(os.path.normcase(_abspath(p)) for p in raw_pp)
+    scripts = [p for p in os.environ.get(ENV_SCRIPTS, "").split(os.pathsep) if p]
+
+    def _is_early_host(p: str) -> bool:
+        if not p or _is_stdlib_entry(p):
+            return False
+        if _is_site_entry(p):
+            return True
+        if os.path.normcase(_abspath(p)) in raw_pp_norms:
+            return False
+        return not (
+            pth is None
+            and (
+                _same(p, ".")
+                or _under(p, site)
+                or any(_same(p, s) or _under(p, s) for s in scripts)
+            )
+        )
+
     after = _stdlib_end()
-    early_site = [p for i, p in enumerate(sys.path) if i < after and _is_site_entry(p)]
+    early_site = [p for i, p in enumerate(sys.path) if i < after and _is_early_host(p)]
     if early_site:
-        sys.path[:] = [p for i, p in enumerate(sys.path) if not (i < after and _is_site_entry(p))]
+        sys.path[:] = [p for i, p in enumerate(sys.path) if not (i < after and _is_early_host(p))]
     raw_inherit = os.environ.get("BUNDLEUP_INHERIT_PATH", "").lower()
     if raw_inherit in ("0", "false", "no"):
         inherit = False
@@ -192,11 +269,7 @@ def activate(site: str, pth: "Optional[Sequence[str]]" = None) -> None:
         inherit = raw_inherit in ("1", "true", "yes") or (
             bool(inherit_site) and _same(inherit_site, site)
         )
-    pythonpath = [
-        p
-        for p in os.environ.get("PYTHONPATH", "").split(os.pathsep)
-        if p and p != parent_shim and p != shim and (not _is_site_entry(p) or inherit)
-    ]
+    pythonpath = [p for p in raw_pp if not _is_site_entry(p) or inherit]
     index = site_packages_index()
     if _HOST_TAIL is None:
         _HOST_TAIL = list(early_site + sys.path[index:])
@@ -209,12 +282,12 @@ def activate(site: str, pth: "Optional[Sequence[str]]" = None) -> None:
     sys.path.append(site)
     if pth is None:  # a child process: the loader passes the list it got at build time
         pth = sorted(n for n in os.listdir(site) if n.endswith(".pth") and not n.startswith("."))
-    known = set(os.path.normcase(os.path.abspath(p)) for p in sys.path if p)
+    known = set(os.path.normcase(_abspath(p)) for p in sys.path if p)
     for name in pth or ():
         add_pth(site, name, known)
     added = sys.path[index + 1 :]
     for p in tail:
-        norm = os.path.normcase(os.path.abspath(p)) if p else ""
+        norm = os.path.normcase(_abspath(p)) if p else ""
         if not norm or norm not in known:
             sys.path.append(p)
             if norm:
@@ -246,7 +319,7 @@ def add_pth(sitedir: str, name: str, known: "set[str]") -> None:
                 sys.stderr.write("bundleup: error in %s line %d: %r\n" % (name, number, e))
                 return
             continue
-        path = os.path.normcase(os.path.abspath(os.path.join(sitedir, line.rstrip())))
+        path = os.path.normcase(_abspath(os.path.join(sitedir, line.rstrip())))
         if path not in known and os.path.exists(path):
             sys.path.append(path)
             known.add(path)

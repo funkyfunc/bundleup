@@ -240,7 +240,7 @@ def build(
     """
     options, fmt = _settle(options)
     if options.output is not None:
-        if not options.output.absolute().name:
+        if not str(options.output).strip() or not options.output.absolute().name.strip():
             raise UsageError(f"-o {options.output} has no file name")
         _validate_output_path(options.output, fmt, "app.pyz")
     report = progress or ignore
@@ -449,10 +449,13 @@ def _served(prepared: list[Prepared], options: BuildOptions) -> bool:
     """Whether an already prepared pure-Python payload runs on this combination too, so it needs
     no payload of its own: its Python range covers the version and it runs on any OS (or on this
     one, any CPU)."""
-    version = re.fullmatch(r"(\d+)\.(\d+)", options.python or "")
-    if version is None:
-        return False  # uv's choice or an interpreter path: can't tell before building
-    wanted = (int(version[1]), int(version[2]))
+    if options.python is None and prepared:
+        wanted = prepared[0].target.version
+    else:
+        version = re.fullmatch(r"(\d+)\.(\d+)", options.python or "")
+        if version is None:
+            return False  # uv's choice or an interpreter path: can't tell before building
+        wanted = (int(version[1]), int(version[2]))
     platform = _platforms.parse(options.python_platform) if options.python_platform else None
     for p in prepared:
         if p.native or not p.pythons.contains(wanted):
@@ -654,7 +657,10 @@ def _own_code(
             folders = set(parts[:-1])
             # Skip tests and docs, and the project's own packages anywhere (src/pkg/...): those
             # are read from the payload. (`src` itself isn't skipped; sixth review.)
-            mine = (folders | {parts[0].removesuffix(".py")}) & bundled
+            top_mods = {parts[0].removesuffix(".py")}
+            if parts[:1] == ["src"] and len(parts) == 2:
+                top_mods.add(parts[1].removesuffix(".py"))
+            mine = (folders | top_mods) & bundled
             if file == source.path or folders & NOT_RUN or mine:
                 continue
             code.append((rel, file, True))
@@ -766,6 +772,7 @@ def _prepare(
         stage=stage,
         progress=progress,
         external=options.external,
+        markers=target.markers,
     )
     pylock = exported.pylock
     coverage = _wheel_coverage(pylock, target)  # before installing: a precise error, early
@@ -828,11 +835,14 @@ def _prepare(
         )
     code = _own_code(source, site, script=script, own=own, entry=entry)
     provided = _imports.provided_by(site) | _imports.external_modules(options.external)
+    beside_cache: dict[Path, set[str]] = {}
     imported = [
         (
             shown,
             _imports.imports_with_lines(path),
-            _imports.top_level_modules(path.parent) if beside else set(),
+            beside_cache.setdefault(path.parent, _imports.top_level_modules(path.parent))
+            if beside
+            else set(),
         )
         for shown, path, beside in code
     ]

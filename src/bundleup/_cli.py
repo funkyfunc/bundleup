@@ -598,7 +598,7 @@ def _run_check(opts: argparse.Namespace) -> ExitCode:
         return _failed(e, "check", opts, style)
     finally:
         status.clear()
-    failed = not report.ok or (opts.strict and report.warnings)
+    failed = not report.ok or (options.strict and report.warnings)
     code = ExitCode.BUILD_FAILED if failed else ExitCode.OK
     if opts.json:
         _emit_json("check", code, report.to_json_dict(), report.diagnostics)
@@ -892,6 +892,27 @@ def _looks_like_path(token: str) -> bool:
     )
 
 
+def _is_entry_python(args: list[str]) -> bool:
+    for idx, tok in enumerate(args):
+        if tok == "--entry=python":
+            return True
+        if tok == "--entry" and idx + 1 < len(args) and args[idx + 1] == "python":
+            return True
+    return os.environ.get("BUNDLEUP_ENTRY") == "python"
+
+
+def _is_project_or_pep723(token: str) -> bool:
+    p = Path(token)
+    if p.is_dir():
+        return True
+    if p.is_file():
+        try:
+            return "# /// script" in p.read_text(encoding="utf-8", errors="ignore")
+        except OSError:
+            return False
+    return False
+
+
 def _join_smoke(args: list[str], parser: argparse.ArgumentParser) -> list[str]:
     """`argparse` treats a token starting with `-` after `nargs="?"` as one of its own options,
     so `bundleup build --smoke "--version"` (docs/recipes.md) would fail without joining `=`.
@@ -900,6 +921,7 @@ def _join_smoke(args: list[str], parser: argparse.ArgumentParser) -> list[str]:
     options = set(actions)
     takes_value = {opt for opt, act in actions.items() if act.nargs not in (0, "?", "*")}
     positionals = _positional_count(args[1:], takes_value) if args and args[0] == "build" else 0
+    entry_python = _is_entry_python(args)
     out: list[str] = []
     i = 0
     while i < len(args):
@@ -925,6 +947,7 @@ def _join_smoke(args: list[str], parser: argparse.ArgumentParser) -> list[str]:
             and not args[i + 1].startswith("-")
             and positionals == 1
             and _looks_like_path(args[i + 1])
+            and not (entry_python and not _is_project_or_pep723(args[i + 1]))
         ):
             out.append("--smoke=")
             i += 1

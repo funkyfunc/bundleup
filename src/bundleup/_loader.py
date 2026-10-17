@@ -18,7 +18,7 @@ import sys
 TYPE_CHECKING = False  # the type checker treats this as True; at run time nothing is imported
 if TYPE_CHECKING:
     import zipfile
-    from typing import Any, BinaryIO, NoReturn
+    from typing import Any, BinaryIO, Callable, NoReturn
 
 # --- config: replaced at build time ---
 NAME = "app"
@@ -57,14 +57,40 @@ EMBEDDED = False
 EXTERNAL = False
 # --- end config ---
 
+
 # The bundle file: the .pyz this runs from (as its __main__.py), or this .py itself. A .py piped
 # to Python (`curl ... | python3 -`) has no file: checked in _check. `realpath` follows symlinks so
 # a symlinked `--split` bundle finds its `.parts` folder beside the real file.
-_FILE = os.path.abspath(globals().get("__file__") or "<none>")
-_ARCHIVE = os.path.realpath(_FILE if EMBEDDED else os.path.dirname(_FILE))
+def _abspath(path: str) -> "str | None":
+    try:
+        return os.path.abspath(path)
+    except OSError:
+        return os.path.normpath(path) if os.path.isabs(path) else None
+
+
+def _cwd() -> "str | None":
+    try:
+        return os.path.abspath(os.getcwd())
+    except OSError:
+        return None
+
+
+_raw_file = globals().get("__file__") or "<none>"
+_FILE = _abspath(_raw_file) or _raw_file
+try:
+    _ARCHIVE = os.path.realpath(_FILE if EMBEDDED else os.path.dirname(_FILE))
+except OSError:
+    _ARCHIVE = _FILE if EMBEDDED else os.path.dirname(_FILE)
+_SCIE = None  # type: str | None
 # The lines around a .py bundle's data (found from the end: these constants come first).
 DATA_START = b"# --- bundleup data: base64 of a zip, read by the code above ---"
 DATA_END = b"# --- end of bundleup data ---"
+
+
+def _me() -> str:
+    if _SCIE:
+        return os.path.basename(_SCIE)
+    return os.path.basename(_ARCHIVE)
 
 
 def _fail(message: str) -> "NoReturn":
@@ -76,6 +102,23 @@ RERUN = "BUNDLEUP_RUNTIME_RERUN"  # set while re-running with another Python, so
 NEWEST_KNOWN = 20  # minor versions tried for an open-ended range, newest first
 
 
+def _is_script_shim(exe: str) -> bool:
+    try:
+        with open(exe, "rb") as f:
+            return f.read(2) == b"#!"
+    except OSError:
+        return False
+
+
+def _py_flags() -> "list[str]":
+    orig = getattr(sys, "orig_argv", None)
+    if orig and sys.argv and len(orig) > len(sys.argv):
+        idx = len(orig) - len(sys.argv)
+        if orig[idx] == sys.argv[0]:
+            return [f for f in orig[1:idx] if not f.startswith("-3.")]
+    return []
+
+
 def _rerun_with_another_python(here: "tuple[int, int]") -> None:
     """The wrong Python started the bundle (`./app.pyz` runs whatever `python3` is): run it again
     with one the bundle allows, if one is on PATH, newest first (ADR-0036). Windows has no
@@ -84,6 +127,7 @@ def _rerun_with_another_python(here: "tuple[int, int]") -> None:
     allowed = VERSIONS or [(3, minor) for minor in range(PYTHON[1], top + 1)]
     wanted = sorted({v for v in allowed if v != here}, reverse=True)
     folders = [d for d in os.environ.get("PATH", "").split(os.pathsep) if d]
+    flags = _py_flags()
     for version in wanted:
         if sys.platform == "win32":
             names = ["python%d.%d.exe" % version]
@@ -93,7 +137,18 @@ def _rerun_with_another_python(here: "tuple[int, int]") -> None:
             for name in names:
                 exe = os.path.join(folder, name)
                 if os.path.isfile(exe) and os.access(exe, os.X_OK):
-                    _rerun([exe, sys.argv[0], *sys.argv[1:]])
+                    if _is_script_shim(exe):
+                        import subprocess
+
+                        probe = [exe, "-I", "-S", "-c", ""]
+                        if (
+                            subprocess.call(
+                                probe, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                            )
+                            != 0
+                        ):
+                            continue
+                    _rerun([exe, *flags, sys.argv[0], *sys.argv[1:]])
     import subprocess  # only on this rare path
 
     if sys.platform == "win32":
@@ -103,7 +158,7 @@ def _rerun_with_another_python(here: "tuple[int, int]") -> None:
             for version in wanted:
                 probe = [found[0], "-%d.%d" % version, "-c", ""]
                 if subprocess.call(probe, stderr=subprocess.DEVNULL) == 0:
-                    _rerun([found[0], "-%d.%d" % version, sys.argv[0], *sys.argv[1:]])
+                    _rerun([found[0], "-%d.%d" % version, *flags, sys.argv[0], *sys.argv[1:]])
     # Unversioned names, asked for their version: Apple's /usr/bin/python3 has no python3.9
     # beside it, and Homebrew's newer python3 usually comes first on PATH (fourth review).
     names = ["python3.exe", "python.exe"] if sys.platform == "win32" else ["python3", "python"]
@@ -135,7 +190,7 @@ def _rerun_with_another_python(here: "tuple[int, int]") -> None:
         if version in wanted and (best is None or version > best[0]):
             best = (version, exe)
     if best:
-        _rerun([best[1], sys.argv[0], *sys.argv[1:]])
+        _rerun([best[1], *flags, sys.argv[0], *sys.argv[1:]])
 
 
 def _rerun(command: "list[str]") -> None:
@@ -307,7 +362,7 @@ def _select() -> None:
     this platform but another Python version still gets picked, so _check explains (or re-runs
     with a matching Python); nothing for this platform at all is reported here."""
     global DIRNAME, PYTHON, PYTHON_MAX, PLATFORM, MACHINE, ABIFLAGS, TARGET, PTH, LIBC, MACOS
-    global MEMBERS, TAG
+    global MEMBERS, TAG, ENTRY
     if not PAYLOADS:
         return
     here = sys.version_info[:2]
@@ -337,6 +392,8 @@ def _select() -> None:
     PLATFORM, MACHINE, ABIFLAGS = chosen["platform"], chosen["machine"], chosen["abiflags"]
     LIBC, MACOS = chosen["libc"], chosen["macos"]
     TAG = chosen.get("tag", TAG)
+    if chosen.get("entry"):
+        ENTRY = tuple(chosen["entry"])
 
 
 def _check_system() -> None:
@@ -370,26 +427,31 @@ def _roots(archive: str) -> "list[tuple[str, bool]]":
     """
     explicit = (os.environ.get("BUNDLEUP_CACHE") or "").strip()
     if explicit:  # the only place, when set: a copy elsewhere must not win (ADR-0048)
-        return [(os.path.abspath(explicit), False)]
+        return [(_abspath(explicit) or explicit, False)]
     roots = []
-    home = os.path.expanduser("~")
-    user_cache = None
+    raw_home = os.environ.get("HOME")
+    home = "~" if (raw_home is not None and not raw_home.strip()) else os.path.expanduser("~")
+    user_cache = None  # type: str | None
     if sys.platform == "win32":
-        base = os.environ.get("LOCALAPPDATA")
-        user_cache = base and os.path.join(base, "bundleup", "Cache")
+        base = (os.environ.get("LOCALAPPDATA") or "").strip()
+        user_cache = _abspath(os.path.join(base, "bundleup", "Cache")) if base else None
     elif sys.platform == "darwin":
-        user_cache = home != "~" and os.path.join(home, "Library", "Caches", "bundleup")
+        user_cache = (
+            _abspath(os.path.join(home, "Library", "Caches", "bundleup")) if home != "~" else None
+        )
     else:
-        base = os.environ.get("XDG_CACHE_HOME") or (home != "~" and os.path.join(home, ".cache"))
-        user_cache = base and os.path.join(base, "bundleup")
+        xdg = (os.environ.get("XDG_CACHE_HOME") or "").strip()
+        base = xdg or (os.path.join(home, ".cache") if home != "~" else "")
+        user_cache = _abspath(os.path.join(base, "bundleup")) if base else None
     if user_cache:
         roots.append((user_cache, False))
-    tmp = os.environ.get("TMPDIR") or os.environ.get("TEMP") or os.environ.get("TMP")
-    if not tmp and os.name == "posix":
-        tmp = "/tmp"
-    if tmp:
+    tmp = (
+        os.environ.get("TMPDIR") or os.environ.get("TEMP") or os.environ.get("TMP") or ""
+    ).strip()
+    abs_tmp = (_abspath(tmp) if tmp else None) or ("/tmp" if os.name == "posix" else None)
+    if abs_tmp:
         uid = os.getuid() if hasattr(os, "getuid") else 0
-        roots.append((os.path.join(os.path.abspath(tmp), "bundleup-%d" % uid), True))
+        roots.append((os.path.join(abs_tmp, "bundleup-%d" % uid), True))
     # Next to the bundle: the bundle's directory may be shared (/tmp, a team drive), so this root
     # is trusted only if we own it and nobody else can write to it, like the temp root (a copy
     # planted there would otherwise run as us; second review, 2026-10-07).
@@ -462,6 +524,27 @@ def _mark_used(path: str, mtime: float) -> None:
 PRUNE_AFTER = 30 * 86400.0  # seconds unused before an older copy of this bundle is removed
 
 
+def _rmtree(path: str) -> None:
+    import shutil
+
+    def _onerror(func: "Callable[[str], object]", p: str, _exc: "object") -> None:
+        for target in (os.path.dirname(p), p):
+            try:
+                if not os.path.islink(target):
+                    os.chmod(target, 0o700)
+            except OSError:
+                pass
+        try:
+            if func in (os.open, os.listdir, getattr(os, "scandir", None)):
+                shutil.rmtree(p, onerror=_onerror)
+            else:
+                func(p)
+        except (OSError, TypeError):
+            pass
+
+    shutil.rmtree(path, onerror=_onerror)
+
+
 def _prune(root: str) -> None:
     """After unpacking a new copy: remove older copies of the same bundle (`<name>-<hash>`) not
     used for PRUNE_AFTER and held by no running program, so updates don't pile up on machines
@@ -470,7 +553,6 @@ def _prune(root: str) -> None:
     if os.name == "nt":
         return
     import fcntl
-    import shutil
     import time
 
     name = DIRNAME.rsplit("-", 1)[0]
@@ -494,9 +576,11 @@ def _prune(root: str) -> None:
             fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)  # fails if a program holds it
             if now - os.stat(path).st_mtime < PRUNE_AFTER:
                 continue  # started (and marked used) since we looked
-            doomed = os.path.join(root, ".tmp-%s-%d-pruned" % (entry, os.getpid()))
+            doomed = os.path.join(
+                root, ".tmp-%s-%d-%s-pruned" % (entry, os.getpid(), os.urandom(4).hex())
+            )
             os.rename(path, doomed)  # out of the way first: never a half-deleted copy in place
-            shutil.rmtree(doomed, ignore_errors=True)
+            _rmtree(doomed)
             # The lock file stays: a process may have just opened it, and would then hold a lock
             # on a deleted file (sixth review). `cache clean` removes stale ones.
         except OSError:
@@ -643,13 +727,16 @@ def _unpack_zip(payload: "zipfile.ZipFile", dest: str, final: str, made: "set[st
         elsewhere = _pyc_path(member.filename, final)
         if elsewhere:
             # Shared with other processes, unlike our private temp tree: write, then replace.
-            part = "%s.%d.tmp" % (elsewhere, os.getpid())
+            part = "%s.%d.%s.tmp" % (elsewhere, os.getpid(), os.urandom(4).hex())
             try:
                 _write(payload, member, part, made)
                 os.replace(part, elsewhere)
                 continue
             except OSError:
-                pass  # prefix not writable: keep it in __pycache__, where it's harmless
+                try:  # noqa: SIM105
+                    os.unlink(part)
+                except OSError:
+                    pass  # prefix not writable: keep it in __pycache__, where it's harmless
         _write(payload, member, path, made)
         if (member.external_attr >> 16) & 0o111:
             os.chmod(path, 0o755)
@@ -688,8 +775,12 @@ def _lock(root: str) -> "BinaryIO | None":
         handle = open(os.path.join(root, ".lock-" + DIRNAME), "a+b")  # noqa: SIM115
     except OSError:
         return None
+    final = os.path.join(root, DIRNAME)
     deadline = time.time() + LOCK_TIMEOUT
     while True:
+        if os.path.isdir(final):
+            handle.close()
+            return None
         try:
             if os.name == "nt":
                 import msvcrt
@@ -702,7 +793,7 @@ def _lock(root: str) -> "BinaryIO | None":
                 fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
             return handle
         except OSError:
-            if time.time() > deadline:
+            if os.path.isdir(final) or time.time() > deadline:
                 handle.close()
                 return None
             time.sleep(0.05)
@@ -738,9 +829,7 @@ def _extract() -> str:
                 except OSError:
                     if not os.path.isdir(final):
                         raise
-                    import shutil
-
-                    shutil.rmtree(tmp, ignore_errors=True)
+                    _rmtree(tmp)
             finally:
                 if lock is not None:
                     lock.close()  # releases the lock
@@ -749,14 +838,10 @@ def _extract() -> str:
         except OSError as e:
             problems.append("  %s: %s" % (root, e.strerror or e))
             if os.path.isdir(tmp):
-                import shutil
-
-                shutil.rmtree(tmp, ignore_errors=True)
+                _rmtree(tmp)
         except Exception as e:
             if os.path.isdir(tmp):
-                import shutil
-
-                shutil.rmtree(tmp, ignore_errors=True)
+                _rmtree(tmp)
             _fail(
                 "%s is damaged and couldn't be unpacked (%s: %s). Get a fresh copy of it."
                 % (os.path.basename(_ARCHIVE), type(e).__name__, e)
@@ -797,7 +882,7 @@ def _cache_imported(site: str) -> None:
             continue
         if os.path.exists(cached):
             continue
-        part = "%s.%d.tmp" % (cached, os.getpid())
+        part = "%s.%d.%s.tmp" % (cached, os.getpid(), os.urandom(4).hex())
         try:
             py_compile.compile(origin, cfile=part, doraise=True)
             os.replace(part, cached)
@@ -818,12 +903,18 @@ def _cache_imported(site: str) -> None:
 def _drop_bundle_from_sys_path() -> None:
     here = os.path.dirname(_ARCHIVE) if EMBEDDED else _ARCHIVE
     raw_here = os.path.dirname(_FILE)
-    if (
-        sys.path
-        and sys.path[0]
-        and (os.path.realpath(sys.path[0]) == here or os.path.abspath(sys.path[0]) == raw_here)
-    ):
-        del sys.path[0]
+    cleaned = []  # type: list[str]
+    for entry in sys.path:
+        if entry:
+            try:
+                real = os.path.realpath(entry)
+            except OSError:
+                real = entry
+            abs_entry = _abspath(entry) or entry
+            if real == here or abs_entry == raw_here:
+                continue
+        cleaned.append(entry)
+    sys.path[:] = cleaned
 
 
 def _activate(site: str) -> None:
@@ -833,11 +924,13 @@ def _activate(site: str) -> None:
     # The bundle on sys.path (python app.pyz), or a .py bundle's folder (python app.py): the
     # program imports from its payload, not from whatever sits beside the file.
     _drop_bundle_from_sys_path()
+    sys.modules.pop("_bundleup_runtime", None)
     sys.path.insert(0, os.path.join(site, "__bundleup__"))
     try:
         runtime = __import__("_bundleup_runtime")  # type: Any
     finally:
         del sys.path[0]
+    os.environ.pop("BUNDLEUP_RUNTIME_SCRIPTS", None)
     if EXTERNAL:
         os.environ["BUNDLEUP_RUNTIME_INHERIT"] = site
     else:
@@ -855,7 +948,7 @@ def _exec_file(path: str, argv0: str, user_script: bool = False) -> None:
 
             runpy.run_path(path, run_name="__main__")
             return
-        me = os.path.basename(_FILE if EMBEDDED else os.path.dirname(_FILE))
+        me = _me()
         try:
             open(path, "rb").close()
         except OSError as e:
@@ -863,6 +956,14 @@ def _exec_file(path: str, argv0: str, user_script: bool = False) -> None:
                 "%s: can't open file %r: [Errno %s] %s\n" % (me, argv0, e.errno, e.strerror or e)
             )
             sys.exit(2)
+    if user_script and not path.endswith(".py"):
+        import zipfile
+
+        if zipfile.is_zipfile(path):
+            import runpy
+
+            runpy.run_path(path, run_name="__main__")
+            return
     loader = importlib.machinery.SourceFileLoader("__main__", path)
     spec = importlib.util.spec_from_loader("__main__", loader, origin=path)
     if spec is None:
@@ -896,13 +997,37 @@ def _run(site: str) -> None:
         _run_python()
         return
     if kind == "module":
+        import importlib.util
         import runpy
         import types
 
-        mod_globals = runpy.run_module(target, run_name="__main__", alter_sys=True)
-        main_mod = types.ModuleType("__main__")
-        main_mod.__dict__.update(mod_globals)
-        sys.modules["__main__"] = main_mod
+        if "." in target:
+            __import__(target.rpartition(".")[0])
+        spec = importlib.util.find_spec(target)
+        is_pkg = spec is not None and spec.submodule_search_locations is not None
+        if is_pkg:
+            __import__(target)
+            spec = importlib.util.find_spec(target + ".__main__")
+        loader = getattr(spec, "loader", None)  # type: Any
+        code = (
+            loader.get_code(spec.name) if spec is not None and hasattr(loader, "get_code") else None
+        )
+        if spec is not None and code is not None:
+            if is_pkg:
+                spec.name = target
+            module = types.ModuleType("__main__")
+            module.__dict__["__file__"] = spec.origin
+            module.__dict__["__cached__"] = spec.cached
+            module.__dict__["__loader__"] = loader
+            module.__dict__["__spec__"] = spec
+            module.__dict__["__package__"] = target if is_pkg else target.rpartition(".")[0]
+            sys.modules["__main__"] = module
+            exec(code, module.__dict__)
+        else:
+            mod_globals = runpy.run_module(target, run_name="__main__", alter_sys=True)
+            main_mod = types.ModuleType("__main__")
+            main_mod.__dict__.update(mod_globals)
+            sys.modules["__main__"] = main_mod
     else:
         script_path = os.path.join(site, target)
         script_dir = os.path.dirname(script_path)
@@ -922,37 +1047,54 @@ def _run_python() -> None:
     import runpy
     import types
 
-    me = os.path.basename(_FILE if EMBEDDED else os.path.dirname(_FILE))
+    me = _me()
+    usage = (
+        "usage: %s [SCRIPT.py | -m MODULE | -c CODE | -] [ARGS...]" % me
+        if _SCIE
+        else PYTHON_USAGE % me
+    )
+    safe_path = bool(
+        getattr(sys.flags, "safe_path", 0)
+        or getattr(sys.flags, "isolated", 0)
+        or os.environ.get("PYTHONSAFEPATH")
+    )
     args = sys.argv[1:]
-    if args and args[0] == "--":
+    after_dd = bool(args and args[0] == "--")
+    if after_dd:
         args = args[1:]
     if not args and not sys.stdin.isatty():
         args = ["-"]  # piped: run it, as python does
     if not args:
         import code
 
-        sys.path.insert(0, "")
-        _add_env_path("BUNDLEUP_RUNTIME_SCRIPTS", os.path.abspath(os.getcwd()))
+        if not safe_path:
+            sys.path.insert(0, "")
+            cwd = _cwd()
+            if cwd:
+                _add_env_path("BUNDLEUP_RUNTIME_SCRIPTS", cwd)
         code.interact(banner="Python %s with %s's packages" % (sys.version.split()[0], NAME))
         return
     first = args[0]
-    if first in ("-m", "-c") and len(args) < 2:
-        _fail("%s needs an argument\n%s" % (first, PYTHON_USAGE % me))
-    if first == "-m" or (first.startswith("-m") and len(first) > 2):
+    if not after_dd and first in ("-m", "-c") and len(args) < 2:
+        _fail("%s needs an argument\n%s" % (first, usage))
+    if not after_dd and (first == "-m" or (first.startswith("-m") and len(first) > 2)):
         if first == "-m":
             mod_name = args[1]
             sys.argv = args[1:]
         else:
             mod_name = first[2:]
             sys.argv = [mod_name, *args[1:]]
-        cwd = os.path.abspath(os.getcwd())
-        sys.path.insert(0, cwd)  # as python -m does: the working directory
-        _add_env_path("BUNDLEUP_RUNTIME_SCRIPTS", cwd)
+        cwd = _cwd()
+        if not safe_path and cwd:
+            sys.path.insert(0, cwd)  # as python -m does: the working directory
+            _add_env_path("BUNDLEUP_RUNTIME_SCRIPTS", cwd)
         mod_globals = runpy.run_module(mod_name, run_name="__main__", alter_sys=True)
         main_mod = types.ModuleType("__main__")
         main_mod.__dict__.update(mod_globals)
         sys.modules["__main__"] = main_mod
-    elif first in ("-c", "-") or (first.startswith("-c") and len(first) > 2):
+    elif first == "-" or (
+        not after_dd and (first == "-c" or (first.startswith("-c") and len(first) > 2))
+    ):
         if first == "-c":
             source = args[1]
             sys.argv = ["-c", *args[2:]]
@@ -965,24 +1107,39 @@ def _run_python() -> None:
             source = sys.stdin.read()
             sys.argv = ["-", *args[1:]]
             filename = "<stdin>"
-        sys.path.insert(0, "")  # as python -c does: the working directory
-        _add_env_path("BUNDLEUP_RUNTIME_SCRIPTS", os.path.abspath(os.getcwd()))
+        if not safe_path:
+            sys.path.insert(0, "")  # as python -c does: the working directory
+            cwd = _cwd()
+            if cwd:
+                _add_env_path("BUNDLEUP_RUNTIME_SCRIPTS", cwd)
         _exec_main(source, filename)
-    elif first.startswith("-"):
+    elif not after_dd and first.startswith("-"):
+        if _SCIE:
+            _fail(
+                "%s is an option for Python itself, which a standalone executable can't take\n%s"
+                % (first, usage)
+            )
         _fail(
             "%s is an option for Python itself: put it before the bundle, as in python %s %s ..."
-            "\n%s" % (first, first, me, PYTHON_USAGE % me)
+            "\n%s" % (first, first, me, usage)
         )
     else:
         sys.argv = args
         # As python does for a script: its real folder comes first, so its own modules import; and
         # scripts under it that it starts with sys.executable see the bundle too (ADR-0040).
-        abs_first = os.path.abspath(first)
+        abs_first = _abspath(first) or first
         abs_folder = os.path.dirname(abs_first)
-        real_folder = os.path.dirname(os.path.realpath(first))
-        sys.path.insert(0, real_folder)
-        _add_env_path("BUNDLEUP_RUNTIME_SCRIPTS", abs_folder)
-        _add_env_path("BUNDLEUP_RUNTIME_SCRIPTS", real_folder)
+        try:
+            real_folder = os.path.dirname(os.path.realpath(first))
+        except OSError:
+            real_folder = abs_folder
+        if not safe_path:
+            if real_folder:
+                sys.path.insert(0, real_folder)
+            if abs_folder:
+                _add_env_path("BUNDLEUP_RUNTIME_SCRIPTS", abs_folder)
+            if real_folder:
+                _add_env_path("BUNDLEUP_RUNTIME_SCRIPTS", real_folder)
         _exec_file(abs_first, first, user_script=True)
 
 
@@ -1016,12 +1173,15 @@ def _hold(site: str) -> None:
     (third review). POSIX only, best effort, a few microseconds."""
     if os.name == "nt":
         return
+    handle = None  # type: BinaryIO | None
     try:
         import fcntl
 
         handle = open(os.path.join(os.path.dirname(site), ".lock-" + DIRNAME), "a+b")  # noqa: SIM115
         fcntl.flock(handle.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
     except (OSError, ImportError):
+        if handle is not None:
+            handle.close()
         return  # a read-only cache, or locks unsupported: nothing to protect it from
     _IN_USE.append(handle)
     import atexit
@@ -1033,9 +1193,9 @@ def _hold(site: str) -> None:
 
 if __name__ == "__main__":
     _drop_bundle_from_sys_path()
-    _scie_argv0 = os.environ.pop("SCIE_ARGV0", None)
-    if _scie_argv0 and sys.argv and os.path.basename(sys.argv[0]) == "app.pyz":
-        sys.argv[0] = _scie_argv0
+    _SCIE = os.environ.pop("SCIE_ARGV0", None)
+    if _SCIE and sys.argv and os.path.basename(sys.argv[0]) == "app.pyz":
+        sys.argv[0] = _SCIE
     _select()
     _check()
     _site = _find() or _extract()

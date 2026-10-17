@@ -97,7 +97,10 @@ def _strip_external(text: str, external: Sequence[str]) -> str:
         if name not in excluded:
             kept.append(block)
     if not kept:
-        head = re.sub(r"(?m)^packages = \[\]\s*$", "", head).rstrip() + "\npackages = []\n"
+        head = (
+            re.sub(r"(?m)^packages\s*=\s*\[\s*\](?:\s*#.*)?$", "", head).rstrip()
+            + "\npackages = []\n"
+        )
         return head
     return head + "".join(kept)
 
@@ -129,7 +132,11 @@ def _load_pylock_packages(text: str, path: Path) -> list[dict[str, Any]]:
 
 
 def _check_pylock_freshness(
-    source: Source, packages: list[dict[str, Any]], *, external: Sequence[str] = ()
+    source: Source,
+    packages: list[dict[str, Any]],
+    *,
+    external: Sequence[str] = (),
+    markers: dict[str, str] | None = None,
 ) -> None:
     pyproject = source.path / "pyproject.toml"
     if not pyproject.is_file():
@@ -142,14 +149,32 @@ def _check_pylock_freshness(
     deps = project.get("dependencies") if isinstance(project, dict) else None
     if not isinstance(deps, list):
         return
+    from packaging.markers import (
+        InvalidMarker,
+        Marker,
+        UndefinedEnvironmentName,
+        default_environment,
+    )
     from packaging.requirements import InvalidRequirement, Requirement
 
+    env = {**(markers or {k: str(v) for k, v in default_environment().items()}), "extra": ""}
     excluded = _clean_external(external)
-    locked = {
-        canonicalize_name(str(p.get("name", ""))): p.get("version")
-        for p in packages
-        if p.get("name")
-    }
+    locked: dict[str, list[str | None]] = {}
+    for p in packages:
+        name = p.get("name")
+        if not name:
+            continue
+        raw_marker = p.get("marker")
+        if isinstance(raw_marker, str):
+            try:
+                if not Marker(raw_marker).evaluate(env):
+                    continue
+            except (InvalidMarker, UndefinedEnvironmentName):
+                pass
+        ver = p.get("version")
+        locked.setdefault(canonicalize_name(str(name)), []).append(
+            ver if isinstance(ver, str) else None
+        )
     for raw in deps:
         if not isinstance(raw, str):
             continue
@@ -160,26 +185,30 @@ def _check_pylock_freshness(
         canon = canonicalize_name(req.name)
         if canon in excluded:
             continue
+        if req.marker is not None:
+            try:
+                if not req.marker.evaluate(env):
+                    continue
+            except UndefinedEnvironmentName:
+                continue
         if canon not in locked:
-            if req.marker is None:
-                raise LockfileOutdatedError(
-                    "pylock.toml is out of date with pyproject.toml",
-                    hint="regenerate pylock.toml, then build again (or --frozen bundles the lock "
-                    "as it is)",
-                    detail=f"pyproject.toml requires {req}, which is missing from pylock.toml",
-                )
-            continue
-        ver = locked[canon]
+            raise LockfileOutdatedError(
+                "pylock.toml is out of date with pyproject.toml",
+                hint="regenerate pylock.toml, then build again (or --frozen bundles the lock "
+                "as it is)",
+                detail=f"pyproject.toml requires {req}, which is missing from pylock.toml",
+            )
+        versions = [v for v in locked[canon] if isinstance(v, str)]
         if (
-            isinstance(ver, str)
+            versions
             and req.specifier
-            and not req.specifier.contains(ver, prereleases=True)
+            and not any(req.specifier.contains(v, prereleases=True) for v in versions)
         ):
             raise LockfileOutdatedError(
                 "pylock.toml is out of date with pyproject.toml",
                 hint="regenerate pylock.toml, then build again (or --frozen bundles the lock "
                 "as it is)",
-                detail=f"pyproject.toml requires {req}, but pylock.toml has {ver}",
+                detail=f"pyproject.toml requires {req}, but pylock.toml has {versions[-1]}",
             )
 
 
@@ -189,6 +218,7 @@ def from_pylock(
     *,
     external: Sequence[str] = (),
     lock_mode: str | None = None,
+    markers: dict[str, str] | None = None,
 ) -> tuple[list[list[str]], Path]:
     """Install arguments for a project's own pylock.toml, and the lock the check compares the
     bundle with. uv installs the file in place (its relative paths are relative to it). A lock
@@ -201,7 +231,7 @@ def from_pylock(
         raise ProjectError(f"{source.pylock} isn't valid TOML: {e}") from None
     packages = _load_pylock_packages(text, source.pylock)
     if lock_mode != "frozen":
-        _check_pylock_freshness(source, packages, external=external)
+        _check_pylock_freshness(source, packages, external=external, markers=markers)
     me = canonicalize_name(source.name)
     mine = [p for p in packages if canonicalize_name(str(p.get("name", ""))) == me]
     editable = next(
@@ -252,7 +282,7 @@ def _refresh_local(pylock: Path) -> list[str]:
 def with_project(pylock: str, name: str) -> str:
     """The pylock.toml text with the project itself listed, for the lock-vs-bundle check. (An
     empty `packages = []` would make the added [[packages]] table invalid TOML.)"""
-    pylock = re.sub(r"(?m)^packages = \[\]\s*$", "", pylock)
+    pylock = re.sub(r"(?m)^packages\s*=\s*\[\s*\](?:\s*#.*)?$", "", pylock)
     return pylock + f'\n[[packages]]\nname = "{name}"\ndirectory = {{ path = "." }}\n'
 
 
@@ -312,7 +342,9 @@ def _strip_script_external(script_path: Path, excluded: set[str], stage: Path) -
     text = read_python_text(script_path)
     meta = script_metadata(text)
     deps = meta.get("dependencies")
-    if not isinstance(deps, list) or "path" in str(meta.get("tool", "")):
+    tool = meta.get("tool")
+    uv_tool = tool.get("uv") if isinstance(tool, dict) else None
+    if not isinstance(deps, list) or "path" in str(uv_tool or ""):
         return script_path
     kept: list[str] = []
     removed = False
@@ -332,12 +364,16 @@ def _strip_script_external(script_path: Path, excluded: set[str], stage: Path) -
     toml_body = re.sub(r"(?m)^#( ?)", "", match.group("content"))
     new_deps = f"dependencies = [{', '.join(json.dumps(x) for x in kept)}]"
     patched_toml, count = re.subn(
-        r"(?ms)^dependencies\s*=\s*\[.*?\]",
+        r'(?ms)^dependencies\s*=\s*\[(?:[^\]"\'#]|"(?:\\.|[^"\\])*"|\'[^\']*\'|#[^\n]*)*\]',
         new_deps,
         toml_body,
         count=1,
     )
     if count != 1:
+        return script_path
+    try:
+        tomllib.loads(patched_toml)
+    except tomllib.TOMLDecodeError:
         return script_path
     commented = "".join(f"# {line}\n" if line else "#\n" for line in patched_toml.splitlines())
     staged = stage.resolve() / script_path.name
@@ -368,6 +404,7 @@ def export(
     stage: Path,
     progress: Progress,
     external: Sequence[str] = (),
+    markers: dict[str, str] | None = None,
 ) -> Exported:
     """What to install, as `uv pip install` arguments, and the pylock.toml (PEP 751) the
     lock-vs-bundle check reads. From uv.lock: exported as a pylock.toml, which names each
@@ -375,7 +412,9 @@ def export(
     exactly the locked files from wherever they were locked (a company index too), never a
     same-named package from PyPI. From a project's own pylock.toml: that file (ADR-0026)."""
     if source.pylock:
-        return Exported(*from_pylock(source, stage, external=external, lock_mode=lock_mode))
+        return Exported(
+            *from_pylock(source, stage, external=external, lock_mode=lock_mode, markers=markers)
+        )
     if not (source.is_script and source.pep723) and not source.locked:
         # Only a requirements.txt (or an input with no dependencies) can turn out to pin
         # everything; an unlocked project can't, so --locked / --frozen refuses it before resolving.
@@ -412,6 +451,8 @@ def export(
     mode = (lock_mode or "locked") if locked_file else (lock_mode if not source.is_script else None)
     if mode:
         selection.append(f"--{mode}")
+    lock = None if source.is_script else find_uv_lock(source.path)
+    root = lock.parent if lock else source.workdir
     cache_key = _export_cache_key(uv, source, selection, mode) if locked_file else None
     cached = export_cache_dir() / f"{cache_key}.toml" if cache_key else None
     if cached is not None and cached.is_file():
@@ -440,8 +481,9 @@ def export(
                     detail=e.detail,
                 ) from None
             raise
+        relocate_paths(pylock, root, to_root=True)
         if cached is not None:
-            tmp = cached.with_name(f".{cached.name}.{os.getpid()}.tmp")
+            tmp = cached.with_name(f".{cached.name}.{os.getpid()}.{os.urandom(4).hex()}.tmp")
             try:
                 cached.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copyfile(pylock, tmp)
@@ -451,8 +493,7 @@ def export(
             finally:
                 with contextlib.suppress(OSError):
                     tmp.unlink(missing_ok=True)
-    lock = None if source.is_script else find_uv_lock(source.path)
-    relocate_paths(pylock, lock.parent if lock else source.workdir)
+    relocate_paths(pylock, root)
     if external:
         pylock.write_text(
             _strip_external(pylock.read_text(encoding="utf-8"), external), encoding="utf-8"
@@ -467,8 +508,14 @@ def export(
             hint=f"run `uv lock --script {source.path.name}`, pin every package in "
             f"`dependencies` with ==, or build without {flag}",
         )
-    has_pkgs = "[[packages]]" in pylock.read_text(encoding="utf-8")
-    installs = [["-r", str(pylock), *_refresh_local(pylock)]] if has_pkgs else []
+    text = pylock.read_text(encoding="utf-8")
+    packages = _load_pylock_packages(text, pylock)
+    installs = [["-r", str(pylock), *_refresh_local(pylock)]] if packages else []
+    if not source.is_script:
+        me = canonicalize_name(source.name)
+        if not any(canonicalize_name(str(p.get("name", ""))) == me for p in packages):
+            installs.append([str(source.path)])
+            pylock.write_text(with_project(text, source.name), encoding="utf-8")
     return Exported(installs, pylock, pinned=pinned)
 
 
@@ -537,7 +584,7 @@ def _strip_requirements_external(declared: Path, excluded: set[str], stage: Path
     kept_reqs = 0
     removed = False
     for raw in text.splitlines():
-        line = raw.split(" #")[0].strip()
+        line = re.split(r"\s+#", raw, maxsplit=1)[0].strip()
         if not line or line.startswith("#"):
             kept.append(raw)
             continue
@@ -605,6 +652,11 @@ def resolve(
             run(cmd, cwd=declared.parent, what="uv pip compile", progress=progress)
         relocate_paths(resolved, declared.parent)
     text = _strip_external(resolved.read_text(encoding="utf-8"), external)
+    text = re.sub(
+        r"(?m)^(\s*directory\s*=\s*\{[^\n}]*?),\s*editable\s*=\s*true(\s*\})",
+        r"\1\2",
+        text,
+    )
     resolved.write_text(text, encoding="utf-8")
     installs: list[list[str]] = [["-r", str(resolved)]] if "[[packages]]" in text else []
     pinned = False
@@ -662,7 +714,7 @@ def pinned_requirements(
     had_external = False
     text = path.read_text(encoding="utf-8-sig").replace("\r\n", "\n").replace("\\\n", " ")
     for raw in text.splitlines():
-        line = raw.split(" #")[0].strip()
+        line = re.split(r"\s+#", raw, maxsplit=1)[0].strip()
         if not line or line.startswith("#"):
             continue
         if line.startswith("-"):
@@ -724,19 +776,27 @@ def _script_pinned(source: Source, pylock: Path, *, external: Sequence[str] = ()
 LOCAL_PATH = re.compile(r'(?P<key>\bpath = )"(?P<value>(?:[^"\\]|\\.)*)"')
 
 
-def relocate_paths(pylock: Path, root: Path) -> None:
-    """Make the export's local paths relative to the pylock.toml, as PEP 751 says and uv reads
-    them. uv 0.12.23 writes them so; older ones write them relative to the lock's directory (the
-    workspace root), which is wrong once the file is in the stage."""
+def relocate_paths(pylock: Path, root: Path, *, to_root: bool = False) -> None:
+    """Make the export's local paths relative to the pylock.toml (or to `root` when caching), as
+    PEP 751 says and uv reads them. uv 0.12.23 writes them so; older ones write them relative to
+    the lock's directory (the workspace root), which is wrong once the file is in the stage."""
     here = os.path.abspath(pylock.parent)
+    base = os.path.abspath(root) if to_root else here
 
     def relocated(m: re.Match[str]) -> str:
         value = tomllib.loads('v = "' + m["value"] + '"')["v"]  # the TOML string, unescaped
-        if Path(value).is_absolute() or _is_local(Path(here, value)):
+        if Path(value).is_absolute():
             return m[0]
-        target = os.path.abspath(root / value)
+        if to_root:
+            if not _is_local(Path(here, value)):
+                return m[0]
+            target = os.path.abspath(Path(here, value))
+        else:
+            if _is_local(Path(here, value)):
+                return m[0]
+            target = os.path.abspath(root / value)
         try:
-            value = os.path.relpath(target, here)
+            value = os.path.relpath(target, base)
         except ValueError:  # another drive on Windows: absolute is all there is
             value = target
         return m["key"] + json.dumps(Path(value).as_posix())
@@ -814,25 +874,93 @@ def install(
         with contextlib.suppress(OSError):  # missing, or holds files a wheel ships: keep it
             (site / folder).rmdir()
     if script:
-        if (site / script).exists():
+        dst = site / script
+        if dst.exists():
             raise ProjectError(
                 f"{script} would replace a file one of the dependencies installs",
                 hint="rename the script",
             )
-        (site / script).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source.path, site / script)
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source.path, dst)
+        with contextlib.suppress(OSError):
+            dst.chmod(dst.stat().st_mode | 0o200)
     copied = []
     if source.app:  # its modules and files at the top, where a project's packages would be
         for rel, file in app_files(source):
-            if (site / rel).exists():
+            dst = site / rel
+            if dst.exists():
                 raise ProjectError(
                     f"{rel} would replace a file one of the dependencies installs",
                     hint="rename it",
                 )
-            (site / rel).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(file, site / rel)
+            dst.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(file, dst)
+            with contextlib.suppress(OSError):
+                dst.chmod(dst.stat().st_mode | 0o200)
             copied.append(rel)
+    _strip_local_build_meta(site)
+    _ensure_site_writable(site)
     return copied
+
+
+def _strip_local_build_meta(site: Path) -> None:
+    """Remove local build timestamps (`uv_cache.json`) and local filesystem paths
+    (`direct_url.json` with `file://`) from `.dist-info` directories and their `RECORD`s so
+    identical sources produce bit-for-bit identical bundles regardless of build directory or
+    file timestamps."""
+    import csv
+    import io
+
+    for dist_info in sorted(site.glob("*.dist-info")):
+        removed: set[str] = set()
+        uv_cache = dist_info / "uv_cache.json"
+        if uv_cache.is_file():
+            uv_cache.unlink()
+            removed.add(f"{dist_info.name}/uv_cache.json")
+        direct_url = dist_info / "direct_url.json"
+        if direct_url.is_file():
+            try:
+                info = json.loads(direct_url.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                info = {}
+            if isinstance(info, dict) and str(info.get("url", "")).startswith("file:"):
+                direct_url.unlink()
+                removed.add(f"{dist_info.name}/direct_url.json")
+        record = dist_info / "RECORD"
+        if removed and record.is_file():
+            rows = [
+                row
+                for row in csv.reader(io.StringIO(record.read_text(encoding="utf-8")))
+                if row and row[0].replace("\\", "/") not in removed
+            ]
+            buf = io.StringIO()
+            csv.writer(buf, lineterminator="\n").writerows(rows)
+            record.write_text(buf.getvalue(), encoding="utf-8")
+
+
+def _ensure_site_writable(site: Path) -> None:
+    """Ensure directories and files inside `site` are writable by the owner so bytecode
+    compilation, cached bytecode restoration, and staging cleanup never fail on 0o444/0o555
+    wheel entries."""
+    for dirpath, dirnames, filenames in os.walk(site):
+        with contextlib.suppress(OSError):
+            st = os.lstat(dirpath)
+            if (st.st_mode & 0o700) != 0o700:
+                os.chmod(dirpath, st.st_mode | 0o700)
+        for d in dirnames:
+            p = os.path.join(dirpath, d)
+            with contextlib.suppress(OSError):
+                if not os.path.islink(p):
+                    st = os.lstat(p)
+                    if (st.st_mode & 0o700) != 0o700:
+                        os.chmod(p, st.st_mode | 0o700)
+        for f in filenames:
+            p = os.path.join(dirpath, f)
+            with contextlib.suppress(OSError):
+                if not os.path.islink(p):
+                    st = os.lstat(p)
+                    if not (st.st_mode & 0o200):
+                        os.chmod(p, st.st_mode | 0o200)
 
 
 @contextlib.contextmanager

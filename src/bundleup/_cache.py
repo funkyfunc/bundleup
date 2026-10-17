@@ -15,7 +15,6 @@ import contextlib
 import math
 import os
 import re
-import shutil
 import sys
 import time
 from dataclasses import dataclass, field
@@ -188,11 +187,22 @@ def clean_cache(
     freed = 0
     for p in doomed:
         with contextlib.suppress(OSError):
-            freed += _size(p) if p.is_dir() else p.stat().st_size
+            is_dir = p.is_dir() and not p.is_symlink()
+            freed += _size(p) if is_dir else p.lstat().st_size
     if not dry_run:
         for path in doomed:
-            if path.is_dir():
-                shutil.rmtree(path, ignore_errors=True)
+            if path.is_dir() and not path.is_symlink():
+                if path.name.startswith(".tmp-"):
+                    tmp = path
+                else:
+                    tmp = path.with_name(
+                        f".tmp-{path.name}-{os.getpid()}-{os.urandom(4).hex()}-clean"
+                    )
+                    try:
+                        path.replace(tmp)
+                    except OSError:
+                        tmp = path
+                _loader._rmtree(str(tmp))
             else:
                 path.unlink(missing_ok=True)
     for lock in held:

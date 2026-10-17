@@ -124,6 +124,21 @@ def resolve_entry(
     module = module.strip()
     attr = attr.split("[")[0].strip()  # drop legacy "extras" syntax: "mod:func [extra]"
     if (
+        not sep
+        and "." not in module
+        and not module.isidentifier()
+        and module.replace("-", "_").isidentifier()
+    ):
+        raise _missing_module_error(
+            site,
+            roots,
+            raw=raw,
+            module=module,
+            attr="",
+            scripts=scripts,
+            target_version=target_version,
+        )
+    if (
         not module
         or (sep and not attr)
         or not all(p.isidentifier() for p in module.split("."))
@@ -424,7 +439,9 @@ def _validate_entry(
     ):
         top_attr = attr.split(".")[0]
         ok, callables, defined = (
-            _has_attr(m.py_file, top_attr) if m.py_file is not None else (False, [], [])
+            _has_attr(m.py_file, top_attr, module=module)
+            if m.py_file is not None
+            else (False, [], [])
         )
         if not ok:
             raise _missing_attr_error(
@@ -458,7 +475,9 @@ def _module_nodes(tree: object) -> list[object]:
     return out
 
 
-def _has_attr(py_file: Path, top_attr: str) -> tuple[bool, list[str], list[str]]:
+def _has_attr(
+    py_file: Path, top_attr: str, *, module: str = ""
+) -> tuple[bool, list[str], list[str]]:
     import ast
 
     try:
@@ -478,6 +497,9 @@ def _has_attr(py_file: Path, top_attr: str) -> tuple[bool, list[str], list[str]]
         "__path__",
     }
     callables: set[str] = set()
+    prefixes = {f"{py_file.parent.name}."}
+    if module:
+        prefixes.add(f"{module}.")
     for node in _module_nodes(tree):
         if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
             defined.add(node.name)
@@ -501,9 +523,10 @@ def _has_attr(py_file: Path, top_attr: str) -> tuple[bool, list[str], list[str]]
                     isinstance(node, ast.Import)
                     and not alias.asname
                     and py_file.name == "__init__.py"
-                    and alias.name.startswith(f"{py_file.parent.name}.")
                 ):
-                    defined.add(alias.name.split(".")[1])
+                    for prefix in prefixes:
+                        if alias.name.startswith(prefix):
+                            defined.add(alias.name[len(prefix) :].split(".")[0])
         elif isinstance(node, ast.Call):
             func = node.func
             name = (
@@ -624,16 +647,16 @@ def write_layers(sites: list[Path], stage: Path) -> list[Layer]:
     """Zip several payloads so that each distinct file (same path, contents and executable bit)
     is stored once: in the layer of the payloads that have it. Pure-Python packages land in a
     layer every payload shares, a stable-ABI extension (abi3) in one per platform."""
-    owners: dict[tuple[str, str, int], list[int]] = {}
-    sources: dict[tuple[str, str, int], str] = {}
+    owners: dict[tuple[str, str, bool], list[int]] = {}
+    sources: dict[tuple[str, str, bool], str] = {}
     for i, site in enumerate(sites):
         for rel, path in _bytecode.walk_files(site):
             with open(path, "rb") as f:
                 digest = hashlib.sha256(f.read()).hexdigest()
-            key = (rel, digest, os.stat(path).st_mode & 0o111)
+            key = (rel, digest, bool(os.stat(path).st_mode & 0o111))
             owners.setdefault(key, []).append(i)
             sources.setdefault(key, path)
-    groups: dict[tuple[int, ...], list[tuple[str, str, int]]] = {}
+    groups: dict[tuple[int, ...], list[tuple[str, str, bool]]] = {}
     for key, who in owners.items():
         groups.setdefault(tuple(who), []).append(key)
     layers = []

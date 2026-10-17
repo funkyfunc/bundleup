@@ -27,7 +27,7 @@ import zipfile
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 
-from . import __version__, _bytecode, _verify
+from . import __version__, _bytecode, _loader, _verify
 from ._errors import (
     BundleupError,
     CheckFailedError,
@@ -88,7 +88,7 @@ def _compile_loader(target: Target, loader: Path, loader_pyc: Path, *, progress:
         error=BundleupError,
         env=compile_env(),
     )
-    tmp = cached.with_name(f".{cached.name}.{os.getpid()}.tmp")
+    tmp = cached.with_name(f".{cached.name}.{os.getpid()}.{os.urandom(4).hex()}.tmp")
     try:
         cached.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(loader_pyc, tmp)
@@ -145,7 +145,7 @@ def atomic_output(output: Path) -> Iterator[Path]:
     succeeds; on failure, remove the temporary file and any parent directories created for it."""
     created = [p for p in (output.parent, *output.parent.parents) if not p.exists()]
     output.parent.mkdir(parents=True, exist_ok=True)
-    tmp = output.with_name(f".{output.name}.tmp-{os.getpid()}")
+    tmp = output.with_name(f".{output.name}.tmp-{os.getpid()}-{os.urandom(4).hex()}")
     wrote = False
     try:
         yield tmp
@@ -230,8 +230,9 @@ def _replace_parts(folder: Path, payloads: dict[str, Path] | None) -> None:
             f"{folder} already exists and isn't a parts folder bundleup wrote",
             hint="remove it, or choose another place with -o",
         )
-    old = folder.with_name(f".{folder.name}.old-{os.getpid()}")
-    new = folder.with_name(f".{folder.name}.tmp-{os.getpid()}")
+    nonce = f"{os.getpid()}-{os.urandom(4).hex()}"
+    old = folder.with_name(f".{folder.name}.old-{nonce}")
+    new = folder.with_name(f".{folder.name}.tmp-{nonce}")
     try:
         if payloads is not None:
             new.mkdir()
@@ -242,8 +243,10 @@ def _replace_parts(folder: Path, payloads: dict[str, Path] | None) -> None:
         if payloads is not None:
             new.rename(folder)
     finally:
-        shutil.rmtree(new, ignore_errors=True)
-        shutil.rmtree(old, ignore_errors=True)
+        if new.exists():
+            _loader._rmtree(str(new))
+        if old.exists():
+            _loader._rmtree(str(old))
 
 
 DIR_MANIFEST = "bundleup-manifest.json"  # in a `dir` output and at the top of a `zip` output
@@ -264,6 +267,7 @@ def _loader_settings(p: Prepared, *, members: list[str], dirname: str) -> dict[s
         "target": target.describe(native, p.pythons, p.reach),
         "pth": pth_files(p.site),
         "tag": target.cache_tag,
+        "entry": tuple(p.entry) if p.entry else None,
         "libc": needs.libc if native else None,
         "macos": needs.macos if native else None,
     }
@@ -298,8 +302,9 @@ def write_pyz(
     else:
         layers = write_layers([p.site for p in ps], stage)
     total = sum(layer.path.stat().st_size for layer in layers)
+    room = min(SPLIT_ROOM, max(48_000, sum(len(x.files) for x in layers) * 100))
     parts = None
-    if split is not None and total + SPLIT_ROOM > split:
+    if split is not None and total + room > split:
         parts = f"{output.name}.parts"
         layers = [piece for x in layers for piece in split_layer(x, split, stage)]
         over = [x.member for x in layers if x.path.stat().st_size > split]
@@ -614,8 +619,9 @@ def write_dir(p: Prepared, output: Path, *, steps: Steps) -> None:
     check_dir_output(output)
     created = [p for p in (output.parent, *output.parent.parents) if not p.exists()]
     output.parent.mkdir(parents=True, exist_ok=True)
-    tmp = output.with_name(f".{output.name}.tmp-{os.getpid()}")
-    old = output.with_name(f".{output.name}.old-{os.getpid()}")
+    nonce = f"{os.getpid()}-{os.urandom(4).hex()}"
+    tmp = output.with_name(f".{output.name}.tmp-{nonce}")
+    old = output.with_name(f".{output.name}.old-{nonce}")
     wrote = False
     try:
         shutil.copytree(p.site, tmp, symlinks=True)
@@ -625,8 +631,10 @@ def write_dir(p: Prepared, output: Path, *, steps: Steps) -> None:
         tmp.rename(output)
         wrote = True
     finally:
-        shutil.rmtree(tmp, ignore_errors=True)
-        shutil.rmtree(old, ignore_errors=True)
+        if tmp.exists():
+            _loader._rmtree(str(tmp))
+        if old.exists():
+            _loader._rmtree(str(old))
         if not wrote:
             for d in created:
                 with contextlib.suppress(OSError):

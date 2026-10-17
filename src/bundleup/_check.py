@@ -187,37 +187,80 @@ def _dependency_chains(
     its direct dependencies."""
     from collections import deque
 
-    from packaging.markers import UndefinedEnvironmentName
+    from packaging.markers import UndefinedEnvironmentName, default_environment
     from packaging.requirements import InvalidRequirement, Requirement
     from packaging.utils import canonicalize_name
 
     canon_proj = canonicalize_name(project) if project else ""
-    env = {**(markers or {}), "extra": ""}
-    deps: dict[str, list[str]] = {}
+    base_env = {**(markers or {k: str(v) for k, v in default_environment().items()}), "extra": ""}
+    parsed_reqs: dict[str, list[Requirement]] = {}
+    provided_extras: dict[str, set[str]] = defaultdict(set)
+    requested_extras: dict[str, set[str]] = defaultdict(set)
     for dist in _verify.installed_distributions(site):
         meta = site / dist.dist_info / "METADATA"
         if not meta.is_file():
             continue
-        reqs: set[str] = set()
+        dist_reqs: list[Requirement] = []
         for line in meta.read_text(encoding="utf-8", errors="replace").splitlines():
             if not line.strip():
                 break
-            if line.lower().startswith("requires-dist:"):
+            low = line.lower()
+            if low.startswith("provides-extra:"):
+                extra_name = line.split(":", 1)[1].strip()
+                if extra_name:
+                    provided_extras[dist.name].add(canonicalize_name(extra_name))
+            elif low.startswith("requires-dist:"):
                 spec = line.split(":", 1)[1].strip()
                 try:
                     req = Requirement(spec)
                 except InvalidRequirement:
                     continue
-                if req.marker is not None and (markers or "extra" in str(req.marker)):
+                dist_reqs.append(req)
+                if req.extras:
+                    target_name = canonicalize_name(req.name)
+                    for ext in req.extras:
+                        requested_extras[target_name].add(canonicalize_name(ext))
+        parsed_reqs[dist.name] = dist_reqs
+
+    deps: dict[str, list[str]] = {}
+    extra_deps: dict[str, list[str]] = {}
+    for dist_name, dist_reqs in parsed_reqs.items():
+        reqs: set[str] = set()
+        ext_reqs: set[str] = set()
+        active_extras = {"", *requested_extras.get(dist_name, ())}
+        all_extras = provided_extras.get(dist_name, set()) - active_extras
+        for req in dist_reqs:
+            target_name = canonicalize_name(req.name)
+            if target_name not in installed or target_name == dist_name:
+                continue
+            if req.marker is None:
+                reqs.add(target_name)
+                continue
+            marker_str = str(req.marker)
+            if not markers and "extra" not in marker_str:
+                reqs.add(target_name)
+                continue
+            matched = False
+            for ext in active_extras:
+                try:
+                    if req.marker.evaluate({**base_env, "extra": ext}):
+                        reqs.add(target_name)
+                        matched = True
+                        break
+                except UndefinedEnvironmentName:
+                    break
+            if not matched and "extra" in marker_str:
+                for ext in all_extras:
                     try:
-                        if not req.marker.evaluate(env):
-                            continue
+                        if req.marker.evaluate({**base_env, "extra": ext}):
+                            ext_reqs.add(target_name)
+                            break
                     except UndefinedEnvironmentName:
-                        continue
-                target_name = canonicalize_name(req.name)
-                if target_name in installed and target_name != dist.name:
-                    reqs.add(target_name)
-        deps[dist.name] = sorted(reqs)
+                        break
+        deps[dist_name] = sorted(reqs)
+        if ext_reqs - reqs:
+            extra_deps[dist_name] = sorted(ext_reqs - reqs)
+
     third_party = installed - ({canon_proj} if canon_proj else set())
     if canon_proj and canon_proj in deps:
         direct = set(deps[canon_proj]) & third_party
@@ -232,13 +275,39 @@ def _dependency_chains(
     chains: dict[str, tuple[str, ...]] = {pkg: () for pkg in direct}
     if canon_proj:
         chains[canon_proj] = ()
-    queue: deque[str] = deque(sorted(direct))
-    while queue:
-        cur = queue.popleft()
-        for nxt in deps.get(cur, ()):
-            if nxt not in chains and nxt in third_party:
-                chains[nxt] = (*chains[cur], cur)
-                queue.append(nxt)
+
+    def _bfs(seeds: list[str]) -> None:
+        queue: deque[str] = deque(seeds)
+        while queue:
+            cur = queue.popleft()
+            for nxt in deps.get(cur, ()):
+                if nxt not in chains and nxt in third_party:
+                    chains[nxt] = (*chains[cur], cur)
+                    queue.append(nxt)
+        # Follow extra-gated edges from reached packages for any still-unreached packages
+        extra_queue: deque[str] = deque(sorted(p for p in chains if p in third_party))
+        while extra_queue:
+            cur = extra_queue.popleft()
+            for nxt in (*deps.get(cur, ()), *extra_deps.get(cur, ())):
+                if nxt not in chains and nxt in third_party:
+                    chains[nxt] = (*chains[cur], cur)
+                    extra_queue.append(nxt)
+
+    _bfs(sorted(direct))
+    while True:
+        unreached = third_party - set(chains)
+        if not unreached:
+            break
+        incoming = {
+            t
+            for s in unreached
+            for t in (*deps.get(s, ()), *extra_deps.get(s, ()))
+            if t in unreached and t != s
+        }
+        roots = sorted(unreached - incoming) or [min(unreached)]
+        for r in roots:
+            chains[r] = ()
+        _bfs(roots)
     return chains
 
 

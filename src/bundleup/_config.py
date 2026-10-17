@@ -83,7 +83,7 @@ def _key_line(where: Path, key: str | None) -> int | None:
     except OSError:
         return None
     prefix = r"^\s*#\s?" if where.suffix == ".py" else r"^\s*"
-    header = re.compile(rf"{prefix}\[\s*tool\.bundleup\s*\]")
+    header = re.compile(rf"{prefix}\[\s*\[?\s*tool\.bundleup\s*\]?\s*\]")
     if key is None:
         table_assign = re.compile(rf"{prefix}(?:tool\.)?bundleup\s*=")
         for i, raw in enumerate(lines, start=1):
@@ -289,6 +289,13 @@ def apply(options: BuildOptions, *, for_check: bool = False) -> tuple[BuildOptio
                 value = parts[0]
         if key == "entry" and isinstance(value, str):
             _validate_entry_syntax(where, value, key)
+        if key == "output" and isinstance(value, str) and not value.strip():
+            raise _invalid(
+                where,
+                "output path is empty",
+                f"for example: output = {_example('output')}",
+                key=key,
+            )
         current = getattr(options, field)
         if field == "strict":
             if value and not current:

@@ -138,9 +138,24 @@ def _restore(dist: Distribution, cache: Path, site: Path) -> bool:
         target = os.path.join(site, rel)
         parent = os.path.dirname(target)
         if parent not in made:
-            os.makedirs(parent, exist_ok=True)
+            try:
+                os.makedirs(parent, exist_ok=True)
+            except PermissionError:
+                p_parent = os.path.dirname(parent)
+                if os.path.isdir(p_parent):
+                    os.chmod(p_parent, os.stat(p_parent).st_mode | 0o700)
+                os.makedirs(parent, exist_ok=True)
             made.add(parent)
-        shutil.copyfile(source, target)
+        try:
+            shutil.copyfile(source, target)
+        except PermissionError:
+            try:
+                os.chmod(parent, os.stat(parent).st_mode | 0o700)
+                if os.path.exists(target):
+                    os.chmod(target, os.stat(target).st_mode | 0o200)
+                shutil.copyfile(source, target)
+            except OSError:
+                return False
     return True
 
 
@@ -189,6 +204,14 @@ def precompile(
     fresh = [dist for dist in all_dists if dist not in restored]
     todo = [source for dist in fresh for source in dist.sources]
     if todo:
+        for rel_dir in {os.path.dirname(s) for s in todo}:
+            d = os.path.join(site, rel_dir) if rel_dir else str(site)
+            for p in (d, os.path.join(d, "__pycache__")):
+                try:
+                    if os.path.isdir(p) and (os.stat(p).st_mode & 0o700) != 0o700:
+                        os.chmod(p, os.stat(p).st_mode | 0o700)
+                except OSError:
+                    pass
         listing = site.parent / "compile-list.txt"
         listing.write_text("\n".join(todo), encoding="utf-8")
         workers = 0 if len(todo) >= PARALLEL_FROM else 1

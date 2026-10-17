@@ -15,17 +15,25 @@ import sys
 
 def _same(a: str, b: str) -> bool:
     for norm in (os.path.abspath, os.path.realpath):
-        if os.path.normcase(norm(a)) == os.path.normcase(norm(b)):
+        try:
+            na, nb = norm(a), norm(b)
+        except OSError:
+            na, nb = os.path.normpath(a), os.path.normpath(b)
+        if os.path.normcase(na) == os.path.normcase(nb):
             return True
     return False
 
 
 def _bundleup_child() -> None:
-    here = os.path.dirname(os.path.abspath(__file__))
+    try:
+        here = os.path.dirname(os.path.abspath(__file__))
+    except OSError:
+        here = os.path.dirname(os.path.normpath(__file__))
     sys.path[:] = [p for p in sys.path if not _same(p or ".", here)]
     site = os.path.dirname(here)
     active = os.environ.get("BUNDLEUP_RUNTIME_SITE", "")
     if active and _same(active, site):
+        sys.modules.pop("_bundleup_runtime", None)
         sys.path.insert(0, here)
         try:
             _bundleup_runtime = __import__("_bundleup_runtime")
@@ -34,6 +42,8 @@ def _bundleup_child() -> None:
         same_python = _bundleup_runtime.identity() == os.environ.get(_bundleup_runtime.ENV_PYTHON)
         if same_python and _bundleup_runtime.runs_bundle_code(site):
             _bundleup_runtime.activate(site)
+        else:
+            sys.modules.pop("_bundleup_runtime", None)
     _chain(here)
 
 

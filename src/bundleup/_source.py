@@ -50,10 +50,19 @@ class Source:
 
 def load_source(path: Path, *, external: Sequence[str] = ()) -> Source:
     """Read what's being bundled. Raises ProjectError if it's none of the things bundleup takes."""
-    path = path.resolve()
-    if path.is_file() and path.suffix == ".py":
+    try:
+        path = path.resolve()
+        is_file = path.is_file()
+        is_dir = path.is_dir()
+    except (OSError, RuntimeError) as e:
+        raise ProjectError(
+            f"{path} is not a project directory or a .py script ({e})",
+            hint="point bundleup at a folder with pyproject.toml, setup.py or requirements.txt, "
+            "or at a .py script",
+        ) from None
+    if is_file and path.suffix == ".py":
         return _load_script(path, external=external)
-    if not path.is_dir():
+    if not is_dir:
         raise ProjectError(
             f"{path} is not a project directory or a .py script",
             hint="point bundleup at a folder with pyproject.toml, setup.py or requirements.txt, "
@@ -260,18 +269,41 @@ def _which(names: list[str]) -> str:
 SKIP_DIRS = {"__pycache__", "node_modules", "dist", "build", "site-packages", "venv", "env"}
 
 
+def _is_py_bundle_file(path: Path) -> bool:
+    try:
+        with path.open("rb") as f:
+            return b"# /// bundleup" in f.read(128)
+    except OSError:
+        return False
+
+
 def _app_files(folder: Path, *, suffix: str = "") -> list[Path]:
     """The files of a folder app, sorted: everything but hidden files, virtual environments,
     caches and build output."""
     found = []
     for item in sorted(folder.iterdir()):
-        if item.name.startswith(".") or item.name.endswith(".egg-info"):
+        if (
+            item.name.startswith(".")
+            or item.name.endswith((".egg-info", ".dist-info", ".parts"))
+            or item.is_symlink()
+        ):
             continue
-        if item.is_dir():
-            if item.is_symlink() or item.name in SKIP_DIRS or (item / "pyvenv.cfg").exists():
-                continue  # a symlinked folder could loop, or lead anywhere
+        try:
+            is_dir = item.is_dir()
+            is_file = item.is_file()
+        except OSError:
+            continue
+        if is_dir:
+            if (
+                item.name in SKIP_DIRS
+                or (item / "pyvenv.cfg").exists()
+                or (item / "bundleup-manifest.json").exists()
+            ):
+                continue
             found += _app_files(item, suffix=suffix)
-        elif item.is_file() and item.name.endswith(suffix) and not item.name.endswith(".pyc"):
+        elif is_file and item.name.endswith(suffix) and not item.name.endswith(".pyc"):
+            if item.suffix == ".py" and _is_py_bundle_file(item):
+                continue
             found.append(item)
     return found
 
@@ -280,7 +312,11 @@ def python_files(folder: Path, *, deep: bool = True) -> list[tuple[str, Path]]:
     """The .py files in a folder (with `deep`, under it, as for a folder app; .gitignore applies
     in a git work tree) and their POSIX paths relative to it."""
     if not deep:
-        return [(f.name, f) for f in sorted(folder.glob("*.py")) if f.is_file()]
+        return [
+            (f.name, f)
+            for f in sorted(folder.glob("*.py"))
+            if not f.is_symlink() and f.is_file() and not _is_py_bundle_file(f)
+        ]
     tracked = _git_files(folder)
     found = [(f.relative_to(folder).as_posix(), f) for f in _app_files(folder, suffix=".py")]
     return [(rel, f) for rel, f in found if tracked is None or rel in tracked]
@@ -295,8 +331,10 @@ def app_files(source: Source) -> list[tuple[str, Path]]:
     found = []
     for file in _app_files(source.path):
         rel = file.relative_to(source.path).as_posix()
-        if file.suffix == ".pyz" or (
-            file.name.startswith("requirements") and file.suffix == ".txt"
+        if (
+            file.suffix == ".pyz"
+            or file.name == "bundleup-manifest.json"
+            or (file.name.startswith("requirements") and file.suffix == ".txt")
         ):
             continue
         if tracked is None or rel in tracked:

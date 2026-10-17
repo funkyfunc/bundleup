@@ -243,7 +243,7 @@ def fetch_jump(platform: Platform, progress: Progress) -> Path:
 
 def _download(url: str, path: Path, digest: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    part = path.with_name(f".{path.name}.{os.getpid()}.part")
+    part = path.with_name(f".{path.name}.{os.getpid()}.{os.urandom(4).hex()}.part")
     try:
         ctx = ssl_context() if url.startswith("https://") else None
         with (
@@ -316,7 +316,7 @@ def fetch_python(
         )
     folder.mkdir(parents=True, exist_ok=True)
     name = archives[-1].name.split("-", 1)[1]  # without uv's hash prefix
-    part = folder / f".{name}.{os.getpid()}.part"
+    part = folder / f".{name}.{os.getpid()}.{os.urandom(4).hex()}.part"
     try:
         shutil.copyfile(archives[-1], part)
         part.replace(folder / name)
@@ -406,7 +406,7 @@ def precompiled(archive: Path, target: Target, stage: Path) -> Path:
             detail=(done.stdout + done.stderr)[-2000:],
             hint=f"{target.executable} compiled it; this is a bug, please report it",
         )
-    part = out.with_name(f".{out.name}.{os.getpid()}.part")
+    part = out.with_name(f".{out.name}.{os.getpid()}.{os.urandom(4).hex()}.part")
     try:
         # No time or name in gzip's header, so a rebuilt cache gives the same bytes.
         raw = open(part, "wb")  # noqa: SIM115 (closed by the with below)

@@ -92,12 +92,13 @@ def _lock_packages(pylock: str) -> tuple[tuple[str, str | None, Marker | None], 
 
 def locked_packages(pylock: str, environment: dict[str, str]) -> list[LockedPackage]:
     """The packages in a `uv export --format pylock.toml` that apply to this environment."""
-    packages = []
+    by_name: dict[str, LockedPackage] = {}
     for name, version, marker in _lock_packages(pylock):
         if marker and not marker.evaluate(environment):
             continue
-        packages.append(LockedPackage(name, version))
-    return packages
+        if name not in by_name or (by_name[name].version is None and version is not None):
+            by_name[name] = LockedPackage(name, version)
+    return list(by_name.values())
 
 
 def installed_distributions(site: Path) -> list[InstalledDistribution]:
@@ -322,7 +323,7 @@ def _check_dir(folder: Path, files: dict[str, str]) -> list[str]:
         if actual != expected:
             problems.append(f"changed file: {path}")
     for rel in sorted((set(found) | special) - set(files)):
-        if rel != DIR_MANIFEST:
+        if rel != DIR_MANIFEST and (not rel.endswith(".pyc") or rel in special):
             problems.append(f"extra file: {rel} isn't in the manifest")
     return problems
 
@@ -352,13 +353,14 @@ def _check_cache(cache: Path, files: dict[str, str]) -> list[str]:
     return problems
 
 
-def _find_cache(bundle: Path, cache_dir: str) -> Path | None:
-    """This machine's extracted copy, found the way the bundle's loader finds it."""
+def _find_caches(bundle: Path, cache_dir: str) -> list[Path]:
+    """This machine's extracted copies, found the way the bundle's loader finds them."""
+    found = []
     for root, shared in _loader._roots(os.path.realpath(bundle)):
         candidate = os.path.join(root, cache_dir)
         if os.path.isdir(candidate) and (not shared or _loader._private(root)):
-            return Path(candidate)
-    return None
+            found.append(Path(candidate))
+    return found
 
 
 MANIFEST_KEYS = ("name", "loader")
@@ -460,6 +462,9 @@ def _check_exe(bundle: Path) -> list[str]:
     return problems
 
 
+B64_CHARS = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/="
+
+
 def _open(bundle: Path) -> tuple[zipfile.ZipFile, bytes | None]:
     """The bundle's zip, and a .py bundle's code (everything before its data, ADR-0046), which
     it checks instead of a .pyz's __main__.py and __main__.pyc. Raises BadZipFile for neither."""
@@ -470,11 +475,31 @@ def _open(bundle: Path) -> tuple[zipfile.ZipFile, bytes | None]:
         start, end = text.rfind(_loader.DATA_START), text.rfind(_loader.DATA_END)
         if start < 0 or end < start:
             raise
+        body = text[start + len(_loader.DATA_START) : end]
+        lines = body.splitlines()
+        raw_b64 = b"".join(line[1:] for line in lines if line.startswith(b"#"))
+        tampered = text[end + len(_loader.DATA_END) :] not in (b"", b"\n", b"\r\n") or any(
+            (line and not line.startswith(b"#"))
+            or (line.startswith(b"#") and bool(line[1:].translate(None, B64_CHARS)))
+            for line in lines
+        )
         try:
-            data = base64.b64decode(text[start + len(_loader.DATA_START) : end].replace(b"#", b""))
+            data = base64.b64decode(raw_b64, validate=True)
         except ValueError:
-            raise zipfile.BadZipFile("the data at the end of the file is damaged") from None
-        return zipfile.ZipFile(io.BytesIO(data)), text[:start]
+            tampered = True
+            clean = bytes(b for b in raw_b64 if b in B64_CHARS)
+            if b"=" in clean:
+                head, sep, tail = clean.partition(b"=")
+                pad = b"==" if tail.startswith(b"=") else b"="
+                clean = head + sep[:0] + pad
+            try:
+                data = base64.b64decode(clean)
+            except ValueError:
+                raise zipfile.BadZipFile("the data at the end of the file is damaged") from None
+        if data[-22:-18] != b"PK\x05\x06":
+            tampered = True
+        code = text[:start] + (b"\x00" if tampered else b"")
+        return zipfile.ZipFile(io.BytesIO(data)), code
 
 
 def _str_dict(value: object) -> bool:
@@ -513,7 +538,15 @@ def _read_manifest(bundle: Path) -> dict[str, Any]:  # Any: JSON
         found = _read_scie_trailer(bundle)
         if found is not None and isinstance(found[0].get("lift"), dict):
             name = str(found[0]["lift"].get("name", bundle.name))
-            return {"name": name, "format": "exe", "files": {}, "loader": {}}
+            return {
+                "name": name,
+                "format": "exe",
+                "files": {},
+                "loader": {},
+                "_corrupted": (
+                    f"corrupted: {bundle.name}'s manifest can't be read ({type(e).__name__}: {e})"
+                ),
+            }
         raise NotABundleError(
             f"{bundle} isn't a bundleup bundle with a manifest ({type(e).__name__}: {e})",
             hint="bundles carry manifest.json since bundleup's `build` command; rebuild it",
@@ -660,6 +693,8 @@ def _check_bundle(bundle: Path, manifest: dict[str, Any]) -> list[str]:  # Any: 
             if manifest.get("format") in ("dir", "zip", "lambda"):
                 return _check_payload(outer, manifest["files"], ignore=(DIR_MANIFEST,))
             problems = _check_exe(bundle) if _is_exe(bundle, outer) else []
+            if "_corrupted" in manifest and not problems:
+                problems.append(str(manifest["_corrupted"]))
             problems += _check_loader(outer, manifest.get("loader") or {}, code)
             parts = manifest.get("parts")
             # A split bundle's layers are files in the folder beside the real bundle file.
@@ -669,6 +704,14 @@ def _check_bundle(bundle: Path, manifest: dict[str, Any]) -> list[str]:  # Any: 
             for member, layer in sorted(layers.items()):
                 opener = (lambda m: source(m).open("rb")) if source else outer.open
                 problems += _check_layer(opener, member, layer)
+            if "_corrupted" not in manifest:
+                allowed = (
+                    {"manifest.json"}
+                    | (set() if code is not None else set(manifest.get("loader") or {}))
+                    | (set() if parts else set(layers))
+                )
+                for name in sorted(set(outer.namelist()) - allowed):
+                    problems.append(f"extra file: {name} isn't in the manifest")
             if parts_dir is not None and parts_dir.is_dir():
                 for entry in sorted(parts_dir.iterdir()):
                     if entry.name not in layers:
@@ -698,13 +741,18 @@ def verify(bundle: Path) -> VerifyReport:
     manifest = _read_manifest(bundle)
     payloads = _payloads(manifest)
     problems = _check_bundle(bundle, manifest)
-    # This machine's unpacked copy: of whichever payload was unpacked here (one per machine).
-    cache, cache_problems = None, []
+    cache: Path | None = None
+    cache_problems: list[str] = []
+    seen_caches: set[Path] = set()
     for payload in payloads:
-        cache = _find_cache(bundle, payload["cache_dir"])
-        if cache:
-            cache_problems = _check_cache(cache, payload["files"])
-            break
+        for found_cache in _find_caches(bundle, payload["cache_dir"]):
+            if found_cache in seen_caches:
+                continue
+            seen_caches.add(found_cache)
+            found_problems = _check_cache(found_cache, payload["files"])
+            if cache is None or (found_problems and not cache_problems):
+                cache = found_cache
+            cache_problems.extend(found_problems)
     layers = _layers(manifest)
     files = (
         sum(len(layer["files"]) for layer in layers.values())

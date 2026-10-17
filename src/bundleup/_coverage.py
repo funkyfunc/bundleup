@@ -8,6 +8,7 @@ compatible"), and by `bundleup check --python-platform`, which checks other targ
 
 from __future__ import annotations
 
+import functools
 from dataclasses import dataclass
 from typing import Any
 
@@ -37,6 +38,15 @@ class Gap:
     source_only: bool  # no wheels at all: uv builds it from source, which works if it's pure
 
 
+@dataclass(frozen=True)
+class _ParsedPackage:
+    name: str
+    version: str | None
+    marker: Marker | None
+    from_source: bool
+    tags: tuple[frozenset[Tag], ...]
+
+
 def _wheel_tags(package: Package) -> list[frozenset[Tag]]:
     found = []
     wheels = package.get("wheels", [])
@@ -55,32 +65,55 @@ def _wheel_tags(package: Package) -> list[frozenset[Tag]]:
     return found
 
 
+@functools.lru_cache(maxsize=8)
+def _parsed_packages(pylock: str) -> tuple[_ParsedPackage, ...]:
+    raw_packages = tomllib.loads(pylock).get("packages", [])
+    if not isinstance(raw_packages, list):
+        return ()
+    parsed = []
+    for package in raw_packages:
+        if not isinstance(package, dict) or not isinstance(package.get("name"), str):
+            continue
+        raw_marker = package.get("marker")
+        marker = Marker(raw_marker) if isinstance(raw_marker, str) else None
+        from_source = any(key in package for key in ("directory", "vcs", "archive"))
+        version = package.get("version")
+        parsed.append(
+            _ParsedPackage(
+                canonicalize_name(package["name"]),
+                version if isinstance(version, str) else None,
+                marker,
+                from_source,
+                tuple(_wheel_tags(package)),
+            )
+        )
+    return tuple(parsed)
+
+
 def gaps(pylock: str, platform: Platform, python: tuple[int, int]) -> list[Gap]:
     """Every locked package that applies to this target and has no wheel it can install."""
     supported = platform.supported_tags(python)
     environment = platform.markers(python_full_version=f"{python[0]}.{python[1]}.0")
+    grouped: dict[str, list[_ParsedPackage]] = {}
+    for pkg in _parsed_packages(pylock):
+        if pkg.marker is not None and not pkg.marker.evaluate(environment):
+            continue
+        grouped.setdefault(pkg.name, []).append(pkg)
     found = []
-    raw_packages = tomllib.loads(pylock).get("packages", [])
-    if not isinstance(raw_packages, list):
-        return found
-    for package in raw_packages:
-        if not isinstance(package, dict) or not isinstance(package.get("name"), str):
-            continue
-        marker = package.get("marker")
-        if isinstance(marker, str) and not Marker(marker).evaluate(environment):
-            continue
-        if any(key in package for key in ("directory", "vcs", "archive")):
+    for name, entries in grouped.items():
+        if any(e.from_source for e in entries):
             continue  # a local project or a URL: built here from source
-        tags = _wheel_tags(package)
+        tags = [t for e in entries for t in e.tags]
         if tags and any(t & supported for t in tags):
             continue
         every = sorted({tag.platform for t in tags for tag in t})
         words = TAG_OS[platform.sys_platform]  # the same OS's wheels are the useful ones to show
         available = [p for p in every if any(w in p for w in words)] or every
+        version = next((e.version for e in entries if e.version), None)
         found.append(
             Gap(
-                canonicalize_name(package["name"]),
-                package.get("version"),
+                name,
+                version,
                 platform.name,
                 python,
                 tuple(available),
