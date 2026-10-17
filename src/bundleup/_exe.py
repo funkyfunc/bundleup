@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import gzip
 import hashlib
+import http.client
 import json
 import os
 import shutil
@@ -24,6 +25,7 @@ import struct
 import subprocess
 import tarfile
 import urllib.request
+import zlib
 from pathlib import Path
 
 from ._bytecode import cache_dir
@@ -109,8 +111,28 @@ def write_exe(
 ) -> tuple[str, list[Diagnostic]]:
     """The executable for `platform`: its launcher, an interpreter of the target's Python version
     with its standard library precompiled, and `pyz`, written next to `output` then renamed."""
-    jump = fetch_jump(platform, progress)
-    python = precompiled(fetch_python(uv, target, platform, stage, progress), target, stage)
+    jump_cached = fetch_jump(platform, progress, stage=stage)
+    jump = stage / jump_cached.name
+    if jump_cached != jump:
+        try:
+            shutil.copy2(jump_cached, jump)
+        except FileNotFoundError:
+            jump_cached = fetch_jump(platform, progress, stage=stage)
+            if jump_cached != jump:
+                shutil.copy2(jump_cached, jump)
+    raw_python = fetch_python(uv, target, platform, stage, progress)
+    try:
+        python = precompiled(raw_python, target, stage)
+    except BundleupError:
+        if (
+            raw_python != stage / raw_python.name
+            and os.environ.get("UV_PYTHON_DOWNLOADS") != "never"
+        ):
+            raw_python.unlink(missing_ok=True)
+            raw_python = fetch_python(uv, target, platform, stage, progress)
+            python = precompiled(raw_python, target, stage)
+        else:
+            raise
     files = [
         _file(python, key="python", kind="tar.gz"),
         _file(pyz, key="app", kind="blob", name="app.pyz"),  # last: a zip (see above)
@@ -188,10 +210,15 @@ def _jump_trailer(jump: Path) -> dict[str, object]:
     """What the manifest says about the launcher: its size, version and hash, the first two read
     from the launcher's own last bytes, as scie-jump's packer does."""
     data = jump.read_bytes()
-    length, size, magic = struct.unpack("<BII", data[-9:])
-    if magic != JUMP_MAGIC or size != len(data):
+    if len(data) < 9:
         raise BundleupError(f"{jump} isn't a scie-jump launcher", hint=_CLEAR)
-    version = data[-9 - length : -9].decode()
+    length, size, magic = struct.unpack("<BII", data[-9:])
+    if magic != JUMP_MAGIC or size != len(data) or len(data) < 9 + length:
+        raise BundleupError(f"{jump} isn't a scie-jump launcher", hint=_CLEAR)
+    try:
+        version = data[-9 - length : -9].decode("utf-8")
+    except UnicodeDecodeError:
+        raise BundleupError(f"{jump} isn't a scie-jump launcher", hint=_CLEAR) from None
     return {"size": size, "version": version, "hash": hashlib.sha256(data).hexdigest()}
 
 
@@ -215,7 +242,7 @@ def ssl_context() -> object:
     return ssl.create_default_context(cafile=cafile, capath=capath)
 
 
-def fetch_jump(platform: Platform, progress: Progress) -> Path:
+def fetch_jump(platform: Platform, progress: Progress, *, stage: Path | None = None) -> Path:
     """The launcher for `platform`, downloaded once and checked against its pinned hash.
     `BUNDLEUP_JUMP_MIRROR` can point to an internal mirror URL or a folder of pre-fetched files."""
     found = JUMPS.get((platform.sys_platform, platform.arch))
@@ -227,8 +254,11 @@ def fetch_jump(platform: Platform, progress: Progress) -> Path:
         )
     asset, digest = found
     path = exe_cache() / "jump" / JUMP_VERSION / asset
-    if path.is_file() and _sha256(path) == digest:
-        return path
+    try:
+        if path.is_file() and _sha256(path) == digest:
+            return path
+    except OSError:
+        pass
     mirror = os.environ.get("BUNDLEUP_JUMP_MIRROR", "").rstrip("/")
     if mirror and not mirror.startswith(("https://", "http://", "file://")):
         url = (Path(mirror) / asset).resolve().as_uri()
@@ -237,13 +267,13 @@ def fetch_jump(platform: Platform, progress: Progress) -> Path:
     else:
         url = JUMP_URL.format(version=JUMP_VERSION, asset=asset)
     progress(ProgressEvent("note", f"downloading the scie-jump {JUMP_VERSION} launcher (once)"))
-    _download(url, path, digest)
-    return path
+    return _download(url, path, digest, stage=stage)
 
 
-def _download(url: str, path: Path, digest: str) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    part = path.with_name(f".{path.name}.{os.getpid()}.{os.urandom(4).hex()}.part")
+def _download(url: str, path: Path, digest: str, *, stage: Path | None = None) -> Path:
+    work_dir = stage if stage is not None else path.parent
+    work_dir.mkdir(parents=True, exist_ok=True)
+    part = work_dir / f".{path.name}.{os.getpid()}.{os.urandom(4).hex()}.part"
     try:
         ctx = ssl_context() if url.startswith("https://") else None
         with (
@@ -256,8 +286,23 @@ def _download(url: str, path: Path, digest: str) -> None:
                 f"the download from {url} doesn't match its pinned sha256, so it wasn't used",
                 hint="try again; if it keeps happening, report it: the release may have changed",
             )
+        if stage is not None:
+            staged = stage / path.name
+            part.replace(staged)
+            cache_part = path.with_name(f".{path.name}.{os.getpid()}.{os.urandom(4).hex()}.part")
+            try:
+                path.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copyfile(staged, cache_part)
+                cache_part.replace(path)
+                return path if path.is_file() else staged
+            except OSError:
+                return staged
+            finally:
+                cache_part.unlink(missing_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True)
         part.replace(path)
-    except OSError as e:
+        return path
+    except (OSError, http.client.HTTPException, ValueError) as e:
         raise BundleupError(
             f"couldn't download {url} ({e})",
             hint="--format exe downloads its launcher once; check the network or proxy "
@@ -279,7 +324,7 @@ def fetch_python(
     folder = exe_cache() / "python" / f"cpython-{version}-{where}"
     # The newest patch release uv knows, so security fixes arrive (seventh review); offline or
     # when a corporate mirror hasn't synced the newest patch yet, the newest one already cached.
-    cached = sorted(folder.glob("*.tar.gz"), key=_patch)
+    cached = [x for x in sorted(folder.glob("*.tar.gz"), key=_patch) if _valid_gzip(x)]
     newest = _newest(uv, f"cpython-{version}-{where}", platform, libc, stage) or version
     wanted = tuple(int(x) for x in newest.split("."))
     found = [x for x in cached if _patch(x)[: len(wanted)] == wanted]
@@ -314,16 +359,20 @@ def fetch_python(
             f"uv installed {key} but kept no archive of it",
             hint="a newer uv may store downloads elsewhere; please report it",
         )
-    folder.mkdir(parents=True, exist_ok=True)
     name = archives[-1].name.split("-", 1)[1]  # without uv's hash prefix
+    staged_raw = stage / name
+    shutil.copyfile(archives[-1], staged_raw)
     part = folder / f".{name}.{os.getpid()}.{os.urandom(4).hex()}.part"
     try:
-        shutil.copyfile(archives[-1], part)
+        folder.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(staged_raw, part)
         part.replace(folder / name)
+        return folder / name
+    except OSError:
+        return staged_raw
     finally:
         part.unlink(missing_ok=True)
         shutil.rmtree(installed, ignore_errors=True)
-    return folder / name
 
 
 def _newest(uv: str, key: str, platform: Platform, libc: str, stage: Path) -> str | None:
@@ -360,6 +409,23 @@ def _patch(archive: Path) -> tuple[int, ...]:
         return ()
 
 
+def _valid_gzip(path: Path) -> bool:
+    try:
+        with open(path, "rb") as f:
+            head = f.read(10)
+            if len(head) < 10 or not head.startswith(b"\x1f\x8b\x08"):
+                return False
+            f.seek(0, os.SEEK_END)
+            size = f.tell()
+            if size < 18:
+                return False
+            f.seek(size - 4)
+            isize = int.from_bytes(f.read(4), "little")
+        return isize > 0 and isize % 512 == 0
+    except OSError:
+        return False
+
+
 def precompiled(archive: Path, target: Target, stage: Path) -> Path:
     """`archive` with its standard library compiled to bytecode, kept beside it. The macOS and
     Linux archives ship almost none (3 of 1,090 modules), so without this every run under
@@ -370,27 +436,44 @@ def precompiled(archive: Path, target: Target, stage: Path) -> Path:
     Only the standard library's sources are unpacked to compile them: the archive is otherwise
     copied entry by entry (unpacking all of Linux's would collide on a case-insensitive disk:
     terminfo has names differing only in case)."""
-    out = (
-        archive.parent
-        / "compiled"
-        / f"{archive.name.removesuffix('.tar.gz')}-{target.cache_tag}.tar.gz"
-    )
-    if out.is_file():
-        return out
-    out.parent.mkdir(exist_ok=True)
+    compiled_name = f"{archive.name.removesuffix('.tar.gz')}-{target.cache_tag}.tar.gz"
+    out = archive.parent / "compiled" / compiled_name
+    staged = stage / compiled_name
+    if out.is_file() and _valid_gzip(out):
+        try:
+            shutil.copyfile(out, staged)
+            return staged
+        except OSError:
+            pass
+    local_archive = stage / archive.name
+    if local_archive != archive:
+        try:
+            shutil.copyfile(archive, local_archive)
+        except OSError as e:
+            raise BundleupError(
+                f"cached Python archive {archive.name} is missing or unreadable ({e})",
+                hint=_CLEAR,
+            ) from None
     version = f"{target.version[0]}.{target.version[1]}"
     tree = stage / "python-stdlib"
-    with tarfile.open(archive) as src:
-        members = src.getmembers()
-        names = {m.name for m in members}
-        stdlib = ("python/Lib/", f"python/lib/python{version}/")  # Windows, then the others
-        for m in members:
-            if m.isfile() and m.name.startswith(stdlib) and m.name.endswith(".py"):
-                if ".." in m.name.split("/"):
-                    continue  # never outside the tree (uv checked the archive's hash anyway)
-                path = tree / m.name
-                path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_bytes(src.extractfile(m).read())  # type: ignore[union-attr]  # a file
+    try:
+        with tarfile.open(local_archive) as src:
+            members = src.getmembers()
+            names = {m.name.rstrip("/") for m in members}
+            stdlib = ("python/Lib/", f"python/lib/python{version}/")  # Windows, then the others
+            for m in members:
+                if m.isfile() and m.name.startswith(stdlib) and m.name.endswith(".py"):
+                    if ".." in m.name.split("/"):
+                        continue  # never outside the tree (uv checked the archive's hash anyway)
+                    path = tree / m.name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_bytes(src.extractfile(m).read())  # type: ignore[union-attr]  # a file
+    except (tarfile.TarError, EOFError, zlib.error, OSError) as e:
+        shutil.rmtree(tree, ignore_errors=True)
+        raise BundleupError(
+            f"cached Python archive {archive.name} is corrupted ({e})",
+            hint=_CLEAR,
+        ) from None
     # One process, so the same bytes every time: marshal's output depends on what the process
     # compiled before (shared objects), which parallel workers split differently on each run.
     compile_all = [target.executable, "-s", "-S", "-m", "compileall", "-q"]
@@ -401,23 +484,27 @@ def precompiled(archive: Path, target: Target, stage: Path) -> Path:
         compile_all, capture_output=True, text=True, check=False, env=compile_env()
     )
     if done.returncode:  # the stdlib compiles cleanly (checked on 3.12's): a failure is real
+        shutil.rmtree(tree, ignore_errors=True)
         raise BundleupError(
             f"couldn't compile the standard library of {archive.name}",
             detail=(done.stdout + done.stderr)[-2000:],
             hint=f"{target.executable} compiled it; this is a bug, please report it",
         )
-    part = out.with_name(f".{out.name}.{os.getpid()}.{os.urandom(4).hex()}.part")
     try:
         # No time or name in gzip's header, so a rebuilt cache gives the same bytes.
-        raw = open(part, "wb")  # noqa: SIM115 (closed by the with below)
+        raw = open(staged, "wb")  # noqa: SIM115 (closed by the with below)
         packed = gzip.GzipFile("", "wb", compresslevel=6, fileobj=raw, mtime=0)
         with (
             raw,
             packed,
-            tarfile.open(archive) as src,
+            tarfile.open(local_archive) as src,
             tarfile.open(fileobj=packed, mode="w") as dest,
         ):
             for m in src.getmembers():
+                if m.isdir():
+                    m.mode = (m.mode or 0o755) | 0o700
+                elif m.isfile():
+                    m.mode = (m.mode or 0o644) | 0o600
                 dest.addfile(m, src.extractfile(m) if m.isfile() else None)
             for pyc in sorted(tree.rglob("*.pyc")):
                 rel = pyc.relative_to(tree).as_posix()
@@ -433,11 +520,23 @@ def precompiled(archive: Path, target: Target, stage: Path) -> Path:
                 info.size, info.mode = pyc.stat().st_size, 0o644
                 with open(pyc, "rb") as data:
                     dest.addfile(info, data)
+    except (tarfile.TarError, EOFError, zlib.error, OSError) as e:
+        raise BundleupError(
+            f"cached Python archive {archive.name} is corrupted ({e})",
+            hint=_CLEAR,
+        ) from None
+    finally:
+        shutil.rmtree(tree, ignore_errors=True)
+    part = out.with_name(f".{out.name}.{os.getpid()}.{os.urandom(4).hex()}.part")
+    try:
+        out.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(staged, part)
         part.replace(out)
+    except OSError:
+        pass
     finally:
         part.unlink(missing_ok=True)
-        shutil.rmtree(tree, ignore_errors=True)
-    return out
+    return staged
 
 
 def _sha256(path: Path) -> str:

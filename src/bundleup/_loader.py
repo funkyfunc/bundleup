@@ -89,8 +89,8 @@ DATA_END = b"# --- end of bundleup data ---"
 
 def _me() -> str:
     if _SCIE:
-        return os.path.basename(_SCIE)
-    return os.path.basename(_ARCHIVE)
+        return os.path.basename(_SCIE.rstrip("/\\")) or NAME
+    return os.path.basename(_ARCHIVE.rstrip("/\\")) or NAME
 
 
 def _fail(message: str) -> "NoReturn":
@@ -294,8 +294,9 @@ def _libc() -> "tuple[str, tuple[int, int] | None] | None":
             return ("glibc", (int(parts[0]), int(parts[1])))
         except (IndexError, ValueError):
             return ("glibc", None)
-    if any(name.startswith("ld-musl-") for name in _listdir("/lib")):
-        return ("musl", None)  # musl has no cheap way to report its version
+    for lib_dir in ("/lib", "/usr/lib", "/lib64", "/usr/lib64"):
+        if any(name.startswith("ld-musl-") for name in _listdir(lib_dir)):
+            return ("musl", None)  # musl has no cheap way to report its version
     return None
 
 
@@ -311,7 +312,7 @@ def _macos() -> "tuple[int, int] | None":
     25 Apple numbers macOS by year (Darwin 25 is macOS 26; the third review found 16)."""
     try:
         darwin = int(os.uname().release.split(".")[0])
-    except (AttributeError, ValueError):
+    except (AttributeError, ValueError, OSError):
         return None
     if darwin >= 25:
         return (darwin + 1, 0)
@@ -333,20 +334,30 @@ def _macos_fits(macos: "tuple[int, int] | None") -> bool:
     return not (have and have < tuple(macos))
 
 
-def _fits(payload: "dict[str, Any]") -> bool:
-    """Whether a payload of a multi-platform bundle can run here, apart from the Python version:
-    OS, CPU, interpreter build, C library, macOS version (the same checks as _check)."""
+def _fits_os_cpu(payload: "dict[str, Any]") -> bool:
     if payload["platform"] and sys.platform != payload["platform"]:
         return False
     machine = payload["machine"]
-    if machine and _machine() and _machine() != machine:
-        return False
-    if machine and (
-        sys.implementation.name != "cpython"
-        or getattr(sys, "abiflags", None) != payload["abiflags"]
-    ):
-        return False
-    return _libc_fits(payload["libc"]) and _macos_fits(payload["macos"])
+    return not (machine and _machine() and _machine() != machine)
+
+
+def _fits(payload: "dict[str, Any]") -> bool:
+    """Whether a payload of a multi-platform bundle can run here, apart from the Python version:
+    OS, CPU, interpreter build, C library, macOS version (the same checks as _check)."""
+    machine = payload["machine"]
+    abi_ok = not (
+        machine
+        and (
+            sys.implementation.name != "cpython"
+            or getattr(sys, "abiflags", None) != payload["abiflags"]
+        )
+    )
+    return (
+        _fits_os_cpu(payload)
+        and abi_ok
+        and _libc_fits(payload["libc"])
+        and _macos_fits(payload["macos"])
+    )
 
 
 def _in_range(payload: "dict[str, Any]", here: "tuple[int, int]") -> bool:
@@ -363,10 +374,13 @@ def _select() -> None:
     with a matching Python); nothing for this platform at all is reported here."""
     global DIRNAME, PYTHON, PYTHON_MAX, PLATFORM, MACHINE, ABIFLAGS, TARGET, PTH, LIBC, MACOS
     global MEMBERS, TAG, ENTRY
+    del VERSIONS[:]
     if not PAYLOADS:
         return
     here = sys.version_info[:2]
     fitting = [p for p in PAYLOADS if _fits(p)]
+    if not fitting:
+        fitting = [p for p in PAYLOADS if _fits_os_cpu(p)]
     if not fitting:
         names = {"darwin": "macOS", "linux": "Linux", "win32": "Windows"}
         _fail(
@@ -563,7 +577,12 @@ def _prune(root: str) -> None:
         return
     for entry in entries:
         head, _, digest = entry.rpartition("-")
-        if head != name or entry == DIRNAME or len(digest) != 16:
+        if (
+            head != name
+            or entry == DIRNAME
+            or len(digest) != 16
+            or not all(c in "0123456789abcdef" for c in digest)
+        ):
             continue
         path = os.path.join(root, entry)
         try:
@@ -984,6 +1003,59 @@ def _exec_file(path: str, argv0: str, user_script: bool = False) -> None:
     loader.exec_module(module)
 
 
+def _exec_module(target: str, alter_argv0: bool = False) -> None:
+    import importlib.util
+    import runpy
+    import types
+
+    spec = None
+    pkg_locations = None  # type: list[str] | None
+    is_pkg = False
+    try:
+        if "." in target:
+            parent_name = target.rpartition(".")[0]
+            __import__(parent_name)
+            if target.endswith(".__main__"):
+                parent_spec = importlib.util.find_spec(parent_name)
+                if parent_spec is not None and parent_spec.submodule_search_locations is not None:
+                    pkg_locations = list(parent_spec.submodule_search_locations)
+        spec = importlib.util.find_spec(target)
+        is_pkg = spec is not None and spec.submodule_search_locations is not None
+        if is_pkg and spec is not None and spec.submodule_search_locations is not None:
+            pkg_locations = list(spec.submodule_search_locations)
+            __import__(target)
+            spec = importlib.util.find_spec(target + ".__main__")
+    except (ImportError, ValueError, AttributeError):
+        spec = None
+    loader = getattr(spec, "loader", None)  # type: Any
+    code = loader.get_code(spec.name) if spec is not None and hasattr(loader, "get_code") else None
+    if spec is not None and code is not None:
+        pkg_name = target if is_pkg else target.rpartition(".")[0]
+        has_guard = "__name__" in getattr(code, "co_names", ()) and "__main__" in getattr(
+            code, "co_consts", ()
+        )
+        if has_guard and (is_pkg or (target.endswith(".__main__") and pkg_name)):
+            spec.name = pkg_name
+            spec.submodule_search_locations = pkg_locations if pkg_locations is not None else []
+        elif not is_pkg and target == "__main__" and has_guard:
+            spec.name = "__main__"
+        if alter_argv0 and sys.argv and spec.origin:
+            sys.argv[0] = spec.origin
+        module = types.ModuleType("__main__")
+        module.__dict__["__file__"] = spec.origin
+        module.__dict__["__cached__"] = spec.cached
+        module.__dict__["__loader__"] = loader
+        module.__dict__["__spec__"] = None if spec.name == "__main__" else spec
+        module.__dict__["__package__"] = pkg_name
+        sys.modules["__main__"] = module
+        exec(code, module.__dict__)
+    else:
+        mod_globals = runpy.run_module(target, run_name="__main__", alter_sys=alter_argv0)
+        main_mod = types.ModuleType("__main__")
+        main_mod.__dict__.update(mod_globals)
+        sys.modules["__main__"] = main_mod
+
+
 def _run(site: str) -> None:
     kind, target, attr = ENTRY
     if kind == "call":
@@ -997,42 +1069,13 @@ def _run(site: str) -> None:
         _run_python()
         return
     if kind == "module":
-        import importlib.util
-        import runpy
-        import types
-
-        if "." in target:
-            __import__(target.rpartition(".")[0])
-        spec = importlib.util.find_spec(target)
-        is_pkg = spec is not None and spec.submodule_search_locations is not None
-        if is_pkg:
-            __import__(target)
-            spec = importlib.util.find_spec(target + ".__main__")
-        loader = getattr(spec, "loader", None)  # type: Any
-        code = (
-            loader.get_code(spec.name) if spec is not None and hasattr(loader, "get_code") else None
-        )
-        if spec is not None and code is not None:
-            if is_pkg:
-                spec.name = target
-            module = types.ModuleType("__main__")
-            module.__dict__["__file__"] = spec.origin
-            module.__dict__["__cached__"] = spec.cached
-            module.__dict__["__loader__"] = loader
-            module.__dict__["__spec__"] = spec
-            module.__dict__["__package__"] = target if is_pkg else target.rpartition(".")[0]
-            sys.modules["__main__"] = module
-            exec(code, module.__dict__)
-        else:
-            mod_globals = runpy.run_module(target, run_name="__main__", alter_sys=True)
-            main_mod = types.ModuleType("__main__")
-            main_mod.__dict__.update(mod_globals)
-            sys.modules["__main__"] = main_mod
+        _exec_module(target)
     else:
         script_path = os.path.join(site, target)
         script_dir = os.path.dirname(script_path)
         if script_dir != site and os.path.basename(script_dir) != "__bundleup_script__":
             sys.path.insert(0, script_dir)
+            _add_env_path("BUNDLEUP_RUNTIME_SCRIPTS", script_dir)
         argv0 = sys.argv[0] if sys.argv and sys.argv[0] else script_path
         _exec_file(script_path, argv0)
 
@@ -1044,9 +1087,6 @@ def _run_python() -> None:
     """`--entry python`: the bundle is a Python with its packages, so plain scripts beside it
     (a skill's, say) run with them, as python runs them: `app.pyz tool.py ARGS`, `-m module`,
     `-c code`, a program on stdin (`-`, or piped), or a prompt."""
-    import runpy
-    import types
-
     me = _me()
     usage = (
         "usage: %s [SCRIPT.py | -m MODULE | -c CODE | -] [ARGS...]" % me
@@ -1088,10 +1128,7 @@ def _run_python() -> None:
         if not safe_path and cwd:
             sys.path.insert(0, cwd)  # as python -m does: the working directory
             _add_env_path("BUNDLEUP_RUNTIME_SCRIPTS", cwd)
-        mod_globals = runpy.run_module(mod_name, run_name="__main__", alter_sys=True)
-        main_mod = types.ModuleType("__main__")
-        main_mod.__dict__.update(mod_globals)
-        sys.modules["__main__"] = main_mod
+        _exec_module(mod_name, alter_argv0=True)
     elif first == "-" or (
         not after_dd and (first == "-c" or (first.startswith("-c") and len(first) > 2))
     ):
@@ -1167,28 +1204,36 @@ def _add_env_path(name: str, folder: str) -> None:
 _IN_USE = []  # type: list[BinaryIO]  # held open for the process's life (see _hold)
 
 
-def _hold(site: str) -> None:
+def _hold(site: str) -> bool:
     """Mark this unpacked copy in use while the program runs: a shared lock on its lock file,
     which `bundleup cache clean` can't take, so it never deletes files a running program needs
-    (third review). POSIX only, best effort, a few microseconds."""
+    (third review). Returns False if `site` was concurrently removed before the lock was taken."""
     if os.name == "nt":
-        return
+        return os.path.isdir(site)
     handle = None  # type: BinaryIO | None
     try:
         import fcntl
 
         handle = open(os.path.join(os.path.dirname(site), ".lock-" + DIRNAME), "a+b")  # noqa: SIM115
         fcntl.flock(handle.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except BlockingIOError:
+        if handle is not None:
+            handle.close()
+        return False
     except (OSError, ImportError):
         if handle is not None:
             handle.close()
-        return  # a read-only cache, or locks unsupported: nothing to protect it from
+        return os.path.isdir(site)  # read-only cache, or locks unsupported
+    if not os.path.isdir(site):
+        handle.close()
+        return False
     _IN_USE.append(handle)
     import atexit
 
     # Closed at exit, before Python tears down modules: otherwise the file is finalized open,
     # and `-W error` or `python -X dev` prints a ResourceWarning (seen in click's suite).
     atexit.register(handle.close)
+    return True
 
 
 if __name__ == "__main__":
@@ -1198,8 +1243,12 @@ if __name__ == "__main__":
         sys.argv[0] = _SCIE
     _select()
     _check()
-    _site = _find() or _extract()
+    _site = _find()
+    if not _site or not _hold(_site):
+        _site = _extract()
+        if not _hold(_site):
+            _site = _extract()
+            _hold(_site)
     _bytecode_for_here(_site)
-    _hold(_site)
     _activate(_site)
     _run(_site)

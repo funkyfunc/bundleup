@@ -31,7 +31,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any
 
-from packaging.markers import Marker
+from packaging.markers import InvalidMarker, Marker, UndefinedEnvironmentName
 from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
@@ -72,6 +72,15 @@ def record_hash(data: bytes) -> str:
     return "sha256=" + digest.decode("ascii")
 
 
+def _parse_marker(raw: object) -> Marker | None:
+    if not isinstance(raw, str):
+        return None
+    try:
+        return Marker(raw)
+    except InvalidMarker:
+        return None
+
+
 @functools.lru_cache(maxsize=8)
 def _lock_packages(pylock: str) -> tuple[tuple[str, str | None, Marker | None], ...]:
     """(name, version, marker) of every package in a pylock.toml, parsed once per text: the range
@@ -83,7 +92,7 @@ def _lock_packages(pylock: str) -> tuple[tuple[str, str | None, Marker | None], 
         (
             canonicalize_name(package["name"]),
             package.get("version"),
-            Marker(package["marker"]) if isinstance(package.get("marker"), str) else None,
+            _parse_marker(package.get("marker")),
         )
         for package in raw
         if isinstance(package, dict) and isinstance(package.get("name"), str)
@@ -92,10 +101,20 @@ def _lock_packages(pylock: str) -> tuple[tuple[str, str | None, Marker | None], 
 
 def locked_packages(pylock: str, environment: dict[str, str]) -> list[LockedPackage]:
     """The packages in a `uv export --format pylock.toml` that apply to this environment."""
+    env: dict[str, Any] = {
+        "extra": "",
+        "extras": set(),
+        "dependency_groups": set(),
+        **environment,
+    }
     by_name: dict[str, LockedPackage] = {}
     for name, version, marker in _lock_packages(pylock):
-        if marker and not marker.evaluate(environment):
-            continue
+        if marker:
+            try:
+                if not marker.evaluate(env):
+                    continue
+            except UndefinedEnvironmentName:
+                continue
         if name not in by_name or (by_name[name].version is None and version is not None):
             by_name[name] = LockedPackage(name, version)
     return list(by_name.values())
@@ -289,9 +308,12 @@ def _check_payload(
     problems = []
     seen = set()
     for info in payload.infolist():
-        if info.filename in ignore:
+        if info.filename in seen:
+            problems.append(f"corrupted: duplicate zip entry {info.filename}")
             continue
         seen.add(info.filename)
+        if info.filename in ignore:
+            continue
         expected = files.get(info.filename)
         if expected is None:
             problems.append(f"extra file: {info.filename} isn't in the manifest")
@@ -430,7 +452,16 @@ def _hash_span(f: IO[bytes], size: int) -> str | None:
     return digest.hexdigest()
 
 
-def _check_exe(bundle: Path) -> list[str]:
+EXPECTED_EXE_ENV = {
+    "PYTHONHOME": None,
+    "PYTHONPATH": None,
+    "PYTHONSTARTUP": None,
+    "PYTHONUSERBASE": None,
+    "PYTHONNOUSERSITE": "1",
+}
+
+
+def _check_exe(bundle: Path, outer: zipfile.ZipFile | None = None) -> list[str]:
     """Check a `--format exe` binary's launcher, bundled Python archive and scie trailer."""
     from ._exe import JUMPS
 
@@ -442,16 +473,31 @@ def _check_exe(bundle: Path) -> list[str]:
         jump = scie["jump"]
         jump_size = int(jump["size"])
         jump_hash = str(jump["hash"])
+        raw_files = scie["lift"]["files"]
         files = [
-            (str(entry["name"]), int(entry["size"]), str(entry["hash"]))
-            for entry in scie["lift"]["files"]
+            (str(entry["name"]), int(entry["size"]), str(entry["hash"])) for entry in raw_files
         ]
+        keys = [str(entry["key"]) for entry in raw_files]
     except (KeyError, TypeError, ValueError):
         return ["corrupted: executable trailer is incomplete"]
     if jump_size < 0 or jump_size + sum(size for _, size, _ in files) != trailer_offset:
         return ["corrupted: executable size doesn't match its trailer"]
     known_jumps = {digest for _, digest in JUMPS.values()}
     problems: list[str] = []
+    boot = scie.get("lift", {}).get("boot")
+    commands = boot.get("commands") if isinstance(boot, dict) else None
+    cmd = commands.get("") if isinstance(commands, dict) and set(commands) == {""} else None
+    exe_path = cmd.get("exe") if isinstance(cmd, dict) else None
+    if (
+        keys != ["python", "app"]
+        or files[1][0] != "app.pyz"
+        or not isinstance(cmd, dict)
+        or not isinstance(exe_path, str)
+        or not exe_path.startswith("{python}/python/")
+        or cmd.get("args") != ["{app}"]
+        or cmd.get("env") != EXPECTED_EXE_ENV
+    ):
+        problems.append("corrupted: executable boot configuration doesn't match bundleup's")
     with bundle.open("rb") as f:
         actual_jump = _hash_span(f, jump_size)
         if actual_jump != jump_hash or jump_hash not in known_jumps:
@@ -459,6 +505,59 @@ def _check_exe(bundle: Path) -> list[str]:
         for name, size, expected in files:
             if size < 0 or _hash_span(f, size) != expected:
                 problems.append(f"changed file: {name} doesn't match its recorded hash")
+        if outer is not None and not problems and len(files) == 2 and trailer_offset >= 22:
+            app_start = jump_size + files[0][1]
+            infos = outer.infolist()
+            offset = (infos[0].header_offset - app_start) if infos else 0
+            f.seek(app_start)
+            prefix = f.read(min(max(offset, 0), 65537)) if offset > 0 else b""
+            f.seek(trailer_offset - 22)
+            tail = f.read(22)
+            if (
+                offset < 0
+                or offset > 65536
+                or (
+                    offset > 0
+                    and not (
+                        prefix.startswith(b"#!")
+                        and prefix.endswith(b"\n")
+                        and b"\n" not in prefix[:-1]
+                        and b"python" in prefix.lower()
+                    )
+                )
+            ):
+                problems.append("changed file: __main__.py (the loader)")
+            if len(tail) != 22 or tail[:4] != b"PK\x05\x06" or tail[-2:] != b"\x00\x00":
+                problems.append(f"corrupted: {bundle.name} has trailing data after the zip archive")
+    return problems
+
+
+def _check_outer_zip(bundle: Path, outer: zipfile.ZipFile, *, allow_shebang: bool) -> list[str]:
+    """Check that no unverified prefix or trailing bytes wrap the outer zip archive."""
+    problems: list[str] = []
+    infos = outer.infolist()
+    offset = infos[0].header_offset if infos else 0
+    try:
+        size = bundle.stat().st_size
+        with bundle.open("rb") as f:
+            prefix = f.read(min(offset, 65537)) if offset > 0 else b""
+            tail = b""
+            if size >= 22:
+                f.seek(size - 22)
+                tail = f.read(22)
+    except OSError as e:
+        return [f"corrupted: {bundle.name} can't be read ({type(e).__name__}: {e})"]
+    if offset < 0 or offset > 65536 or (offset > 0 and not allow_shebang):
+        problems.append(f"corrupted: {bundle.name} has unexpected data before the zip archive")
+    elif offset > 0 and not (
+        prefix.startswith(b"#!")
+        and prefix.endswith(b"\n")
+        and b"\n" not in prefix[:-1]
+        and b"python" in prefix.lower()
+    ):
+        problems.append("changed file: __main__.py (the loader)")
+    if len(tail) != 22 or tail[:4] != b"PK\x05\x06" or tail[-2:] != b"\x00\x00":
+        problems.append(f"corrupted: {bundle.name} has trailing data after the zip archive")
     return problems
 
 
@@ -496,7 +595,7 @@ def _open(bundle: Path) -> tuple[zipfile.ZipFile, bytes | None]:
                 data = base64.b64decode(clean)
             except ValueError:
                 raise zipfile.BadZipFile("the data at the end of the file is damaged") from None
-        if data[-22:-18] != b"PK\x05\x06":
+        if data[:4] != b"PK\x03\x04" or data[-22:-18] != b"PK\x05\x06" or data[-2:] != b"\x00\x00":
             tampered = True
         code = text[:start] + (b"\x00" if tampered else b"")
         return zipfile.ZipFile(io.BytesIO(data)), code
@@ -509,12 +608,17 @@ def _str_dict(value: object) -> bool:
 
 
 def _read_manifest(bundle: Path) -> dict[str, Any]:  # Any: JSON
-    if not bundle.exists():
+    try:
+        exists = bundle.exists()
+        is_dir = bundle.is_dir()
+    except OSError as e:
+        raise NotABundleError(f"{bundle} cannot be accessed: {e.strerror or e}") from None
+    if not exists:
         raise NotABundleError(
             f"{bundle} does not exist",
             hint="give the path to a bundle file or directory",
         )
-    if bundle.is_dir():
+    if is_dir:
         try:
             manifest = json.loads((bundle / DIR_MANIFEST).read_text(encoding="utf-8-sig"))
         except (OSError, ValueError) as e:
@@ -676,7 +780,10 @@ def _check_layer(
 
 
 def _parts_dir(bundle: Path, parts: str) -> Path:
-    real_parts = bundle.resolve().parent / parts
+    try:
+        real_parts = bundle.resolve().parent / parts
+    except (OSError, RuntimeError):
+        return bundle.parent / parts
     if not real_parts.is_dir() and (bundle.parent / parts).is_dir():
         return bundle.parent / parts
     return real_parts
@@ -691,8 +798,19 @@ def _check_bundle(bundle: Path, manifest: dict[str, Any]) -> list[str]:  # Any: 
         outer, code = _open(bundle)
         with outer:
             if manifest.get("format") in ("dir", "zip", "lambda"):
-                return _check_payload(outer, manifest["files"], ignore=(DIR_MANIFEST,))
-            problems = _check_exe(bundle) if _is_exe(bundle, outer) else []
+                return _check_outer_zip(bundle, outer, allow_shebang=False) + _check_payload(
+                    outer, manifest["files"], ignore=(DIR_MANIFEST,)
+                )
+            is_exe = _is_exe(bundle, outer)
+            problems = (
+                _check_exe(bundle, outer if "_corrupted" not in manifest else None)
+                if is_exe
+                else (
+                    _check_outer_zip(bundle, outer, allow_shebang=True)
+                    if code is None and "_corrupted" not in manifest
+                    else []
+                )
+            )
             if "_corrupted" in manifest and not problems:
                 problems.append(str(manifest["_corrupted"]))
             problems += _check_loader(outer, manifest.get("loader") or {}, code)
@@ -705,12 +823,17 @@ def _check_bundle(bundle: Path, manifest: dict[str, Any]) -> list[str]:  # Any: 
                 opener = (lambda m: source(m).open("rb")) if source else outer.open
                 problems += _check_layer(opener, member, layer)
             if "_corrupted" not in manifest:
+                seen_outer: set[str] = set()
+                for name in outer.namelist():
+                    if name in seen_outer:
+                        problems.append(f"corrupted: duplicate zip entry {name}")
+                    seen_outer.add(name)
                 allowed = (
                     {"manifest.json"}
                     | (set() if code is not None else set(manifest.get("loader") or {}))
                     | (set() if parts else set(layers))
                 )
-                for name in sorted(set(outer.namelist()) - allowed):
+                for name in sorted(seen_outer - allowed):
                     problems.append(f"extra file: {name} isn't in the manifest")
             if parts_dir is not None and parts_dir.is_dir():
                 for entry in sorted(parts_dir.iterdir()):
@@ -724,11 +847,11 @@ def _check_bundle(bundle: Path, manifest: dict[str, Any]) -> list[str]:  # Any: 
 
 def unpacks(bundle: Path) -> bool:
     """Whether `bundle` unpacks to a cache directory at run time (`dir` and `zip` don't)."""
-    if bundle.is_dir():
-        return False
     try:
+        if bundle.is_dir():
+            return False
         return _read_manifest(bundle).get("format") not in ("dir", "zip", "lambda")
-    except NotABundleError:
+    except (NotABundleError, OSError):
         return False
 
 

@@ -74,14 +74,14 @@ def _under(path: str, home: str) -> bool:
     return False
 
 
-_HOST_TAIL = None  # type: Optional[list[str]]
+_HOST_TAIL = getattr(sys, "_bundleup_host_tail", None)  # type: Optional[list[str]]
 
 
 def _is_py_bundle(path: str) -> bool:
     try:
         with open(path, "rb") as f:
-            head = f.read(128)
-        return b"# /// bundleup" in head
+            head = f.read(512)
+        return b"# /// bundleup" in head or b"# bundleup loader" in head or b"PK\x03\x04" in head
     except OSError:
         return False
 
@@ -146,7 +146,7 @@ def runs_bundle_code(site: str) -> bool:
             return any(_has_module(d, top) for d in [*paths, *scripts])
         return True  # 3.9 can't tell which module: assume the bundle's own (the common case)
     if _under(first, site):
-        return True
+        return not _is_py_bundle(first)
     if os.path.normcase(first).endswith(".py") and not _is_py_bundle(first):
         # A console script (no .py) or another bundleup .py bundle never counts as this bundle's.
         return any(_under(first, h) for h in scripts)
@@ -193,16 +193,32 @@ def _stdlib_end() -> int:
 def site_packages_index() -> int:
     """Where a venv's site-packages would sit: after the standard library, before other packages."""
     after = _stdlib_end()
+    if after >= 0:
+        return after + 1
     for i, p in enumerate(sys.path):
-        if i > after and _is_site_entry(p):
+        if _is_site_entry(p):
             return i
-    return after + 1 if after >= 0 else len(sys.path)
+    return len(sys.path)
 
 
 def _same(a: str, b: str) -> bool:
     return os.path.normcase(_abspath(a)) == os.path.normcase(_abspath(b)) or os.path.normcase(
         _realpath(a)
     ) == os.path.normcase(_realpath(b))
+
+
+def deactivate(shim: str) -> None:
+    """Clean the active bundle's environment from a non-bundle child process (e.g. a host console
+    script), so grandchildren it spawns with sys.executable are not hijacked by the bundle."""
+    raw_pp = [
+        p for p in os.environ.get("PYTHONPATH", "").split(os.pathsep) if p and not _same(p, shim)
+    ]
+    if raw_pp:
+        os.environ["PYTHONPATH"] = os.pathsep.join(raw_pp)
+    else:
+        os.environ.pop("PYTHONPATH", None)
+    for var in (ENV_SITE, ENV_PATHS, ENV_PYTHON, ENV_SCRIPTS, ENV_INHERIT):
+        os.environ.pop(var, None)
 
 
 def activate(site: str, pth: "Optional[Sequence[str]]" = None) -> None:
@@ -219,13 +235,16 @@ def activate(site: str, pth: "Optional[Sequence[str]]" = None) -> None:
     parent = os.environ.get(ENV_SITE)
     parent_paths = [p for p in os.environ.get(ENV_PATHS, "").split(os.pathsep) if p]
     if parent and not _same(parent, site):
-        sys.path[:] = [p for p in sys.path if p not in parent_paths]
+        evict_roots = [parent, *parent_paths]
+        sys.path[:] = [p for p in sys.path if not (p and any(_same(p, r) for r in evict_roots))]
         for mod_name, mod in list(sys.modules.items()):
             mod_file = getattr(mod, "__file__", None)
             mod_paths = getattr(mod, "__path__", None)
-            if (isinstance(mod_file, str) and _under(mod_file, parent)) or (
+            if (isinstance(mod_file, str) and any(_under(mod_file, r) for r in evict_roots)) or (
                 mod_paths is not None
-                and any(isinstance(p, str) and _under(p, parent) for p in mod_paths)
+                and any(
+                    isinstance(p, str) and any(_under(p, r) for r in evict_roots) for p in mod_paths
+                )
             ):
                 sys.modules.pop(mod_name, None)
         os.environ.pop(ENV_SCRIPTS, None)
@@ -236,7 +255,7 @@ def activate(site: str, pth: "Optional[Sequence[str]]" = None) -> None:
     raw_pp = [
         p
         for p in os.environ.get("PYTHONPATH", "").split(os.pathsep)
-        if p and p != parent_shim and p != shim
+        if p and not _same(p, shim) and not (parent_shim and _same(p, parent_shim))
     ]
     raw_pp_norms = set(os.path.normcase(_abspath(p)) for p in raw_pp)
     scripts = [p for p in os.environ.get(ENV_SCRIPTS, "").split(os.pathsep) if p]
@@ -271,21 +290,24 @@ def activate(site: str, pth: "Optional[Sequence[str]]" = None) -> None:
         )
     pythonpath = [p for p in raw_pp if not _is_site_entry(p) or inherit]
     index = site_packages_index()
-    if _HOST_TAIL is None:
-        _HOST_TAIL = list(early_site + sys.path[index:])
     # Isolation (ADR-0021): drop the machine's own packages (user and system site-packages, and
     # whatever their .pth files added) unless inheriting; when inheriting, re-append them after
     # the bundle's own .pth directories so the bundle always comes first.
     current_tail = early_site + sys.path[index:]
+    if current_tail or _HOST_TAIL is None:
+        _HOST_TAIL = list(current_tail or getattr(sys, "_bundleup_host_tail", None) or ())
+        sys.__dict__["_bundleup_host_tail"] = _HOST_TAIL
     tail = (current_tail or list(_HOST_TAIL or ())) if inherit else []
     del sys.path[index:]
     sys.path.append(site)
     if pth is None:  # a child process: the loader passes the list it got at build time
         pth = sorted(n for n in os.listdir(site) if n.endswith(".pth") and not n.startswith("."))
     known = set(os.path.normcase(_abspath(p)) for p in sys.path if p)
+    before_pth = set(known)
     for name in pth or ():
         add_pth(site, name, known)
-    added = sys.path[index + 1 :]
+    known.update(os.path.normcase(_abspath(p)) for p in sys.path if p)
+    added = [p for p in sys.path if p and os.path.normcase(_abspath(p)) not in before_pth]
     for p in tail:
         norm = os.path.normcase(_abspath(p)) if p else ""
         if not norm or norm not in known:

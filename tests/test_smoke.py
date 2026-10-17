@@ -99,3 +99,35 @@ def test_cli_smoke_accepts_flag_arguments(
     assert _cli._join_smoke(
         ["build", "--entry", "--smoke", "--strict"], _cli.parsers()["build"]
     ) == ["build", "--entry", "--smoke", "--strict"]
+
+
+def test_smoke_grandchild_pipe_readonly_dir_and_c_m_args(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 3 audit: `--smoke` does not hang if the bundle spawns a background child that inherits
+    stdout/stderr, cleans up read-only directories in the temporary workspace, and `_resolve_args`
+    does not turn `-c` or `-m` targets or overly long strings into paths."""
+    from bundleup import _smoke
+
+    (tmp_path / "pkg").mkdir()
+    monkeypatch.chdir(tmp_path)
+    assert _smoke._resolve_args(("-m", "pkg", "-c", "pkg", "a" * 2000)) == [
+        "-m",
+        "pkg",
+        "-c",
+        "pkg",
+        "a" * 2000,
+    ]
+
+    bg_script = tmp_path / "bg.py"
+    bg_script.write_text(
+        SCRIPT
+        + """\
+import stat, subprocess
+os.makedirs("readonly_sub", exist_ok=True)
+os.chmod("readonly_sub", stat.S_IRUSR | stat.S_IXUSR)
+subprocess.Popen([sys.executable, "-c", "import time; time.sleep(30)"])
+"""
+    )
+    res = build(BuildOptions(path=bg_script, output=tmp_path / "bg.pyz", smoke=()))
+    assert res.smoke is not None and res.smoke.exit_code == 0

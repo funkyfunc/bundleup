@@ -33,8 +33,8 @@ SYSTEMS = {"linux": "Linux", "darwin": "Darwin", "win32": "Windows"}
 # Words in a wheel's platform tag for each OS, and for each CPU.
 TAG_OS = {"linux": ("linux",), "darwin": ("macosx",), "win32": ("win",)}
 TAG_CPU = {
-    "x86_64": ("x86_64", "amd64", "universal2", "intel"),
-    "aarch64": ("aarch64", "arm64", "universal2"),
+    "x86_64": ("x86_64", "amd64", "universal2", "universal", "intel", "fat64", "fat3"),
+    "aarch64": ("aarch64", "arm64", "universal2", "universal"),
     "i686": ("i686", "win32"),
 }
 EXAMPLES = (
@@ -75,12 +75,13 @@ class Platform:
             "sys_platform": self.sys_platform,
         }
 
-    def supported_tags(self, python: tuple[int, int]) -> frozenset[Tag]:
+    def supported_tags(self, python: tuple[int, int], *, abiflags: str = "") -> frozenset[Tag]:
         """Every wheel tag a CPython of `python` on this platform can install, most specific
         first, as pip and uv compute them (packaging.tags), for the lock-only coverage check."""
         platforms = self._platform_tags()
         cp = f"cp{python[0]}{python[1]}"
-        tags = list(cpython_tags(python, abis=[cp], platforms=platforms))
+        abi = f"{cp}{abiflags}"
+        tags = list(cpython_tags(python, abis=[abi], platforms=platforms))
         tags += compatible_tags(python, interpreter=cp, platforms=platforms)
         return frozenset(tags)
 
@@ -102,8 +103,31 @@ class Platform:
         found.append(f"linux_{self.arch}")
         return found
 
-    def accepts(self, tag: str) -> bool:
+    def accepts(
+        self,
+        tag: str,
+        *,
+        python: tuple[int, int] | None = None,
+        abiflags: str = "",
+    ) -> bool:
         """Whether a wheel tag ("cp311-cp311-manylinux_2_17_x86_64") can run on this platform."""
+        if python is not None and tag.count("-") >= 2:
+            from packaging.tags import parse_tag
+
+            cp = f"cp{python[0]}{python[1]}"
+            abi = f"{cp}{abiflags}"
+            valid_abi = {
+                (t.interpreter, t.abi)
+                for t in (
+                    *cpython_tags(python, abis=[abi], platforms=["any"]),
+                    *compatible_tags(python, interpreter=cp, platforms=["any"]),
+                )
+            }
+            return any(
+                (t.interpreter, t.abi) in valid_abi
+                and (t.platform == "any" or self._accepts_one(t.platform))
+                for t in parse_tag(tag)
+            )
         platform_tag = tag.rsplit("-", 1)[-1].lower()
         if platform_tag == "any":
             return True
@@ -119,6 +143,10 @@ class Platform:
             return False
         if self.sys_platform == "win32" and platform_tag == "win32":
             return self.arch == "i686"
+        if self.level is not None and any(
+            level > self.level for level in _levels(platform_tag).values()
+        ):
+            return False
         return any(word in platform_tag for word in TAG_CPU[self.arch])
 
 
@@ -181,15 +209,18 @@ def parse(name: str) -> Platform:
 def _level(full: str) -> tuple[int, int] | None:
     """What a uv platform name means for wheel compatibility (`uv help pip install`): `-gnu` is
     manylinux_2_28, musl is musllinux_1_2, macOS is 13.0 unless MACOSX_DEPLOYMENT_TARGET says
-    otherwise."""
+    otherwise (with a floor of 11.0 on Apple Silicon)."""
     if "windows" in full:
         return None
     if "apple-darwin" in full:
-        wanted = os.environ.get("MACOSX_DEPLOYMENT_TARGET", "13.0").split(".")
+        wanted = os.environ.get("MACOSX_DEPLOYMENT_TARGET", "13.0").strip().split(".")
         try:
-            return (int(wanted[0]), int(wanted[1]) if len(wanted) > 1 else 0)
+            major = int(wanted[0])
+            minor = int(wanted[1]) if len(wanted) > 1 and wanted[1] != "" else 0
+            level = (major, minor) if major >= 10 and minor >= 0 else (13, 0)
         except ValueError:
-            return (13, 0)
+            level = (13, 0)
+        return max(level, (11, 0)) if full.startswith("aarch64") else level
     explicit = re.search(r"(?:manylinux|musllinux)_(\d+)_(\d+)", full)
     if explicit:
         return (int(explicit[1]), int(explicit[2]))
@@ -228,37 +259,69 @@ class RuntimeNeeds:
     macos: tuple[int, int] | None = None
 
 
-def _levels(tag: str) -> dict[str, tuple[int, int]]:
+def _levels(
+    tag: str,
+    *,
+    platform: Platform | None = None,
+    arch: str | None = None,
+    musl: bool | None = None,
+) -> dict[str, tuple[int, int]]:
     """Each kind of platform level one wheel tag can run with: the lowest of its alternatives
     ("manylinux_2_17_x86_64.manylinux2014_x86_64" needs glibc 2.17)."""
+    target_arch = platform.arch if platform is not None else arch
+    target_musl = platform.musl if platform is not None else musl
+    parts = tag.rsplit("-", 1)[-1].lower().split(".")
+    if platform is not None:
+        filtered = [p for p in parts if platform._accepts_one(p)]
+        if filtered:
+            parts = filtered
+    elif target_arch in TAG_CPU:
+        cpu_words = TAG_CPU[target_arch]
+        filtered = [p for p in parts if any(w in p for w in cpu_words)]
+        if filtered:
+            parts = filtered
     found: dict[str, tuple[int, int]] = {}
-    for platform in tag.rsplit("-", 1)[-1].split("."):
-        legacy = next((v for k, v in LEGACY_MANYLINUX.items() if platform.startswith(k)), None)
+    for part in parts:
+        legacy = next((v for k, v in LEGACY_MANYLINUX.items() if part.startswith(k)), None)
         if legacy:
             kind, level = "manylinux", legacy
         else:
-            match = LEVEL.match(platform)
+            match = LEVEL.match(part)
             if match is None:
                 continue
             kind, level = match["kind"], (int(match["major"]), int(match["minor"]))
+        if target_musl is True and kind == "manylinux":
+            continue
+        if target_musl is False and kind == "musllinux":
+            continue
         if kind not in found or level < found[kind]:
             found[kind] = level
     return found
 
 
-def runtime_needs(wheels: Iterable[list[str]]) -> RuntimeNeeds:
+def runtime_needs(
+    wheels: Iterable[list[str]],
+    *,
+    platform: Platform | None = None,
+    arch: str | None = None,
+    musl: bool | None = None,
+) -> RuntimeNeeds:
     """The strictest requirement across all wheels (each given as its list of tags)."""
+    target_musl = platform.musl if platform is not None else musl
     need: dict[str, tuple[int, int]] = {}
     for tags in wheels:
         per_wheel: dict[str, tuple[int, int]] = {}
-        for tag in tags:
-            for kind, level in _levels(tag).items():
+        matching = [t for t in tags if platform.accepts(t)] if platform is not None else list(tags)
+        for tag in matching or tags:
+            for kind, level in _levels(tag, platform=platform, arch=arch, musl=target_musl).items():
                 if kind not in per_wheel or level < per_wheel[kind]:
                     per_wheel[kind] = level
         for kind, level in per_wheel.items():
             need[kind] = max(need.get(kind, level), level)
     libc = None
-    if "manylinux" in need:
+    if target_musl is True and "musllinux" in need:
+        libc = ("musl", need["musllinux"])
+    elif "manylinux" in need:
         libc = ("glibc", need["manylinux"])
     elif "musllinux" in need:
         libc = ("musl", need["musllinux"])

@@ -1891,9 +1891,22 @@ def test_systems_correctness_audit_regressions(
             before_in_use = len(_loader._IN_USE)
             _loader._hold(str(target_site))
             assert len(_loader._IN_USE) == before_in_use
+            # Active extraction lock older than LEFTOVER_AGE while `unpacked` does not exist yet
+            # must NOT be unlinked by `clean_cache`
+            active_lock = lock_root / ".lock-extracting-0123456789abcdef"
+            active_lock.write_bytes(b"")
+            old_ts = time.time() - _cache.LEFTOVER_AGE - 100
+            os.utime(active_lock, (old_ts, old_ts))
+            with open(active_lock, "r+b") as active_held:
+                fcntl.flock(active_held.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                monkeypatch.setenv("BUNDLEUP_CACHE", str(lock_root))
+                _cache.clean_cache(older_than_days=30)
+                assert active_lock.is_file()
+            _cache.clean_cache(older_than_days=30)
+            assert not active_lock.exists()
 
-    # 5. `verify()` catches trailing code, uncommented lines, trailing base64 after EOCD, and
-    #    non-base64 chars in `--format py`, plus extra zip members in `.pyz`
+    # 5. `verify()` catches trailing code, uncommented lines, trailing base64 after EOCD,
+    #    non-base64 chars in `--format py`, extra zip members, and duplicate zip entries
     py_out = tmp_path / "script_bundle.py"
     build(BuildOptions(path=mp_proj, format="py", output=py_out))
     assert verify(py_out).ok
@@ -1905,6 +1918,17 @@ def test_systems_correctness_audit_regressions(
         check=True,
     )
     assert r_py_mp.stdout.strip() == "MP_OUT: [13, 19]"
+    # `--entry python` with `-m mypkg` and multiprocessing `spawn`
+    py_entry_pyz = tmp_path / "py_entry_app.pyz"
+    build(BuildOptions(path=mp_proj, entry="python", output=py_entry_pyz))
+    r_py_entry = subprocess.run(
+        [sys.executable, str(py_entry_pyz), "-m", "mypkg"],
+        env={**os.environ, "BUNDLEUP_CACHE": str(tmp_path / "py_entry_cache")},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert r_py_entry.stdout.strip() == "MP_OUT: [13, 19]"
     orig_bytes = py_out.read_bytes()
     for bad_replacement in (
         orig_bytes + b"print('unhashed trailing code')\n",
@@ -1924,7 +1948,19 @@ def test_systems_correctness_audit_regressions(
     v_extra = verify(extra_pyz)
     assert not v_extra.ok and "extra file: unexpected.txt isn't in the manifest" in v_extra.problems
 
-    # 6. Forked `[[packages]]` entries in `pylock.toml` across freshness, coverage, and verify
+    import warnings
+
+    dup_pyz = tmp_path / "dup_member.pyz"
+    shutil.copyfile(mp_pyz, dup_pyz)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        with zipfile.ZipFile(dup_pyz, "a") as zf:
+            zf.writestr("manifest.json", zf.read("manifest.json"))
+    v_dup = verify(dup_pyz)
+    assert not v_dup.ok and "corrupted: duplicate zip entry manifest.json" in v_dup.problems
+
+    # 6. Forked `[[packages]]` entries & PEP 751 `dependency_groups`/`extras` markers in
+    #    `pylock.toml`, plus URL query/fragment/backslash wheel names in `_coverage`
     forked_pylock = (
         'lock-version = "1.0"\n'
         "[[packages]]\n"
@@ -1935,20 +1971,65 @@ def test_systems_correctness_audit_regressions(
         "[[packages]]\n"
         'name = "demo-pkg"\n'
         'version = "2.0.0"\n'
-        'wheels = [{ name = "demo_pkg-2.0.0-py3-none-any.whl" }]\n'
+        'wheels = [{ url = "https://example.com/'
+        'demo_pkg-2.0.0-py3-none-any.whl?token=abc#sha256=1" }]\n'
+        "[[packages]]\n"
+        'name = "dev-only-pkg"\n'
+        'version = "1.0.0"\n'
+        "marker = \"'dev' in dependency_groups\"\n"
+        'wheels = [{ path = "dist\\\\dev_only_pkg-1.0.0-cp39-cp39-win_amd64.whl" }]\n'
     )
+    # Multi-payload `_loader._select()` falls back to OS/CPU match when macOS/libc version is newer
+    monkeypatch.setattr(
+        _loader,
+        "PAYLOADS",
+        [
+            {
+                "dirname": "other-os-0000000000000000",
+                "members": ["other.zip"],
+                "target": "other OS",
+                "pth": [],
+                "python": [3, 9],
+                "python_max": None,
+                "platform": "nonexistent_os",
+                "machine": None,
+                "abiflags": None,
+                "libc": None,
+                "macos": None,
+            },
+            {
+                "dirname": "this-os-1111111111111111",
+                "members": ["this.zip"],
+                "target": "this OS with high version",
+                "pth": [],
+                "python": [3, 9],
+                "python_max": None,
+                "platform": sys.platform,
+                "machine": None,
+                "abiflags": None,
+                "libc": ["glibc", [99, 0]] if sys.platform == "linux" else None,
+                "macos": [99, 0] if sys.platform == "darwin" else None,
+            },
+        ],
+    )
+    _loader._select()
+    assert _loader.DIRNAME == "this-os-1111111111111111"
+    monkeypatch.setattr(_loader, "PAYLOADS", [])
     linux_plat = _platforms.parse("x86_64-unknown-linux-gnu")
     assert _coverage.gaps(forked_pylock, linux_plat, (3, 9)) == []
     env_39 = linux_plat.markers(python_full_version="3.9.0")
     locked_39 = _verify.locked_packages(forked_pylock, env_39)
-    assert len(locked_39) == 1 and locked_39[0].name == "demo-pkg"
+    assert [p.name for p in locked_39] == ["demo-pkg"]
     fork_proj = tmp_path / "fork_proj"
     fork_proj.mkdir()
     (fork_proj / "pyproject.toml").write_text(
         '[project]\nname = "fork-proj"\nversion = "0.1.0"\n'
         'dependencies = ["demo-pkg>=2.0", "opt-pkg; extra == \'dev\'"]\n'
     )
-    gated_pylock = forked_pylock + "marker = \"python_version >= '3.10'\"\n"
+    gated_pylock = forked_pylock.replace(
+        'name = "demo-pkg"\nversion = "2.0.0"\n',
+        'name = "demo-pkg"\nversion = "2.0.0"\nmarker = "python_version >= \'3.10\'"\n',
+    )
     (fork_proj / "pylock.toml").write_text(gated_pylock)
     pkgs = _uv._load_pylock_packages(gated_pylock, fork_proj / "pylock.toml")
     _uv._check_pylock_freshness(
@@ -1960,18 +2041,25 @@ def test_systems_correctness_audit_regressions(
         _uv._check_pylock_freshness(_source.load_source(fork_proj), pkgs, markers=env_39)
 
     # 7. Import analysis guards (`if False/True/TYPE_CHECKING/not TYPE_CHECKING`, `suppress`,
-    #    early-return platform guards), namespace `--external`, nested `_has_attr`, `_orig_module`
+    #    early-return platform guards, `try/except ImportError` flag guards), namespace
+    #    `--external`, nested `_has_attr`, `_orig_module`
     tree = ast.parse(
         "if False:\n    import dead_a\nelse:\n    import live_a\n"
         "if True:\n    import live_b\nelse:\n    import dead_b\n"
         "if TYPE_CHECKING:\n    import dead_tc\nelse:\n    import live_tc\n"
         "if not TYPE_CHECKING:\n    import live_ntc\nelse:\n    import dead_ntc\n"
         "if version_info >= (3, 11):\n    import fake_ver_mod\n"
+        "if sys.implementation.name == 'pypy':\n    import pypy_only_mod\n"
         "if importlib.util.find_spec('fake_spec_mod'):\n    import fake_spec_mod\n"
         "with contextlib.suppress(ImportError):\n    import suppressed_mod\n"
+        "try:\n    import opt_pkg\n    HAS_OPT = True\nexcept ImportError:\n    HAS_OPT = False\n"
+        "if HAS_OPT:\n    from opt_pkg.sub import thing\n"
         "def f():\n"
         "    if sys.platform != 'win32':\n        return\n"
         "    import win_only_mod\n"
+        "def g():\n"
+        "    if not HAS_OPT:\n        raise RuntimeError('no opt_pkg')\n"
+        "    from opt_pkg.other import helper\n"
     )
     assert _imports.imports_in(tree) == {"live_a", "live_b", "live_tc", "live_ntc"}
     ext_mods = _imports.external_modules(
@@ -2034,9 +2122,326 @@ def test_systems_correctness_audit_regressions(
     out_b = build(BuildOptions(path=repro_b, output=tmp_path / "repro_b.pyz")).output.read_bytes()
     assert out_a == out_b
 
-    # 10. Symlink loop handling in `load_source`
+    # 10. Symlink loop handling in `load_source`, `verify`, and `build -o`
     if os.name != "nt":
         loop_link = tmp_path / "loop.py"
         loop_link.symlink_to(loop_link)
         with pytest.raises(_errors.ProjectError):
             _source.load_source(loop_link)
+        with pytest.raises(_errors.NotABundleError):
+            verify(loop_link)
+        with pytest.raises(_errors.UsageError):
+            build(BuildOptions(path=repro_a, output=loop_link))
+
+    # 11. Relative imports in guarded and unguarded `__main__.py` under `-W error`, and
+    #     unguarded `__main__.py` spawning multiprocessing workers without infinite fork-bomb
+    r_mp_werr = subprocess.run(
+        [sys.executable, "-W", "error", str(mp_pyz)],
+        env={**os.environ, "BUNDLEUP_CACHE": str(tmp_path / "mp_werr_cache")},
+        capture_output=True,
+        text=True,
+        check=True,
+    )
+    assert r_mp_werr.stdout.strip() == "MP_OUT: [13, 19]" and r_mp_werr.stderr == ""
+
+    ug_proj = tmp_path / "ug_proj"
+    ug_pkg = ug_proj / "ugpkg"
+    ug_pkg.mkdir(parents=True)
+    (ug_proj / "pyproject.toml").write_text(
+        "[build-system]\n"
+        'requires = ["setuptools"]\n'
+        'build-backend = "setuptools.build_meta"\n'
+        "[project]\n"
+        'name = "ugpkg"\n'
+        'version = "0.1.0"\n'
+        'requires-python = ">=3.9"\n'
+    )
+    (ug_pkg / "__init__.py").write_text("SCALE = 5\n")
+    (ug_pkg / "worker.py").write_text("from . import SCALE\ndef double(x):\n    return x * SCALE\n")
+    # Intentionally no `if __name__ == "__main__":` guard (standard for `__main__.py`)
+    (ug_pkg / "__main__.py").write_text(
+        "import multiprocessing as mp\n"
+        "from .worker import double\n"
+        "ctx = mp.get_context('spawn')\n"
+        "with ctx.Pool(1) as pool:\n"
+        "    print('UG_OUT:', pool.map(double, [3, 4]))\n"
+    )
+    ug_pyz = build(BuildOptions(path=ug_proj, output=tmp_path / "ug_app.pyz")).output
+    r_ug = subprocess.run(
+        [sys.executable, "-W", "error", str(ug_pyz)],
+        env={**os.environ, "BUNDLEUP_CACHE": str(tmp_path / "ug_cache")},
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=True,
+    )
+    assert r_ug.stdout.strip() == "UG_OUT: [15, 20]" and r_ug.stderr == ""
+
+    # 12. `verify()` catches tampered shebangs and trailing data on `.pyz` and `--format zip`
+    raw_mp_pyz = mp_pyz.read_bytes()
+    bad_shebang_pyz = tmp_path / "bad_shebang.pyz"
+    bad_shebang_pyz.write_bytes(
+        b"#!/bin/sh\necho pwned\n" + raw_mp_pyz[raw_mp_pyz.index(b"\n") + 1 :]
+    )
+    v_shebang = verify(bad_shebang_pyz)
+    assert not v_shebang.ok and "changed file: __main__.py (the loader)" in v_shebang.problems
+
+    trailing_pyz = tmp_path / "trailing.pyz"
+    trailing_pyz.write_bytes(raw_mp_pyz + b"trailing unverified bytes")
+    v_trail = verify(trailing_pyz)
+    assert not v_trail.ok and any("trailing data" in p for p in v_trail.problems)
+
+    zip_out = build(BuildOptions(path=ug_proj, format="zip", output=tmp_path / "ug.zip")).output
+    assert verify(zip_out).ok
+    raw_zip = zip_out.read_bytes()
+    prefix_zip = tmp_path / "prefix_ug.zip"
+    prefix_zip.write_bytes(b"#!/usr/bin/env python3\n" + raw_zip)
+    assert not verify(prefix_zip).ok
+    trailing_zip = tmp_path / "trailing_ug.zip"
+    trailing_zip.write_bytes(raw_zip + b"trailing bytes")
+    assert not verify(trailing_zip).ok
+
+    # 13. `_build._served` deduplicates OS-specific pure-Python payloads when `python_platform` is
+    #     None, `_loader._fits_os_cpu` ignores ABI mismatch, `_loader._hold` handles deleted site,
+    #     and `_imports.imports_in_with_lines` handles loop guards & order-independent optionals
+    from bundleup import _build, _python
+
+    dummy_target = _python.Target(
+        executable=sys.executable,
+        version=(3, 11),
+        full_version="3.11.0",
+        implementation="cpython",
+        platform=sys.platform,
+        machine="x86_64",
+        abiflags="",
+        cache_tag="cpython-311",
+        markers={},
+    )
+    dummy_prep = _payload.Prepared(
+        source=_source.load_source(ug_proj),
+        version="0.1.0",
+        target=dummy_target,
+        pylock=ug_proj / "pylock.toml",
+        site=ug_proj,
+        packages=0,
+        native=False,
+        entry=None,
+        script=None,
+        diagnostics=[],
+        sizes=[],
+        pythons=_python.PythonRange((3, 9), None),
+        reach=_python.Portability(any_os=False, any_cpu=True),
+    )
+    assert _build._served([dummy_prep], BuildOptions(path=ug_proj, python="3.12"))
+
+    payload_cfg = {
+        "platform": sys.platform,
+        "machine": _loader._machine(),
+        "abiflags": "nonexistent_abi",
+        "libc": None,
+        "macos": None,
+    }
+    assert _loader._fits_os_cpu(payload_cfg)
+    assert not _loader._fits(payload_cfg)
+
+    if os.name != "nt":
+        gone_site = tmp_path / "lock_root" / "gone_site"
+        assert not _loader._hold(str(gone_site))
+
+    loop_tree = ast.parse(
+        "def use_early():\n"
+        "    if HAS_EARLY:\n"
+        "        import early_opt\n"
+        "try:\n"
+        "    import early_opt\n"
+        "    HAS_EARLY = True\n"
+        "except ImportError:\n"
+        "    HAS_EARLY = False\n"
+        "for item in [1, 2]:\n"
+        "    if sys.platform == 'win32':\n"
+        "        continue\n"
+        "    import posix_in_loop\n"
+    )
+    assert _imports.imports_in(loop_tree) == set()
+    assert _check._source_of("pkg/__pycache__/mod.cpython-312.opt-1.pyc") == "pkg/mod.py"
+
+
+def test_phase3_reviewer_audit_regressions(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Regressions for all bugs found and fixed during the Phase 3 reviewer audit across
+    Tracks 1, 2, 3, and 4."""
+    import gzip
+    import io
+    import os
+    import sys
+    import tarfile
+    import unicodedata
+
+    from bundleup import (
+        _coverage,
+        _exe,
+        _loader,
+        _payload,
+        _platforms,
+        _python,
+        _runtime,
+        _smoke,
+        _source,
+        _toml,
+        _uv,
+    )
+
+    # Track 1: _valid_gzip rejects truncated .tar.gz and accepts valid .tar.gz
+    trunc_gz = tmp_path / "truncated.tar.gz"
+    trunc_gz.write_bytes(b"\x1f\x8b\x08\x00" + b"\x00" * 16)
+    assert not _exe._valid_gzip(trunc_gz)
+    valid_gz = tmp_path / "valid.tar.gz"
+    with gzip.open(valid_gz, "wb") as gz_out, tarfile.open(fileobj=gz_out, mode="w") as tf:
+        info = tarfile.TarInfo("python/Lib/hello.py")
+        data = b"x = 1\n"
+        info.size = len(data)
+        info.mode = 0o444  # read-only in source archive
+        tf.addfile(info, io.BytesIO(data))
+    assert _exe._valid_gzip(valid_gz)
+
+    # Track 1: precompiled() ensures regular files in repacked tarball have owner-write bit (0o600)
+    target = _python.Target(
+        executable=sys.executable,
+        version=sys.version_info[:2],
+        full_version=".".join(map(str, sys.version_info[:3])),
+        implementation="cpython",
+        platform=sys.platform,
+        machine="aarch64",
+        abiflags="",
+        cache_tag=sys.implementation.cache_tag,
+        markers={},
+    )
+    stage_dir = tmp_path / "exe_stage"
+    stage_dir.mkdir()
+    compiled_tar = _exe.precompiled(valid_gz, target, stage_dir)
+    with tarfile.open(compiled_tar) as tf:
+        member = tf.getmember("python/Lib/hello.py")
+        assert member.mode & 0o600 == 0o600
+
+    monkeypatch.setattr(_loader, "_SCIE", "/usr/local/bin/my_exe/")
+    assert _loader._me() == "my_exe"
+    monkeypatch.setattr(_loader, "_SCIE", None)
+
+    # Track 2: relocate_paths handles triple-quoted and single-quoted TOML strings with quotes
+    ws_root = tmp_path / "ws_quote"
+    dep_name = "dep \"quote\" 'single' %s café"
+    dep_dir = ws_root / dep_name
+    dep_dir.mkdir(parents=True)
+    (dep_dir / "pyproject.toml").write_text('[project]\nname = "dep"\nversion = "0.1.0"\n')
+    stage_lock_dir = tmp_path / "stage_lock"
+    stage_lock_dir.mkdir()
+    pylock_file = stage_lock_dir / "pylock.toml"
+    pylock_file.write_text(
+        'lock-version = "1.0"\n'
+        "[[packages]]\n"
+        'name = "dep"\n'
+        f'directory = {{ path = """{dep_name}""" }}\n'
+    )
+    _uv.relocate_paths(pylock_file, ws_root)
+    parsed_lock = _toml.loads(pylock_file.read_text(encoding="utf-8"))
+    relocated_path = parsed_lock["packages"][0]["directory"]["path"]
+    assert (stage_lock_dir / relocated_path).resolve() == dep_dir.resolve()
+
+    # Track 2: _legacy_name handles % in setup.cfg without InterpolationSyntaxError
+    legacy_dir = tmp_path / "legacy_pct"
+    legacy_dir.mkdir()
+    (legacy_dir / "setup.cfg").write_text("[metadata]\nname = my_pkg\ndescription = 100% pure\n")
+    assert _source._legacy_name(legacy_dir) == "my_pkg"
+
+    # Track 2: NFC/NFD normalization in _git_files and _exact_path
+    nfd_name = unicodedata.normalize("NFD", "café.py")
+    nfc_name = unicodedata.normalize("NFC", "café.py")
+    nfc_dir = tmp_path / "nfc_test"
+    nfc_dir.mkdir()
+    (nfc_dir / nfd_name).write_text("print('ok')\n")
+    if sys.platform == "darwin":
+        matched_p = _payload._exact_file(nfc_dir, nfc_name)
+        assert matched_p is not None and matched_p.is_file()
+        assert _payload._exact_file(nfc_dir, "Café.py") is None  # still case-sensitive
+
+    # Track 3: MACOSX_DEPLOYMENT_TARGET=10.15 floors aarch64-apple-darwin at (11, 0)
+    with monkeypatch.context() as mp:
+        mp.setenv("MACOSX_DEPLOYMENT_TARGET", "10.15")
+        arm_mac = _platforms.parse("aarch64-apple-darwin")
+        x86_mac = _platforms.parse("x86_64-apple-darwin")
+        assert arm_mac.level == (11, 0)
+        assert x86_mac.level == (10, 15)
+        assert arm_mac.accepts("cp312-cp312-macosx_11_0_arm64")
+        assert any("arm64" in t.platform for t in arm_mac.supported_tags((3, 12)))
+        mp.setenv("MACOSX_DEPLOYMENT_TARGET", "14.")
+        assert _platforms.parse("aarch64-apple-darwin").level == (14, 0)
+
+    # Track 3: wheel-tag algebra for abi3 across Python versions, free-threaded abiflags="t",
+    # and multi-arch / multi-libc runtime_needs
+    linux_gnu = _platforms.parse("x86_64-unknown-linux-gnu")
+    linux_musl = _platforms.parse("x86_64-unknown-linux-musl")
+    assert not linux_gnu.accepts("cp312-abi3-manylinux_2_17_x86_64", python=(3, 11))
+    assert linux_gnu.accepts("cp312-abi3-manylinux_2_17_x86_64", python=(3, 12))
+    assert linux_gnu.accepts("cp313-cp313t-manylinux_2_28_x86_64", python=(3, 13), abiflags="t")
+    assert not linux_gnu.accepts("cp313-cp313-manylinux_2_28_x86_64", python=(3, 13), abiflags="t")
+    assert not linux_gnu.accepts("cp312-abi3-manylinux_2_28_x86_64", python=(3, 13), abiflags="t")
+    assert any(t.abi == "cp313t" for t in linux_gnu.supported_tags((3, 13), abiflags="t"))
+    assert not any(t.abi == "abi3" for t in linux_gnu.supported_tags((3, 13), abiflags="t"))
+    pylock_ft = (
+        'lock-version = "1.0"\n'
+        "[[packages]]\n"
+        'name = "ft-pkg"\n'
+        'version = "1.0.0"\n'
+        'wheels = [{ name = "ft_pkg-1.0.0-cp313-cp313-manylinux_2_28_x86_64.whl" }]\n'
+    )
+    assert len(_coverage.gaps(pylock_ft, linux_gnu, (3, 13), abiflags="t")) == 1
+    assert len(_coverage.gaps(pylock_ft, linux_gnu, (3, 13), abiflags="")) == 0
+
+    dual_libc_tags = [["cp312-cp312-manylinux_2_28_x86_64", "cp312-cp312-musllinux_1_2_x86_64"]]
+    assert _platforms.runtime_needs(dual_libc_tags, platform=linux_musl).libc == ("musl", (1, 2))
+    assert _platforms.runtime_needs(dual_libc_tags, platform=linux_gnu).libc == ("glibc", (2, 28))
+
+    dual_mac_tags = [["cp312-cp312-macosx_10_9_x86_64.macosx_11_0_arm64"]]
+    assert _platforms.runtime_needs(dual_mac_tags, arch="aarch64").macos == (11, 0)
+    assert _platforms.runtime_needs(dual_mac_tags, arch="x86_64").macos == (10, 9)
+
+    # Track 3: _find_env drops broken VIRTUAL_ENV symlinks; _make_writable ignores symlinks
+    broken_venv = tmp_path / "broken_venv"
+    (broken_venv / "bin").mkdir(parents=True)
+    (broken_venv / "bin" / "python").symlink_to(tmp_path / "missing_python_bin")
+    with monkeypatch.context() as mp:
+        mp.setenv("VIRTUAL_ENV", str(broken_venv))
+        env = _python._find_env(tmp_path, is_script=True)
+        assert env is not None and "VIRTUAL_ENV" not in env
+
+    ext_ro = tmp_path / "external_readonly.txt"
+    ext_ro.write_text("secret")
+    ext_ro.chmod(0o400)
+    smoke_dir = tmp_path / "smoke_root"
+    smoke_dir.mkdir()
+    (smoke_dir / "link.txt").symlink_to(ext_ro)
+    _smoke._make_writable(smoke_dir)
+    assert (ext_ro.stat().st_mode & 0o777) == 0o400
+    ext_ro.chmod(0o600)
+
+    # Track 4: site_packages_index strips editable .pth entries between stdlib and site-packages,
+    # and activate() evicts modules under parent BUNDLEUP_RUNTIME_PATHS
+    orig_path = list(sys.path)
+    fake_stdlib = (os.__file__ and os.path.dirname(os.__file__)) or "/stdlib"
+    leaked_pth = str(tmp_path / "editable_src")
+    fake_sp = str(tmp_path / "venv" / "lib" / "python3.12" / "site-packages")
+    monkeypatch.setattr(sys, "path", [fake_stdlib, leaked_pth, fake_sp])
+    assert _runtime.site_packages_index() == 1
+
+    p_site = tmp_path / "p_site2"
+    p_pth = tmp_path / "p_pth2"
+    c_site = tmp_path / "c_site2"
+    for d in (p_site, p_pth, c_site):
+        d.mkdir()
+    pth_mod = type(sys)("pth_shared_mod")
+    pth_mod.__file__ = str(p_pth / "pth_shared_mod.py")
+    monkeypatch.setitem(sys.modules, "pth_shared_mod", pth_mod)
+    monkeypatch.setenv("BUNDLEUP_RUNTIME_SITE", str(p_site))
+    monkeypatch.setenv("BUNDLEUP_RUNTIME_PATHS", os.pathsep.join([str(p_site), str(p_pth)]))
+    _runtime.activate(str(c_site), [])
+    assert "pth_shared_mod" not in sys.modules
+    monkeypatch.setattr(sys, "path", orig_path)

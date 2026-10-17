@@ -103,3 +103,32 @@ def test_split_mistakes_are_usage_errors(app: Path, tmp_path: Path) -> None:
     with pytest.raises(UsageError, match="isn't a parts folder"):
         build(BuildOptions(path=app, output=tmp_path / "b.pyz", python=HERE, split=100_000))
     assert (tmp_path / "b.pyz.parts" / "notes.txt").exists()
+
+
+def test_split_layer_exact_budget_boundary(tmp_path: Path) -> None:
+    """Phase 3 audit: `split_layer` returns `[layer]` without raising when `layer.path` already
+    fits in `budget` (even within 1 KiB of the limit), and uses exact ZIP overhead bytes."""
+    from bundleup import _payload, _verify, _zipwriter
+
+    layer_zip = tmp_path / "layer-0.zip"
+    members = [
+        _zipwriter.Member("big.bin", lambda: b"x" * 2048),
+        _zipwriter.Member("small.py", lambda: b"y = 1\n"),
+    ]
+    digest, written = _zipwriter.write_zip(
+        layer_zip, members, level=6, workers=1, hasher=_verify.record_hash
+    )
+    exact_size = layer_zip.stat().st_size
+    layer = _payload.Layer(f"layer-{digest[:16]}.zip", layer_zip, digest, written, (0,))
+    # 1. Layer already fits within exact_size -> returned unchanged without false UsageError
+    assert _payload.split_layer(layer, exact_size, tmp_path / "stage1") == [layer]
+
+    # 2. Budget just enough for the larger single entry (header + compressed data + CD + EOCD)
+    with zipfile.ZipFile(layer_zip) as zf:
+        big_comp = zf.getinfo("big.bin").compress_size
+    single_min = 30 + len("big.bin") + big_comp + 46 + len("big.bin") + 22
+    stage2 = tmp_path / "stage2"
+    stage2.mkdir()
+    parts = _payload.split_layer(layer, single_min, stage2)
+    assert len(parts) == 2
+    assert all(p.path.stat().st_size <= single_min for p in parts)

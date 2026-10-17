@@ -79,8 +79,9 @@ def _compile_loader(target: Target, loader: Path, loader_pyc: Path, *, progress:
     key = hashlib.sha256(loader.read_bytes() + identity.encode()).hexdigest()[:32]
     cached = _bytecode.cache_dir() / f"loader-{key}.pyc"
     if cached.is_file():
-        shutil.copyfile(cached, loader_pyc)
-        return
+        with contextlib.suppress(OSError):
+            shutil.copyfile(cached, loader_pyc)
+            return
     run(
         [target.executable, "-s", "-S", "-c", COMPILE_LOADER, str(loader), str(loader_pyc)],
         what="compiling the loader",
@@ -255,7 +256,7 @@ DIR_MANIFEST = "bundleup-manifest.json"  # in a `dir` output and at the top of a
 def _loader_settings(p: Prepared, *, members: list[str], dirname: str) -> dict[str, object]:
     """What the loader needs to know about one payload (its config, or one PAYLOADS entry)."""
     target, native = p.target, p.native
-    needs = runtime_needs(p.site)
+    needs = runtime_needs(p.site, target)
     return {
         "dirname": dirname,
         "members": members,

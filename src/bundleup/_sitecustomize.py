@@ -43,6 +43,8 @@ def _bundleup_child() -> None:
         if same_python and _bundleup_runtime.runs_bundle_code(site):
             _bundleup_runtime.activate(site)
         else:
+            if same_python:
+                _bundleup_runtime.deactivate(here)
             sys.modules.pop("_bundleup_runtime", None)
     _chain(here)
 

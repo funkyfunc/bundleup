@@ -172,7 +172,12 @@ def owners(
 def _source_of(pyc: str) -> str:
     """pkg/__pycache__/mod.cpython-312.pyc -> pkg/mod.py"""
     head, sep, name = pyc.rpartition("__pycache__/")
-    stem = name.rsplit(".", 2)[0] if sep else name.removesuffix(".pyc")
+    if not sep:
+        return f"{head}{name.removesuffix('.pyc')}.py"
+    base = name.removesuffix(".pyc")
+    if base.endswith((".opt-1", ".opt-2")):
+        base = base.rsplit(".", 1)[0]
+    stem = base.rsplit(".", 1)[0]
     return f"{head}{stem}.py"
 
 
@@ -317,10 +322,11 @@ def package_sizes(
     *,
     project: str = "",
     markers: dict[str, str] | None = None,
+    files: list[tuple[str, str]] | None = None,
 ) -> list[PackageSize]:
     """Unpacked size of each distribution, largest first. Bytecode counts towards its source's."""
     sizes: dict[_Owner, int] = defaultdict(int)
-    for rel, path in _bytecode.walk_files(site):
+    for rel, path in files if files is not None else _bytecode.walk_files(site):
         who = owner.get(rel) or (owner.get(_source_of(rel)) if rel.endswith(".pyc") else None)
         if who:
             sizes[who] += os.lstat(path).st_size
@@ -375,6 +381,7 @@ def oldest_python(
     interpreters: dict[tuple[int, int], str | None] | None = None,
     run: Callable[[list[str]], str],
     own: Sequence[str] = (),
+    owner: dict[str, _Owner] | None = None,
 ) -> tuple[PythonRange, list[Diagnostic]]:
     """A pure-Python bundle claims every version its requires-python allows (ADR-0030). Check
     that the project's own code compiles on the versions below the target: in-process with
@@ -390,7 +397,7 @@ def oldest_python(
     below = sorted(v for v in interpreters if pythons.min <= v < target.version)
     if not below:
         return pythons, []
-    mine = owners(site, project=project, script=script, own=own)
+    mine = owner if owner is not None else owners(site, project=project, script=script, own=own)
     files = sorted(
         path
         for path, who in mine.items()
@@ -452,6 +459,7 @@ def syntax_errors(
     project: str,
     target: Target,
     run: Callable[[list[str]], str],
+    files: list[tuple[str, str]] | None = None,
 ) -> list[Diagnostic]:
     """Python files the target interpreter couldn't compile. The build compiled everything
     already, so a source without its bytecode is a candidate; the target interpreter confirms
@@ -459,9 +467,10 @@ def syntax_errors(
     from packaging.utils import canonicalize_name
 
     project = canonicalize_name(project)
+    walked = files if files is not None else _bytecode.walk_files(site)
     candidates = [
         rel
-        for rel, _path in _bytecode.walk_files(site)
+        for rel, _path in walked
         if rel.endswith(".py") and not (site / _bytecode.pyc_path(rel, target.cache_tag)).exists()
     ]
     if not candidates:
@@ -494,18 +503,18 @@ def syntax_errors(
         else:
             theirs[who].append(f"{where}: {message}")
             first.setdefault(who, (path, line))
-    for who, files in sorted(theirs.items(), key=lambda item: item[0].name):
-        them = "it" if len(files) == 1 else "them"
-        verb = "doesn't" if len(files) == 1 else "don't"
+    for who, files_list in sorted(theirs.items(), key=lambda item: item[0].name):
+        them = "it" if len(files_list) == 1 else "them"
+        verb = "doesn't" if len(files_list) == 1 else "don't"
         diags.append(
             Diagnostic(
                 "syntax-error",
                 "warning",
-                f"{plural(len(files), 'file')} in {who.name} {who.version} {verb} compile on "
+                f"{plural(len(files_list), 'file')} in {who.name} {who.version} {verb} compile on "
                 f"{python}",
                 hint=f"harmless if {who.name} imports {them} only on newer Pythons; if not, use a "
                 f"{who.name} release that supports {python}",
-                detail=listing(files),
+                detail=listing(files_list),
                 package=who.name,
                 file=first[who][0],
                 line=first[who][1],
@@ -548,15 +557,18 @@ def analyze(
     run: Callable[[list[str]], str],
     script: str | None = None,
     own: Sequence[str] = (),
+    owner: dict[str, _Owner] | None = None,
 ) -> tuple[list[Diagnostic], list[PackageSize]]:
     """Everything `bundleup check` reports about an installed, compiled payload: the
     diagnostics (errors first) and each package's size. `project` is the canonical name of the
     project (or script, installed at `script`) being bundled."""
-    owner = owners(site, project=project, script=script, own=own)
-    diags = syntax_errors(site, owner, project=project, target=target, run=run)
+    if owner is None:
+        owner = owners(site, project=project, script=script, own=own)
+    walked = _bytecode.walk_files(site)
+    diags = syntax_errors(site, owner, project=project, target=target, run=run, files=walked)
     diags += data_files(site, owner)
     diags.sort(key=lambda d: d.level != "error")  # stable: errors first, then in found order
-    return diags, package_sizes(site, owner, project=project, markers=target.markers)
+    return diags, package_sizes(site, owner, project=project, markers=target.markers, files=walked)
 
 
 def undeclared_imports(

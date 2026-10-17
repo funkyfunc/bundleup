@@ -186,6 +186,8 @@ CONDITIONAL = (
     "sys.version_info",
     "version_info",
     "find_spec",
+    "sys.implementation",
+    "python_implementation",
 )
 OPTIONAL_ERRORS = {None, "ImportError", "ModuleNotFoundError", "Exception", "BaseException"}
 
@@ -235,78 +237,114 @@ def imports_in_with_lines(tree: ast.AST) -> dict[str, int]:
     each: not relative imports, and not those guarded by `try/except ImportError` or an `if` on
     TYPE_CHECKING, the platform or the Python version."""
     lines: dict[str, int] = {}
+    branch_lines: dict[str, int] = {}
+    optional_mods: set[str] = set()
 
-    def visit_stmts(stmts: Sequence[ast.stmt], optional: bool) -> None:
+    def visit_stmts(stmts: Sequence[ast.stmt], optional: bool, in_branch: bool = False) -> None:
         cur_opt = optional
+        cur_branch = in_branch
         for stmt in stmts:
-            visit(stmt, cur_opt)
+            visit(stmt, cur_opt, cur_branch)
             if (
                 not cur_opt
                 and isinstance(stmt, ast.If)
                 and not stmt.orelse
                 and _terminates(stmt.body)
             ):
+                cur_branch = True
                 unparsed = ast.unparse(stmt.test)
                 if any(c in unparsed for c in CONDITIONAL):
                     cur_opt = True
 
-    def visit(node: ast.AST, optional: bool) -> None:
+    def record(top: str, lineno: int, optional: bool, in_branch: bool) -> None:
+        if optional:
+            optional_mods.add(top)
+        elif in_branch:
+            branch_lines[top] = min(branch_lines.get(top, lineno), lineno)
+        else:
+            lines[top] = min(lines.get(top, lineno), lineno)
+
+    def visit(node: ast.AST, optional: bool, in_branch: bool = False) -> None:
         if isinstance(node, ast.Try) or type(node).__name__ == "TryStar":
             handlers = getattr(node, "handlers", ())
             guarded = bool({_caught(h.type) for h in handlers} & OPTIONAL_ERRORS)
-            visit_stmts(getattr(node, "body", ()), optional or guarded)
-            visit_stmts(getattr(node, "orelse", ()), optional or guarded)
+            visit_stmts(getattr(node, "body", ()), optional or guarded, in_branch)
+            visit_stmts(getattr(node, "orelse", ()), optional or guarded, in_branch)
             for handler in handlers:
-                visit(handler, optional or (_caught(handler.type) in OPTIONAL_ERRORS))
-            visit_stmts(getattr(node, "finalbody", ()), optional)
+                visit(handler, optional or (_caught(handler.type) in OPTIONAL_ERRORS), in_branch)
+            visit_stmts(getattr(node, "finalbody", ()), optional, in_branch)
             return
-        if isinstance(node, (ast.With, ast.AsyncWith)) and _suppresses_import_error(node):
+        if isinstance(node, (ast.With, ast.AsyncWith)):
+            suppressed = _suppresses_import_error(node)
             for item in node.items:
-                visit(item, optional)
-            visit_stmts(node.body, True)
+                visit(item, optional, in_branch)
+            visit_stmts(node.body, optional or suppressed, in_branch)
             return
         if isinstance(node, ast.If):
             test = node.test
             if isinstance(test, ast.Constant):
-                visit_stmts(node.body, optional or not bool(test.value))
-                visit_stmts(node.orelse, optional or bool(test.value))
+                visit_stmts(node.body, optional or not bool(test.value), in_branch)
+                visit_stmts(node.orelse, optional or bool(test.value), in_branch)
                 return
             if _is_type_checking(test):
-                visit_stmts(node.body, True)
-                visit_stmts(node.orelse, optional)
+                visit_stmts(node.body, True, True)
+                visit_stmts(node.orelse, optional, in_branch)
                 return
             if (
                 isinstance(test, ast.UnaryOp)
                 and isinstance(test.op, ast.Not)
                 and _is_type_checking(test.operand)
             ):
-                visit_stmts(node.body, optional)
-                visit_stmts(node.orelse, True)
+                visit_stmts(node.body, optional, in_branch)
+                visit_stmts(node.orelse, True, True)
                 return
             unparsed = ast.unparse(test)
             if any(c in unparsed for c in CONDITIONAL):
-                visit_stmts(node.body, True)
-                visit_stmts(node.orelse, True)
+                visit_stmts(node.body, True, True)
+                visit_stmts(node.orelse, True, True)
                 return
-            visit(test, optional)
-            visit_stmts(node.body, optional)
-            visit_stmts(node.orelse, optional)
+            visit(test, optional, in_branch)
+            visit_stmts(node.body, optional, True)
+            visit_stmts(node.orelse, optional, True)
             return
-        if isinstance(node, (ast.Module, ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        if isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
             for child in ast.iter_child_nodes(node):
-                if child not in node.body:
-                    visit(child, optional)
-            visit_stmts(node.body, optional)
+                if child not in node.body and child not in node.orelse:
+                    visit(child, optional, in_branch)
+            visit_stmts(node.body, optional, in_branch)
+            visit_stmts(node.orelse, optional, in_branch)
             return
-        if not optional and isinstance(node, ast.Import):
+        if (
+            isinstance(
+                node,
+                (
+                    ast.Module,
+                    ast.FunctionDef,
+                    ast.AsyncFunctionDef,
+                    ast.ClassDef,
+                    ast.ExceptHandler,
+                ),
+            )
+            or type(node).__name__ == "match_case"
+        ):
+            body = getattr(node, "body", ())
+            for child in ast.iter_child_nodes(node):
+                if child not in body:
+                    visit(child, optional, in_branch)
+            visit_stmts(body, optional, in_branch)
+            return
+        if isinstance(node, ast.Import):
             for alias in node.names:
-                lines.setdefault(alias.name.split(".")[0], node.lineno)
-        elif not optional and isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            lines.setdefault(node.module.split(".")[0], node.lineno)
+                record(alias.name.split(".")[0], node.lineno, optional, in_branch)
+        elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
+            record(node.module.split(".")[0], node.lineno, optional, in_branch)
         for child in ast.iter_child_nodes(node):
-            visit(child, optional)
+            visit(child, optional, in_branch)
 
     visit(tree, False)
+    for top, lineno in branch_lines.items():
+        if top not in optional_mods:
+            lines[top] = min(lines.get(top, lineno), lineno)
     return lines
 
 
@@ -370,7 +408,11 @@ def search_roots(site: Path) -> list[Path]:
     for pth in sorted(site.glob("*.pth")) if site.is_dir() else []:
         if pth.name.startswith("."):
             continue
-        for line in pth.read_text(encoding="utf-8-sig", errors="replace").splitlines():
+        try:
+            text = pth.read_text(encoding="utf-8-sig", errors="replace")
+        except OSError:
+            continue
+        for line in text.splitlines():
             line = line.strip()
             if line and not line.startswith(("#", "import ", "import\t")):
                 sub = site / line

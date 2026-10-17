@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import sys
 import zipfile
 from collections.abc import Sequence
 from dataclasses import dataclass, replace
@@ -77,7 +78,7 @@ def resolve_entry(
                 or not exact.resolve().is_relative_to(site.resolve())
             ):
                 raise EntryPointError(f"--entry {entry}: there's no such file in {source.name}")
-            return Entry("script", norm)
+            return Entry("script", exact.relative_to(site).as_posix())
     if script:
         if entry:
             raise UsageError(
@@ -172,6 +173,8 @@ class _ModuleMatch:
 
 def _exact_path(root: Path, *parts: str) -> Path | None:
     """Resolve `parts` under `root` with strict case-sensitivity on every OS (APFS/NTFS too)."""
+    import unicodedata
+
     cur = root
     for part in parts:
         if not part or not cur.is_dir():
@@ -180,9 +183,16 @@ def _exact_path(root: Path, *parts: str) -> Path | None:
             entries = os.listdir(cur)
         except OSError:
             return None
-        if part not in entries:
-            return None
-        cur = cur / part
+        if part in entries:
+            cur = cur / part
+            continue
+        if sys.platform == "darwin":
+            nfc = unicodedata.normalize("NFC", part)
+            matched = next((e for e in entries if unicodedata.normalize("NFC", e) == nfc), None)
+            if matched is not None:
+                cur = cur / matched
+                continue
+        return None
     return cur
 
 
@@ -550,7 +560,10 @@ def check_wheel_platforms(site: Path, target: Target) -> None:
     wrong = []
     for dist_info in sorted(site.glob("*.dist-info")):
         tags = _platforms.wheel_tags(dist_info)
-        if tags and not any(platform.accepts(tag) for tag in tags):
+        if tags and not any(
+            platform.accepts(tag, python=target.version, abiflags=target.abiflags or "")
+            for tag in tags
+        ):
             wrong.append(f"{dist_info.name.removesuffix('.dist-info')}: {', '.join(tags)}")
     if wrong:
         raise NoCompatibleWheelError(
@@ -567,10 +580,18 @@ def inspect_site(site: Path) -> tuple[int, bool]:
     return len(tags), any(_platforms.is_native(t) for t in tags)
 
 
-def runtime_needs(site: Path) -> _platforms.RuntimeNeeds:
+def runtime_needs(site: Path, target: Target | None = None) -> _platforms.RuntimeNeeds:
     """What a machine needs to run the native wheels in `site` (checked by the loader)."""
+    platform = target.python_platform if target is not None else None
+    arch = None
+    if target is not None and platform is None:
+        arch = {"amd64": "x86_64", "arm64": "aarch64", "x86": "i686"}.get(
+            target.machine.lower(), target.machine.lower()
+        )
     return _platforms.runtime_needs(
-        _platforms.wheel_tags(dist_info) for dist_info in site.glob("*.dist-info")
+        (_platforms.wheel_tags(dist_info) for dist_info in site.glob("*.dist-info")),
+        platform=platform,
+        arch=arch,
     )
 
 
@@ -676,18 +697,21 @@ def write_layers(sites: list[Path], stage: Path) -> list[Layer]:
 
 
 # What a zip adds per file beyond its compressed bytes: a local header (30 bytes) and a central
-# directory entry (46), each with the name, plus room for ZIP64 extras.
-PER_FILE = 30 + 46 + 40
-END = 1024  # the end-of-central-directory records, with room to spare
+# directory entry (46), each with the name, plus ZIP64 extras only when sizes/offsets reach LIMIT.
+PER_FILE = 30 + 46
+END = 22  # the end-of-central-directory record (plus 76 bytes when ZIP64 records are needed)
 
 
 def split_layer(layer: Layer, budget: int, stage: Path) -> list[Layer]:
     """`layer` as zips of at most `budget` bytes each, cutting between files in name order, so
     each piece is an ordinary zip the loader unpacks in turn (`--split`). A layer that fits is
     only renamed for its hash. Raises UsageError when one file alone is over the budget."""
+    if layer.path.stat().st_size <= budget:
+        return [replace(layer, member=f"layer-{layer.digest[:16]}.zip")]
     with zipfile.ZipFile(layer.path) as zf:
         infos = zf.infolist()
-        too_big = [i for i in infos if END + _cost(i) > budget]
+        end = END + (76 if len(infos) >= 0xFFFF or budget >= _zipwriter.LIMIT else 0)
+        too_big = [i for i in infos if end + _cost(i, budget) > budget]
         if too_big:
             biggest = max(too_big, key=lambda i: i.compress_size)
             raise UsageError(
@@ -695,17 +719,15 @@ def split_layer(layer: Layer, budget: int, stage: Path) -> list[Layer]:
                 f"big for a part of at most {describe_size(budget)} (--split)",
                 hint="a file can't be cut in two: give --split a bigger size",
             )
-        if layer.path.stat().st_size <= budget:
-            pieces = [infos]
-        else:
-            pieces: list[list[zipfile.ZipInfo]] = [[]]
-            size = END
-            for info in infos:
-                if size + _cost(info) > budget and pieces[-1]:
-                    pieces.append([])
-                    size = END
-                pieces[-1].append(info)
-                size += _cost(info)
+        pieces: list[list[zipfile.ZipInfo]] = [[]]
+        size = end
+        for info in infos:
+            cost = _cost(info, budget)
+            if size + cost > budget and pieces[-1]:
+                pieces.append([])
+                size = end
+            pieces[-1].append(info)
+            size += cost
         if len(pieces) == 1:
             return [replace(layer, member=f"layer-{layer.digest[:16]}.zip")]
         out = []
@@ -723,8 +745,13 @@ def split_layer(layer: Layer, budget: int, stage: Path) -> list[Layer]:
         return out
 
 
-def _cost(info: zipfile.ZipInfo) -> int:
-    return info.compress_size + PER_FILE + 2 * len(info.filename.encode())
+def _cost(info: zipfile.ZipInfo, budget: int = 0) -> int:
+    big = (
+        info.file_size >= _zipwriter.LIMIT
+        or info.compress_size >= _zipwriter.LIMIT
+        or budget >= _zipwriter.LIMIT
+    )
+    return info.compress_size + PER_FILE + (48 if big else 0) + 2 * len(info.filename.encode())
 
 
 def verify_payload(

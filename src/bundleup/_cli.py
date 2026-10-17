@@ -215,7 +215,7 @@ def _add_build_options(command: argparse.ArgumentParser, *, output: bool) -> Non
     command.add_argument(
         "--entry",
         metavar="NAME",
-        default=os.environ.get("BUNDLEUP_ENTRY") or None,
+        default=os.environ.get("BUNDLEUP_ENTRY", "").strip() or None,
         help=_env_help(
             "a script name, module:function, module or python",
             "BUNDLEUP_ENTRY",
@@ -258,14 +258,14 @@ def _add_build_options(command: argparse.ArgumentParser, *, output: bool) -> Non
             "--max-size",
             type=_max_size,
             metavar="SIZE",
-            default=os.environ.get("BUNDLEUP_MAX_SIZE") or None,
+            default=None,
             help=_env_help("fail if the output is bigger (30MB)", "BUNDLEUP_MAX_SIZE"),
         )
         command.add_argument(
             "--split",
             type=_max_size,
             metavar="SIZE",
-            default=os.environ.get("BUNDLEUP_SPLIT") or None,
+            default=None,
             help=_env_help("no file bigger: a .pyz + parts folder (100MB)", "BUNDLEUP_SPLIT"),
         )
         command.add_argument(
@@ -301,19 +301,28 @@ def _smoke_args(text: str | None) -> tuple[str, ...] | None:
     return parse_args(text)
 
 
-def _max_size(text: str) -> int:
+def _parse_positive_size(text: str) -> int:
     from ._formats import parse_size
 
+    size = parse_size(text)
+    if size <= 0:
+        raise UsageError(
+            f"size must be greater than 0: {text!r}",
+            hint="write a positive size like 50MB or 500KB",
+        )
+    return size
+
+
+def _max_size(text: str) -> int:
     try:
-        size = parse_size(text)
-        if size <= 0:
-            raise UsageError(
-                f"size must be greater than 0: {text!r}",
-                hint="write a positive size like 50MB or 500KB",
-            )
-        return size
+        return _parse_positive_size(text)
     except UsageError as e:
         raise argparse.ArgumentTypeError(f"{e} ({e.hint})") from None
+
+
+def _env_size(name: str) -> int | None:
+    value = os.environ.get(name, "").strip()
+    return _parse_positive_size(value) if value else None
 
 
 def _older_than(text: str) -> float:
@@ -334,12 +343,12 @@ def _older_than(text: str) -> float:
 
 
 def _env_list(name: str) -> list[str]:
-    value = os.environ.get(name)
+    value = os.environ.get(name, "").strip()
     return [value] if value else []
 
 
 def _env_path(name: str) -> Path | None:
-    value = os.environ.get(name)
+    value = os.environ.get(name, "").strip()
     return Path(value) if value else None
 
 
@@ -454,6 +463,10 @@ def _options(opts: argparse.Namespace) -> BuildOptions:
     pythons = opts.python or _env_list("BUNDLEUP_PYTHON")
     platforms = opts.python_platform or _env_list("BUNDLEUP_PYTHON_PLATFORM")
     externals = opts.external or _env_list("BUNDLEUP_EXTERNAL")
+    max_size = (
+        opts.max_size or _env_size("BUNDLEUP_MAX_SIZE") if hasattr(opts, "max_size") else None
+    )
+    split = opts.split or _env_size("BUNDLEUP_SPLIT") if hasattr(opts, "split") else None
     return BuildOptions(
         path=Path(opts.path),
         output=getattr(opts, "output", None),
@@ -466,8 +479,8 @@ def _options(opts: argparse.Namespace) -> BuildOptions:
         external=tuple(externals),
         strict=opts.strict,
         format=opts.format,
-        max_size=getattr(opts, "max_size", None),
-        split=getattr(opts, "split", None),
+        max_size=max_size,
+        split=split,
         smoke=_smoke_args(getattr(opts, "smoke", None)),
     )
 
@@ -786,7 +799,7 @@ def _usage_error(message: str, argv: list[str]) -> ExitCode:
             hint = f"did you mean `bundleup build {word}`?"
         elif close := difflib.get_close_matches(word, COMMANDS, n=1):
             hint = f"did you mean `bundleup {close[0]}`?"
-        elif Path(word).exists():
+        elif _safe_exists(word):
             hint = f"did you mean `bundleup build {word}`?"
     elif (
         word == "cache"
@@ -880,6 +893,13 @@ def _positional_count(args: list[str], takes_value: set[str]) -> int:
     return count
 
 
+def _safe_exists(token: str) -> bool:
+    try:
+        return Path(token).exists()
+    except OSError:
+        return False
+
+
 def _looks_like_path(token: str) -> bool:
     if " " in token:
         return False
@@ -888,7 +908,7 @@ def _looks_like_path(token: str) -> bool:
         or token.endswith(".py")
         or "/" in token
         or "\\" in token
-        or Path(token).exists()
+        or _safe_exists(token)
     )
 
 
@@ -898,18 +918,18 @@ def _is_entry_python(args: list[str]) -> bool:
             return True
         if tok == "--entry" and idx + 1 < len(args) and args[idx + 1] == "python":
             return True
-    return os.environ.get("BUNDLEUP_ENTRY") == "python"
+    return os.environ.get("BUNDLEUP_ENTRY", "").strip() == "python"
 
 
 def _is_project_or_pep723(token: str) -> bool:
     p = Path(token)
-    if p.is_dir():
-        return True
-    if p.is_file():
-        try:
+    try:
+        if p.is_dir():
+            return True
+        if p.is_file():
             return "# /// script" in p.read_text(encoding="utf-8", errors="ignore")
-        except OSError:
-            return False
+    except OSError:
+        return False
     return False
 
 
@@ -979,5 +999,7 @@ def main(argv: list[str] | None = None) -> int:
     except KeyboardInterrupt:
         print("interrupted", file=sys.stderr)
         return ExitCode.INTERRUPTED
+    except BrokenPipeError:
+        return ExitCode.OK
     except Exception as e:  # anything else is a bug: say so, with a way to report it
         return _crash(e, verbose=opts.verbose > 0)

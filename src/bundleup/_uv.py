@@ -17,7 +17,7 @@ from typing import Any
 
 from packaging.utils import canonicalize_name
 
-from . import _bytecode, _verify
+from . import _bytecode, _loader, _verify
 from . import _toml as tomllib
 from ._errors import (
     LockfileOutdatedError,
@@ -157,7 +157,12 @@ def _check_pylock_freshness(
     )
     from packaging.requirements import InvalidRequirement, Requirement
 
-    env = {**(markers or {k: str(v) for k, v in default_environment().items()}), "extra": ""}
+    env: dict[str, Any] = {
+        **(markers or {k: str(v) for k, v in default_environment().items()}),
+        "extra": "",
+        "extras": set(),
+        "dependency_groups": set(),
+    }
     excluded = _clean_external(external)
     locked: dict[str, list[str | None]] = {}
     for p in packages:
@@ -254,7 +259,7 @@ def from_pylock(
         packages = _load_pylock_packages(text, source.pylock)
         lock_for_install = stage.resolve() / "pylock.install.toml"
         lock_for_install.write_text(text, encoding="utf-8")
-        relocate_paths(lock_for_install, source.pylock.parent)
+        relocate_paths(lock_for_install, source.pylock.parent, from_root=True)
         text = lock_for_install.read_text(encoding="utf-8")
     else:
         lock_for_install = source.pylock
@@ -283,7 +288,7 @@ def with_project(pylock: str, name: str) -> str:
     """The pylock.toml text with the project itself listed, for the lock-vs-bundle check. (An
     empty `packages = []` would make the added [[packages]] table invalid TOML.)"""
     pylock = re.sub(r"(?m)^packages\s*=\s*\[\s*\](?:\s*#.*)?$", "", pylock)
-    return pylock + f'\n[[packages]]\nname = "{name}"\ndirectory = {{ path = "." }}\n'
+    return pylock + f'\n[[packages]]\nname = {json.dumps(name)}\ndirectory = {{ path = "." }}\n'
 
 
 def has_lock(source: Source) -> bool:
@@ -455,9 +460,12 @@ def export(
     root = lock.parent if lock else source.workdir
     cache_key = _export_cache_key(uv, source, selection, mode) if locked_file else None
     cached = export_cache_dir() / f"{cache_key}.toml" if cache_key else None
+    restored_export = False
     if cached is not None and cached.is_file():
-        shutil.copyfile(cached, pylock)
-    else:
+        with contextlib.suppress(OSError):
+            shutil.copyfile(cached, pylock)
+            restored_export = True
+    if not restored_export:
         command = [
             uv,
             "export",
@@ -493,7 +501,7 @@ def export(
             finally:
                 with contextlib.suppress(OSError):
                     tmp.unlink(missing_ok=True)
-    relocate_paths(pylock, root)
+    relocate_paths(pylock, root, from_root=True)
     if external:
         pylock.write_text(
             _strip_external(pylock.read_text(encoding="utf-8"), external), encoding="utf-8"
@@ -773,10 +781,16 @@ def _script_pinned(source: Source, pylock: Path, *, external: Sequence[str] = ()
 
 
 # A local path in uv's pylock.toml export: `directory = { path = "." }`, `path = "dist/x.whl"`.
-LOCAL_PATH = re.compile(r'(?P<key>\bpath = )"(?P<value>(?:[^"\\]|\\.)*)"')
+LOCAL_PATH = re.compile(
+    r"(?P<key>\bpath = )(?P<raw>"
+    r'"""(?:[^\\]|\\.)*?"""|\'\'\'[\s\S]*?\'\'\'|"(?:[^"\\]|\\.)*"|\'[^\']*\''
+    r")"
+)
 
 
-def relocate_paths(pylock: Path, root: Path, *, to_root: bool = False) -> None:
+def relocate_paths(
+    pylock: Path, root: Path, *, to_root: bool = False, from_root: bool = False
+) -> None:
     """Make the export's local paths relative to the pylock.toml (or to `root` when caching), as
     PEP 751 says and uv reads them. uv 0.12.23 writes them so; older ones write them relative to
     the lock's directory (the workspace root), which is wrong once the file is in the stage."""
@@ -784,15 +798,25 @@ def relocate_paths(pylock: Path, root: Path, *, to_root: bool = False) -> None:
     base = os.path.abspath(root) if to_root else here
 
     def relocated(m: re.Match[str]) -> str:
-        value = tomllib.loads('v = "' + m["value"] + '"')["v"]  # the TOML string, unescaped
-        if Path(value).is_absolute():
+        try:
+            value = str(tomllib.loads("v = " + m["raw"])["v"])  # the TOML string, unescaped
+        except ValueError:
+            return m[0]
+        if not value or Path(value).is_absolute():
             return m[0]
         if to_root:
-            if not _is_local(Path(here, value)):
-                return m[0]
-            target = os.path.abspath(Path(here, value))
-        else:
             if _is_local(Path(here, value)):
+                target = os.path.abspath(Path(here, value))
+            elif _is_local(root / value):
+                target = os.path.abspath(root / value)
+            else:
+                return m[0]
+        elif from_root:
+            if not _is_local(root / value):
+                return m[0]
+            target = os.path.abspath(root / value)
+        else:
+            if _is_local(Path(here, value)) or not _is_local(root / value):
                 return m[0]
             target = os.path.abspath(root / value)
         try:
@@ -862,12 +886,13 @@ def install(
                 "support",
             ) from None
         raise
+    _ensure_site_writable(site)
     for name in SKIP_TOP:
         p = site / name
-        if p.is_dir():
-            shutil.rmtree(p)
-        elif p.exists():
-            p.unlink()
+        if p.is_dir() and not p.is_symlink():
+            _loader._rmtree(str(p))
+        elif p.exists() or p.is_symlink():
+            p.unlink(missing_ok=True)
     for launcher in launchers(site):
         (site / launcher).unlink(missing_ok=True)
     for folder in _verify.SCRIPT_DIRS:
@@ -899,7 +924,6 @@ def install(
                 dst.chmod(dst.stat().st_mode | 0o200)
             copied.append(rel)
     _strip_local_build_meta(site)
-    _ensure_site_writable(site)
     return copied
 
 
@@ -987,7 +1011,7 @@ def untouched(source: Source) -> Iterator[None]:
                 shim.unlink(missing_ok=True)
         if not source.is_script:
             for leftover in _build_leftovers(source.path) - before:
-                shutil.rmtree(leftover, ignore_errors=True)
+                _loader._rmtree(str(leftover))
 
 
 def _build_leftovers(project: Path) -> set[Path]:

@@ -413,7 +413,7 @@ def _smoke_run(
     for p in prepared:
         machine = CPUS.get(p.target.machine.lower(), p.target.machine.lower())
         same_os = p.reach.any_os or p.target.platform == sys.platform
-        needs = runtime_needs(p.site)
+        needs = runtime_needs(p.site, p.target)
         libc = needs.libc
         plat = p.target.python_platform
         if exe and plat and plat.sys_platform == "linux" and libc is None:
@@ -457,12 +457,13 @@ def _served(prepared: list[Prepared], options: BuildOptions) -> bool:
             return False  # uv's choice or an interpreter path: can't tell before building
         wanted = (int(version[1]), int(version[2]))
     platform = _platforms.parse(options.python_platform) if options.python_platform else None
+    wanted_os = platform.sys_platform if platform else sys.platform
     for p in prepared:
         if p.native or not p.pythons.contains(wanted):
             continue
         if p.reach.any_os:
             return True
-        if platform and p.reach.any_cpu and platform.sys_platform == p.target.platform:
+        if p.reach.any_cpu and wanted_os == p.target.platform:
             return True
     return False
 
@@ -513,14 +514,21 @@ def _validate_output_path(
     source: Source | None = None,
     own: Sequence[str] = (),
 ) -> None:
+    try:
+        is_dir = output.is_dir()
+        resolved_out = output.resolve() if source is not None else None
+    except (OSError, RuntimeError) as e:
+        raise UsageError(
+            f"-o {output} cannot be accessed: {getattr(e, 'strerror', None) or e}"
+        ) from None
     if fmt == "dir":
         check_dir_output(Path(os.path.abspath(output)))
-    elif output.is_dir():
+    elif is_dir:
         raise UsageError(
             f"{output} is a directory",
             hint=f"give a file path (for example: -o {output / default_name}), or use --format dir",
         )
-    if source is not None and output.resolve() in _input_files(source, own):
+    if source is not None and resolved_out in _input_files(source, own):
         what = "the input script" if source.is_script else "the project's own files"
         raise UsageError(
             f"-o {output.name} would overwrite {what}",
@@ -598,7 +606,11 @@ def _wheel_coverage(pylock: Path, target: Target) -> list[Diagnostic]:
     if platform is None:
         return []
     lock = pylock.read_text(encoding="utf-8")
-    found = _coverage.diagnostics(_coverage.gaps(lock, platform, target.version), platform, lock)
+    found = _coverage.diagnostics(
+        _coverage.gaps(lock, platform, target.version, abiflags=target.abiflags or ""),
+        platform,
+        lock,
+    )
     errors = [d for d in found if d.level == "error"]
     if errors:
         raise NoCompatibleWheelError(
@@ -617,7 +629,9 @@ def _also_platforms(pylock: Path, target: Target, names: Sequence[str]) -> list[
     for name in names:
         platform = _platforms.parse(name)
         found += _coverage.diagnostics(
-            _coverage.gaps(lock, platform, target.version), platform, lock
+            _coverage.gaps(lock, platform, target.version, abiflags=target.abiflags or ""),
+            platform,
+            lock,
         )
     return found
 
@@ -627,7 +641,13 @@ NOT_RUN = {"tests", "test", "docs", "doc", "examples"}
 
 
 def _own_code(
-    source: Source, site: Path, *, script: str | None, own: list[str], entry: Entry | None
+    source: Source,
+    site: Path,
+    *,
+    script: str | None,
+    own: list[str],
+    entry: Entry | None,
+    owner: dict[str, _check._Owner] | None = None,
 ) -> list[tuple[str, Path, bool]]:
     """The code bundled from the input itself, whose imports the undeclared-import check reads:
     the script, a folder app's modules, or the project's own installed files; with `--entry
@@ -635,17 +655,26 @@ def _own_code(
     neighbours import too, as when python runs a script)."""
     is_py_entry = entry is not None and entry.kind == "python"
     script_target = entry.target if entry is not None and entry.kind == "script" else None
+    script_dir = script_target.rpartition("/")[0] if script_target and "/" in script_target else ""
     code = [(source.path.name, source.path, False)] if script else []
     code += [
-        (rel, site / rel, is_py_entry or rel == script_target) for rel in own if rel.endswith(".py")
+        (
+            rel,
+            site / rel,
+            is_py_entry
+            or rel == script_target
+            or (bool(script_dir) and rel.rpartition("/")[0] == script_dir),
+        )
+        for rel in own
+        if rel.endswith(".py")
     ]
     if not source.is_script and not source.app:
         project = canonicalize_name(source.name)
-        owned = _check.owners(site, project=project)
+        owned = owner if owner is not None else _check.owners(site, project=project)
         code += [
             (rel, site / rel, False)
-            for rel, owner in sorted(owned.items())
-            if owner.name == project and rel.endswith(".py") and (site / rel).is_file()
+            for rel, who in sorted(owned.items())
+            if who.name == project and rel.endswith(".py") and (site / rel).is_file()
         ]
     if is_py_entry and not source.app:
         # A project's scripts anywhere under it (as git sees them); a script's neighbours only:
@@ -812,13 +841,16 @@ def _prepare(
     def run_python(cmd: list[str]) -> str:
         return run(cmd, what="checking the code", progress=progress, error=BundleupError)
 
+    project_name = canonicalize_name(source.name)
+    site_owners = _check.owners(site, project=project_name, script=script, own=own)
     diagnostics, sizes = _check.analyze(
         site,
-        project=canonicalize_name(source.name),
+        project=project_name,
         target=target,
         run=run_python,
         script=script,
         own=own,
+        owner=site_owners,
     )
     secrets = [rel for rel in own if looks_secret(rel)]
     if secrets:
@@ -833,7 +865,7 @@ def _prepare(
                 file=secrets[0],
             )
         )
-    code = _own_code(source, site, script=script, own=own, entry=entry)
+    code = _own_code(source, site, script=script, own=own, entry=entry, owner=site_owners)
     provided = _imports.provided_by(site) | _imports.external_modules(options.external)
     beside_cache: dict[Path, set[str]] = {}
     imported = [
@@ -856,12 +888,13 @@ def _prepare(
     pythons = python_range(site, pylock=pylock, target=target, source=source, native=native)
     pythons, narrowed = _check.oldest_python(
         site,
-        project=canonicalize_name(source.name),
+        project=project_name,
         script=script,
         own=own,
         pythons=pythons,
         target=target,
         run=run_python,
+        owner=site_owners,
     )
     diagnostics += narrowed
     every_import: set[str] = set().union(*(set(names) for _shown, names, _local in imported))

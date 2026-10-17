@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import re
@@ -129,14 +130,27 @@ def find_python(
         exe = request  # a path: no need to ask uv (which would run the interpreter to inspect it)
     else:
         cmd = _find_cmd(uv, source, request=request)
+        find_env = _find_env(source.workdir, is_script=source.is_script)
         try:
-            exe = run(
-                cmd,
-                cwd=source.workdir,
-                what="finding a Python",
-                progress=progress,
-                env=None if source.is_script else _find_env(source.workdir),
-            ).strip()
+            try:
+                exe = run(
+                    cmd,
+                    cwd=source.workdir,
+                    what="finding a Python",
+                    progress=progress,
+                    env=find_env,
+                ).strip()
+            except UvError:
+                clean_env = _clean_venv_env()
+                if clean_env == (find_env if find_env is not None else os.environ):
+                    raise
+                exe = run(
+                    cmd,
+                    cwd=source.workdir,
+                    what="finding a Python",
+                    progress=progress,
+                    env=clean_env,
+                ).strip()
         except UvError as e:
             # A version that isn't installed: fetch it into bundleup's own directory (ADR-0035),
             # so `--python 3.11 --python 3.13` works without setting anything up (ADR-0038).
@@ -152,8 +166,15 @@ def find_python(
                 ) from None
             exe = fetched
     probe = [exe, "-I", "-S", "-c", PROBE]
-    info = json.loads(run(probe, what=f"inspecting {exe}", progress=progress, error=ProjectError))
-    major, minor = info["version"]
+    raw = run(probe, what=f"inspecting {exe}", progress=progress, error=ProjectError)
+    try:
+        info = json.loads(raw)
+        major, minor = info["version"]
+    except (ValueError, KeyError, TypeError) as e:
+        raise ProjectError(
+            f"{exe} isn't a working Python 3 interpreter",
+            detail=raw[-500:] if raw else None,
+        ) from e
     if platform is not None:
         if info["markers"]["implementation_name"] != "cpython":
             raise UsageError(
@@ -167,7 +188,9 @@ def find_python(
             full_version=full,
             platform=platform.sys_platform,
             machine=platform.machine,
-            abiflags=None if platform.sys_platform == "win32" else "",  # no sys.abiflags on Windows
+            abiflags=None
+            if platform.sys_platform == "win32"
+            else (info.get("abiflags") or ""),  # no sys.abiflags on Windows
             implementation="cpython",
             cache_tag=info["cache_tag"],
             markers=platform.markers(python_full_version=full),
@@ -237,33 +260,66 @@ def _find_cmd(uv: str, source: Source, *, request: str | None) -> list[str]:
 
 
 def _belongs_to(val: str, workdir: Path) -> bool:
-    if Path(os.path.abspath(val)).is_relative_to(Path(os.path.abspath(workdir))):
-        return True
-    resolved = Path(val).resolve()
-    if resolved.is_relative_to(workdir.resolve()):
-        return True
-    venv = workdir / ".venv"
-    return venv.exists() and resolved == venv.resolve()
+    try:
+        if Path(os.path.abspath(val)).is_relative_to(Path(os.path.abspath(workdir))):
+            return True
+        resolved = Path(val).resolve()
+        if resolved.is_relative_to(workdir.resolve()):
+            return True
+        venv = workdir / ".venv"
+        return venv.exists() and resolved == venv.resolve()
+    except (OSError, RuntimeError):
+        return False
 
 
-def _find_env(workdir: Path) -> dict[str, str] | None:
-    """Environment for `uv python find`: when `workdir` (or its uv workspace root) has its own
-    `.venv` or `.python-version`, drop an active VIRTUAL_ENV / CONDA_PREFIX that belongs to
-    another folder."""
+def _usable_venv(val: str) -> bool:
+    try:
+        root = Path(os.path.abspath(val))
+        return not (
+            root.is_dir()
+            and any(
+                (p := root / rel).is_symlink() and not p.exists()
+                for rel in ("bin/python", "bin/python3", "Scripts/python.exe", "python.exe")
+            )
+        )
+    except OSError:
+        return False
+
+
+def _find_env(workdir: Path, *, is_script: bool = False) -> dict[str, str] | None:
+    """Environment for `uv python find`: drop broken VIRTUAL_ENV / CONDA_PREFIX entries, and when
+    `workdir` (or its uv workspace root) has its own `.venv` or `.python-version`, drop an active
+    VIRTUAL_ENV / CONDA_PREFIX that belongs to another folder."""
     from ._source import find_uv_lock
 
-    lock = find_uv_lock(workdir) if workdir.is_dir() else None
-    roots = [workdir, *([lock.parent] if lock and lock.parent != workdir else [])]
-    if not any((r / ".venv").exists() or (r / ".python-version").is_file() for r in roots):
+    has_local = False
+    roots = [workdir]
+    if not is_script:
+        lock = find_uv_lock(workdir) if workdir.is_dir() else None
+        roots = [workdir, *([lock.parent] if lock and lock.parent != workdir else [])]
+        try:
+            has_local = any(
+                (r / ".venv").exists() or (r / ".python-version").is_file() for r in roots
+            )
+        except OSError:
+            has_local = False
+    drop: set[str] = set()
+    updates: dict[str, str] = {}
+    for var in ("VIRTUAL_ENV", "CONDA_PREFIX"):
+        val = os.environ.get(var)
+        if not val:
+            continue
+        if not _usable_venv(val) or (has_local and not any(_belongs_to(val, r) for r in roots)):
+            drop.add(var)
+        elif not os.path.isabs(val):
+            updates[var] = os.path.abspath(val)
+    if not drop and not updates:
         return None
-    drop = [
-        var
-        for var in ("VIRTUAL_ENV", "CONDA_PREFIX")
-        if (val := os.environ.get(var)) and not any(_belongs_to(val, r) for r in roots)
-    ]
-    if not drop:
-        return None
-    return {k: v for k, v in os.environ.items() if k not in drop}
+    return {**{k: v for k, v in os.environ.items() if k not in drop}, **updates}
+
+
+def _clean_venv_env() -> dict[str, str]:
+    return {k: v for k, v in os.environ.items() if k not in ("VIRTUAL_ENV", "CONDA_PREFIX")}
 
 
 def find_interpreter(uv: str, version: str, *, cwd: Path, progress: Progress) -> str | None:
@@ -271,11 +327,15 @@ def find_interpreter(uv: str, version: str, *, cwd: Path, progress: Progress) ->
     any project, or uv answers with the project's venv."""
     try:
         found = run(
-            [uv, "python", "find", version], cwd=cwd, what="uv python find", progress=progress
+            [uv, "python", "find", "--no-project", version],
+            cwd=cwd,
+            what="uv python find",
+            progress=progress,
+            env=_clean_venv_env(),
         )
     except UvError:
         return None
-    return found.strip() or None
+    return _real(found)
 
 
 def private_pythons() -> Path:
@@ -293,10 +353,12 @@ def fetch_interpreter(uv: str, version: str, *, cwd: Path, progress: Progress) -
     found = find_interpreter(uv, version, cwd=cwd, progress=progress)
     if found:
         return found
-    env = {**os.environ, "UV_PYTHON_INSTALL_DIR": str(private_pythons())}
-    find = [uv, "python", "find", version, "--managed-python"]
+    env = {**_clean_venv_env(), "UV_PYTHON_INSTALL_DIR": str(private_pythons())}
+    find = [uv, "python", "find", "--no-project", version, "--managed-python"]
     try:  # installed by an earlier build: no download, nothing to say
-        return _real(run(find, cwd=cwd, what="uv python find", progress=progress, env=env))
+        existing = _real(run(find, cwd=cwd, what="uv python find", progress=progress, env=env))
+        if existing:
+            return existing
     except UvError:
         pass
     # Said, not done silently (the owner, accepting ADR-0035): a build that downloads something
@@ -309,8 +371,9 @@ def fetch_interpreter(uv: str, version: str, *, cwd: Path, progress: Progress) -
         )
     )
     install = [uv, "python", "install", version, "--no-bin", "--no-registry"]
-    try:
+    with contextlib.suppress(UvError):
         run(install, cwd=cwd, what="uv python install", progress=progress, env=env)
+    try:
         return _real(run(find, cwd=cwd, what="uv python find", progress=progress, env=env))
     except UvError:
         return None
@@ -320,7 +383,10 @@ def _real(found: str) -> str | None:
     """The real path: uv's per-minor-version link can be repointed by a later install while this
     interpreter is in use (on Windows that broke a running Python in the gauntlet)."""
     found = found.strip()
-    return os.path.realpath(found) if found else None
+    if not found:
+        return None
+    real = os.path.realpath(found)
+    return real if os.path.isfile(real) else None
 
 
 def check_requires_python(source: Source, target: Target) -> None:
@@ -333,7 +399,7 @@ def check_requires_python(source: Source, target: Target) -> None:
             f"{source.name} has an invalid requires-python: {source.requires_python!r}",
             hint='write a PEP 440 version specifier, e.g. `requires-python = ">=3.12"`',
         ) from None
-    if target.full_version not in spec:
+    if not spec.contains(target.full_version, prereleases=True):
         raise PythonMismatchError(
             f"{source.name} needs Python {source.requires_python}, but the target is Python "
             f"{target.full_version} ({target.executable})",
@@ -343,6 +409,8 @@ def check_requires_python(source: Source, target: Target) -> None:
 
 def _suggest(spec: SpecifierSet) -> str:
     for minor in range(8, 30):
-        if spec.contains(f"3.{minor}.0") or spec.contains(f"3.{minor}.99"):
+        if spec.contains(f"3.{minor}.0", prereleases=True) or spec.contains(
+            f"3.{minor}.99", prereleases=True
+        ):
             return f"3.{minor}"
     return "<version>"

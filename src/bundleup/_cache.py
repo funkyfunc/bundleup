@@ -163,6 +163,7 @@ def clean_cache(
             continue
         held.append(lock)
         doomed += [unpacked.path, *_bytecode_copies(unpacked.path)]
+    doomed_set = set(doomed)
     for root in cache_roots():
         with contextlib.suppress(OSError):
             for entry in os.scandir(root):
@@ -174,8 +175,13 @@ def clean_cache(
                     doomed.append(Path(entry.path))
                 elif entry.name.startswith(".lock-"):
                     unpacked = root / entry.name[len(".lock-") :]
-                    if unpacked in doomed or (not unpacked.exists() and age > LEFTOVER_AGE):
+                    if unpacked in doomed_set:
                         doomed.append(Path(entry.path))
+                    elif not unpacked.exists() and age > LEFTOVER_AGE:
+                        lock = _claim(unpacked)
+                        if lock is not None:
+                            held.append(lock)
+                            doomed.append(Path(entry.path))
     if build:  # bytecode, Pythons installed to check code (ADR-0035), executables' parts (0047)
         builds = [
             _bytecode.cache_dir(),

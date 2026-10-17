@@ -226,7 +226,7 @@ def _legacy_name(path: Path) -> str:
     """A setuptools project's name: setup.cfg's [metadata], a literal in setup.py, or the folder."""
     import configparser
 
-    cfg = configparser.ConfigParser()
+    cfg = configparser.RawConfigParser()
     try:
         cfg.read(path / "setup.cfg", encoding="utf-8-sig")
         if cfg.has_option("metadata", "name"):
@@ -346,6 +346,7 @@ def _git_files(folder: Path) -> set[str] | None:
     """The files under `folder` git tracks or would (not ignored), relative to it; None outside a
     git work tree or without git."""
     import subprocess
+    import unicodedata
 
     try:
         done = subprocess.run(
@@ -358,7 +359,13 @@ def _git_files(folder: Path) -> set[str] | None:
         return None
     if done.returncode:
         return None
-    return {name for name in done.stdout.decode("utf-8", "replace").split("\0") if name}
+    found: set[str] = set()
+    for name in done.stdout.decode("utf-8", "replace").split("\0"):
+        if name:
+            found.add(name)
+            found.add(unicodedata.normalize("NFC", name))
+            found.add(unicodedata.normalize("NFD", name))
+    return found
 
 
 # Files that usually hold secrets: a folder app shouldn't ship them without the author noticing.

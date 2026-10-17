@@ -194,3 +194,138 @@ def test_eleventh_review_oldest_python_floor_aliases_entry_and_smoke(tmp_path: P
 
     assert _cache.UNPACKED.fullmatch(".tmp-0123456789abcdef") is None
     assert _cache.UNPACKED.fullmatch("app-0123456789abcdef") is not None
+
+
+def test_phase3_platform_levels_prerelease_python_runtime_and_cli(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Phase 3 audit regressions: Platform.accepts() enforces target glibc/musl/macOS level,
+    uppercase tags in _levels(), invalid MACOSX_DEPLOYMENT_TARGET ignored, pre-release Python
+    versions accepted by check_requires_python(), non-JSON python probe raises ProjectError,
+    _runtime preserves _HOST_TAIL across module reloads and tracks sys.path[0] .pth insertions,
+    _runtime.deactivate cleans child env, and _cli handles BrokenPipeError and whitespace env."""
+    import sys
+
+    from bundleup import _cli, _loader, _python, _runtime
+    from bundleup._errors import ExitCode, ProjectError
+
+    # 1. Platform.accepts() rejects wheels whose glibc/musl/macOS requirement exceeds target level
+    assert parse("x86_64-manylinux_2_17").accepts("cp312-cp312-manylinux_2_28_x86_64") is False
+    assert parse("x86_64-manylinux_2_28").accepts("cp312-cp312-manylinux_2_17_x86_64") is True
+    assert (
+        parse("x86_64-manylinux_2_17").accepts(
+            "cp312-cp312-manylinux_2_17_x86_64.manylinux_2_28_x86_64"
+        )
+        is True
+    )
+    assert parse("x86_64-musllinux_1_1").accepts("cp312-cp312-musllinux_1_2_x86_64") is False
+    assert parse("x86_64-musllinux_1_2").accepts("cp312-cp312-musllinux_1_1_x86_64") is True
+    assert p._levels("CP312-CP312-MANYLINUX_2_28_X86_64") == {"manylinux": (2, 28)}
+
+    monkeypatch.setenv("MACOSX_DEPLOYMENT_TARGET", "9.0")
+    assert p._level("aarch64-apple-darwin") == (13, 0)
+    monkeypatch.setenv("MACOSX_DEPLOYMENT_TARGET", "-1.0")
+    assert p._level("aarch64-apple-darwin") == (13, 0)
+    monkeypatch.delenv("MACOSX_DEPLOYMENT_TARGET", raising=False)
+
+    # 2. Pre-release Python accepted by check_requires_python; non-JSON probe raises ProjectError
+    from bundleup._source import Source
+
+    src = Source(tmp_path, "app", ">=3.9", is_script=False)
+    pre_target = _python.Target(
+        executable=sys.executable,
+        version=(3, 14),
+        full_version="3.14.0a1",
+        platform="linux",
+        machine="x86_64",
+        abiflags="",
+        implementation="cpython",
+        cache_tag="cpython-314",
+        markers={},
+    )
+    _python.check_requires_python(src, pre_target)
+
+    fake_py = tmp_path / ("fake_py.bat" if sys.platform == "win32" else "fake_py")
+    fake_py.write_text(
+        "@echo not-json\n" if sys.platform == "win32" else "#!/bin/sh\necho not-json\n"
+    )
+    fake_py.chmod(0o755)
+    with pytest.raises(ProjectError, match="isn't a working Python 3 interpreter"):
+        _python.find_python(
+            "uv", src, request=str(fake_py), python_platform=None, progress=lambda _: None
+        )
+
+    # 3. _loader._prune ignores non-hex or uppercase 16-char suffixes
+    cache_root = tmp_path / "loader_cache"
+    cache_root.mkdir()
+    upper_dir = cache_root / "app-0123456789ABCDEF"
+    upper_dir.mkdir()
+    old_time = 1000.0
+    import os
+
+    os.utime(upper_dir, (old_time, old_time))
+    monkeypatch.setattr(_loader, "NAME", "app")
+    _loader._prune(str(cache_root))
+    assert upper_dir.exists()
+
+    # 4. _runtime: _is_py_bundle with >128B shebang, sys.path[0] .pth insertion, _HOST_TAIL reload,
+    # and deactivate()
+    long_shebang_bundle = tmp_path / "long_bundle.py"
+    long_shebang_bundle.write_bytes(
+        b"#!" + b"/nix/store/" + b"a" * 180 + b"/bin/python3\n# /// bundleup\n"
+    )
+    assert _runtime._is_py_bundle(str(long_shebang_bundle)) is True
+
+    stdlib_dir = os.path.dirname(os.__file__)
+    host_sp = tmp_path / "host-site-packages"
+    host_sp.mkdir()
+    site_a = tmp_path / "site_a"
+    site_a.mkdir()
+    front_dir = site_a / "front_pth"
+    front_dir.mkdir()
+    (site_a / "front.pth").write_text(f"import sys; sys.path.insert(0, {str(front_dir)!r})\n")
+    site_b = tmp_path / "site_b"
+    site_b.mkdir()
+
+    monkeypatch.setattr(sys, "path", [stdlib_dir, str(host_sp)])
+    monkeypatch.setattr(_runtime, "_HOST_TAIL", None)
+    monkeypatch.delitem(sys.__dict__, "_bundleup_host_tail", raising=False)
+    monkeypatch.delenv("BUNDLEUP_RUNTIME_SITE", raising=False)
+    monkeypatch.delenv("BUNDLEUP_RUNTIME_PATHS", raising=False)
+    monkeypatch.delenv("BUNDLEUP_RUNTIME_INHERIT", raising=False)
+    monkeypatch.delenv("BUNDLEUP_INHERIT_PATH", raising=False)
+
+    _runtime.activate(str(site_a), ["front.pth"])
+    assert str(front_dir) in os.environ["BUNDLEUP_RUNTIME_PATHS"].split(os.pathsep)
+    assert str(host_sp) not in sys.path
+
+    # Simulate reloading _bundleup_runtime in child bundle_b that needs host packages (--external)
+    monkeypatch.setattr(_runtime, "_HOST_TAIL", None)
+    monkeypatch.setenv("BUNDLEUP_RUNTIME_INHERIT", str(site_b))
+    _runtime.activate(str(site_b), [])
+    assert str(front_dir) not in sys.path
+    assert str(site_a) not in sys.path
+    assert str(site_b) in sys.path
+    assert str(host_sp) in sys.path
+
+    shim_b = os.path.join(str(site_b), _runtime.SHIM)
+    monkeypatch.setenv("PYTHONPATH", os.pathsep.join([shim_b, "/custom/pp"]))
+    _runtime.deactivate(shim_b)
+    assert os.environ.get("PYTHONPATH") == "/custom/pp"
+    assert _runtime.ENV_SITE not in os.environ
+
+    # 5. _cli: whitespace env vars, overly long path tokens, and BrokenPipeError
+    monkeypatch.setenv("BUNDLEUP_MAX_SIZE", "   ")
+    monkeypatch.setenv("BUNDLEUP_SPLIT", "   ")
+    monkeypatch.setenv("BUNDLEUP_OUTPUT", "   ")
+    monkeypatch.setenv("BUNDLEUP_ENTRY", "   ")
+    long_token = "a" * 2000
+    assert _cli._looks_like_path(long_token) is False
+    assert _cli._is_project_or_pep723(long_token) is False
+    assert _cli._usage_error("invalid choice", [long_token]) == ExitCode.USAGE_ERROR
+
+    def raise_broken_pipe(_opts: object) -> ExitCode:
+        raise BrokenPipeError
+
+    monkeypatch.setattr(_cli, "_run_cache", raise_broken_pipe)
+    assert _cli.main(["cache", "list"]) == ExitCode.OK

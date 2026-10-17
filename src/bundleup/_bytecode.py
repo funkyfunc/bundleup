@@ -35,7 +35,7 @@ args = [
     [os.path.dirname(f) for f in files],
 ]
 n = len(files)
-rest = [[False] * n, [None] * n, [2] * n, [False] * n, [-1] * n, [mode] * n]
+rest = [[True] * n, [None] * n, [2] * n, [False] * n, [-1] * n, [mode] * n]
 if workers == 1:
     list(map(compileall.compile_file, *args, *rest))
 else:
@@ -133,8 +133,11 @@ def _restore(dist: Distribution, cache: Path, site: Path) -> bool:
     cached = cache / dist.key
     if not cached.is_dir():
         return False
+    files = walk_files(cached)
+    if dist.sources and not files:
+        return False
     made: set[str] = set()
-    for rel, source in walk_files(cached):
+    for rel, source in files:
         target = os.path.join(site, rel)
         parent = os.path.dirname(target)
         if parent not in made:
@@ -156,6 +159,8 @@ def _restore(dist: Distribution, cache: Path, site: Path) -> bool:
                 shutil.copyfile(source, target)
             except OSError:
                 return False
+        except OSError:
+            return False
     return True
 
 
@@ -164,9 +169,10 @@ def _store(dist: Distribution, cache: Path, site: Path, cache_tag: str) -> None:
     final = cache / dist.key
     if final.exists():
         return
-    cache.mkdir(parents=True, exist_ok=True)
-    tmp = Path(tempfile.mkdtemp(prefix=f".{dist.key}-", dir=cache))
+    tmp: Path | None = None
     try:
+        cache.mkdir(parents=True, exist_ok=True)
+        tmp = Path(tempfile.mkdtemp(prefix=f".{dist.key}-", dir=cache))
         for source in dist.sources:
             pyc = pyc_path(source, cache_tag)
             if (site / pyc).is_file():
@@ -174,7 +180,8 @@ def _store(dist: Distribution, cache: Path, site: Path, cache_tag: str) -> None:
                 shutil.copyfile(site / pyc, tmp / pyc)
         tmp.rename(final)
     except OSError:
-        shutil.rmtree(tmp, ignore_errors=True)  # someone else stored it first, or no space
+        if tmp is not None:
+            shutil.rmtree(tmp, ignore_errors=True)  # someone else stored it first, or no space
 
 
 def precompile(
@@ -200,8 +207,10 @@ def precompile(
     covered = {source for dist in dists for source in dist.sources}
     extra = _extra_distribution(site, covered, python_identity=python_identity)
     all_dists = [*dists, extra] if extra is not None else dists
-    restored = [dist for dist in all_dists if _restore(dist, cache, site)]
-    fresh = [dist for dist in all_dists if dist not in restored]
+    restored: list[Distribution] = []
+    fresh: list[Distribution] = []
+    for dist in all_dists:
+        (restored if _restore(dist, cache, site) else fresh).append(dist)
     todo = [source for dist in fresh for source in dist.sources]
     if todo:
         for rel_dir in {os.path.dirname(s) for s in todo}:

@@ -12,7 +12,7 @@ import functools
 from dataclasses import dataclass
 from typing import Any
 
-from packaging.markers import Marker
+from packaging.markers import InvalidMarker, Marker, UndefinedEnvironmentName
 from packaging.tags import Tag
 from packaging.utils import InvalidWheelFilename, canonicalize_name, parse_wheel_filename
 
@@ -55,9 +55,9 @@ def _wheel_tags(package: Package) -> list[frozenset[Tag]]:
     for wheel in wheels:
         if not isinstance(wheel, dict):
             continue
-        name = (
-            wheel.get("name") or str(wheel.get("url") or wheel.get("path") or "").rsplit("/", 1)[-1]
-        )
+        raw_url = str(wheel.get("url") or wheel.get("path") or "")
+        fallback = raw_url.split("?", 1)[0].split("#", 1)[0].replace("\\", "/").rsplit("/", 1)[-1]
+        name = str(wheel.get("name") or fallback)
         try:
             found.append(parse_wheel_filename(name)[3])
         except InvalidWheelFilename:
@@ -75,7 +75,12 @@ def _parsed_packages(pylock: str) -> tuple[_ParsedPackage, ...]:
         if not isinstance(package, dict) or not isinstance(package.get("name"), str):
             continue
         raw_marker = package.get("marker")
-        marker = Marker(raw_marker) if isinstance(raw_marker, str) else None
+        marker: Marker | None = None
+        if isinstance(raw_marker, str):
+            try:
+                marker = Marker(raw_marker)
+            except InvalidMarker:
+                marker = None
         from_source = any(key in package for key in ("directory", "vcs", "archive"))
         version = package.get("version")
         parsed.append(
@@ -90,21 +95,43 @@ def _parsed_packages(pylock: str) -> tuple[_ParsedPackage, ...]:
     return tuple(parsed)
 
 
-def gaps(pylock: str, platform: Platform, python: tuple[int, int]) -> list[Gap]:
+def gaps(
+    pylock: str,
+    platform: Platform,
+    python: tuple[int, int],
+    *,
+    abiflags: str = "",
+) -> list[Gap]:
     """Every locked package that applies to this target and has no wheel it can install."""
-    supported = platform.supported_tags(python)
-    environment = platform.markers(python_full_version=f"{python[0]}.{python[1]}.0")
+    supported = platform.supported_tags(python, abiflags=abiflags)
+    environment: dict[str, Any] = {
+        "extra": "",
+        "extras": set(),
+        "dependency_groups": set(),
+        **platform.markers(python_full_version=f"{python[0]}.{python[1]}.0"),
+    }
     grouped: dict[str, list[_ParsedPackage]] = {}
     for pkg in _parsed_packages(pylock):
-        if pkg.marker is not None and not pkg.marker.evaluate(environment):
-            continue
+        if pkg.marker is not None:
+            try:
+                if not pkg.marker.evaluate(environment):
+                    continue
+            except UndefinedEnvironmentName:
+                continue
         grouped.setdefault(pkg.name, []).append(pkg)
     found = []
     for name, entries in grouped.items():
         if any(e.from_source for e in entries):
             continue  # a local project or a URL: built here from source
         tags = [t for e in entries for t in e.tags]
-        if tags and any(t & supported for t in tags):
+        if tags and (
+            any(t & supported for t in tags)
+            or any(
+                platform.accepts(str(tag), python=python, abiflags=abiflags)
+                for t in tags
+                for tag in t
+            )
+        ):
             continue
         every = sorted({tag.platform for t in tags for tag in t})
         words = TAG_OS[platform.sys_platform]  # the same OS's wheels are the useful ones to show
@@ -123,7 +150,9 @@ def gaps(pylock: str, platform: Platform, python: tuple[int, int]) -> list[Gap]:
     return found
 
 
-def suggestion(found: list[Gap], platform: Platform, pylock: str) -> str | None:
+def suggestion(
+    found: list[Gap], platform: Platform, pylock: str, *, abiflags: str = ""
+) -> str | None:
     """A platform name for the same OS and CPU under which every gap has a wheel, if one exists
     (on Linux: a newer manylinux level), else None."""
     hard = [g for g in found if not g.source_only]
@@ -134,7 +163,7 @@ def suggestion(found: list[Gap], platform: Platform, pylock: str) -> str | None:
         if level <= current:
             continue
         candidate = parse(f"{platform.arch}-manylinux_{level[0]}_{level[1]}")
-        still = {g.package for g in gaps(pylock, candidate, hard[0].python)}
+        still = {g.package for g in gaps(pylock, candidate, hard[0].python, abiflags=abiflags)}
         if not any(g.package in still for g in hard):
             return candidate.name
     return None

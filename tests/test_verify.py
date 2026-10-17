@@ -328,3 +328,129 @@ def test_eleventh_review_corrupted_deflate_and_malformed_manifest_types(
             zf.writestr("manifest.json", bad_json)
         with pytest.raises(NotABundleError, match="incomplete"):
             v.verify(bad_zip)
+
+
+def test_phase3_exe_trailer_precompiled_and_verify_exe(tmp_path: Path, monkeypatch: object) -> None:
+    """Phase 3 audit: `_exe._jump_trailer` rejects short/corrupt jump binaries, `_exe.precompiled`
+    rejects corrupt cached tarballs and normalizes read-only directory entries with trailing
+    slashes, and `_verify._check_exe` detects trailing garbage between the embedded .pyz EOCD
+    and the scie trailer."""
+    import hashlib
+    import io
+    import json
+    import struct
+    import sys
+    import tarfile
+    import zipfile
+
+    import pytest
+
+    from bundleup import BuildOptions, _exe, _python, build
+    from bundleup._errors import BundleupError
+
+    assert isinstance(monkeypatch, pytest.MonkeyPatch)
+
+    # 1. _jump_trailer rejects short or invalid UTF-8 jump files
+    short_jump = tmp_path / "short_jump"
+    short_jump.write_bytes(b"short")
+    with pytest.raises(BundleupError, match="isn't a scie-jump launcher"):
+        _exe._jump_trailer(short_jump)
+    bad_utf8 = tmp_path / "bad_utf8_jump"
+    bad_utf8.write_bytes(
+        b"x" * 20 + b"\xff\xff\xff\xff" + struct.pack("<BII", 4, 33, _exe.JUMP_MAGIC)
+    )
+    with pytest.raises(BundleupError, match="isn't a scie-jump launcher"):
+        _exe._jump_trailer(bad_utf8)
+
+    # 2. precompiled() rejects corrupt tarballs, fixes 0o555 dir modes, and deduplicates dir/
+    ver = sys.version_info[:2]
+    target = _python.Target(
+        executable=sys.executable,
+        version=ver,
+        full_version=f"{ver[0]}.{ver[1]}.0",
+        platform="linux",
+        machine="x86_64",
+        abiflags="",
+        implementation="cpython",
+        cache_tag=sys.implementation.cache_tag,
+        markers={},
+    )
+    corrupt_tar = tmp_path / "corrupt.tar.gz"
+    corrupt_tar.write_bytes(b"not a gzip archive")
+    stage = tmp_path / "stage"
+    stage.mkdir()
+    with pytest.raises(BundleupError, match="corrupted"):
+        _exe.precompiled(corrupt_tar, target, stage)
+
+    valid_tar = tmp_path / "valid.tar.gz"
+    lib_dir = f"python/lib/python{ver[0]}.{ver[1]}/"
+    with tarfile.open(valid_tar, "w:gz") as tf:
+        for dname in ("python/", "python/lib/", lib_dir):
+            ti = tarfile.TarInfo(dname)
+            ti.type = tarfile.DIRTYPE
+            ti.mode = 0o555
+            tf.addfile(ti)
+        fi = tarfile.TarInfo(f"{lib_dir}os.py")
+        data = b"x = 1\n"
+        fi.size = len(data)
+        fi.mode = 0o444
+        tf.addfile(fi, io.BytesIO(data))
+    out_tar = _exe.precompiled(valid_tar, target, stage)
+    with tarfile.open(out_tar, "r:gz") as tf:
+        members = tf.getmembers()
+        dir_modes = [m.mode for m in members if m.isdir()]
+        assert all(m & 0o700 == 0o700 for m in dir_modes)
+        names = [m.name.rstrip("/") for m in members]
+        assert len(names) == len(set(names))
+
+    # 3. _check_exe detects trailing bytes appended after app.pyz EOCD before the scie trailer
+    script = tmp_path / "app.py"
+    script.write_text("# /// script\n# dependencies = []\n# ///\nprint('ok')\n")
+    pyz = build(BuildOptions(path=script, output=tmp_path / "app.pyz")).output
+    pyz_bytes = pyz.read_bytes()
+    jump = b"\x7fELF" + b"\x00" * 16 + b"1.9.0" + struct.pack("<BII", 5, 34, _exe.JUMP_MAGIC)
+    jump_digest = hashlib.sha256(jump).hexdigest()
+    monkeypatch.setitem(_exe.JUMPS, ("linux", "x86_64"), ("scie-jump-linux-x86_64", jump_digest))
+    py_tar = b"fake-python-tar"
+    app_with_junk = pyz_bytes + b"SMUGGLED_GARBAGE"
+    lift = {
+        "scie": {
+            "jump": {
+                "size": len(jump),
+                "version": "1.9.0",
+                "hash": jump_digest,
+            },
+            "lift": {
+                "name": "app",
+                "files": [
+                    {
+                        "name": "python.tar.gz",
+                        "key": "python",
+                        "size": len(py_tar),
+                        "hash": hashlib.sha256(py_tar).hexdigest(),
+                    },
+                    {
+                        "name": "app.pyz",
+                        "key": "app",
+                        "size": len(app_with_junk),
+                        "hash": hashlib.sha256(app_with_junk).hexdigest(),
+                    },
+                ],
+                "boot": {
+                    "commands": {
+                        "": {
+                            "exe": "{python}/python/bin/python3",
+                            "args": ["{app}"],
+                            "env": v.EXPECTED_EXE_ENV,
+                        }
+                    }
+                },
+            },
+        }
+    }
+    fake_exe = tmp_path / "fake_exe"
+    fake_exe.write_bytes(jump + py_tar + app_with_junk + b"\n" + json.dumps(lift).encode() + b"\n")
+    with zipfile.ZipFile(fake_exe) as outer:
+        assert v._check_exe(fake_exe, outer) == [
+            "corrupted: fake_exe has trailing data after the zip archive"
+        ]
