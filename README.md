@@ -11,11 +11,19 @@ And it tells you *before* you ship what won't survive the trip.
 
 Dead simple to use, but also powerful and fast: esbuild's experience, for Python.
 
-> **Status: alpha (0.2.0).** Builds for this machine or another platform (Linux, macOS, Windows;
+> **Status: alpha (0.2.1).** Builds for this machine or another platform (Linux, macOS, Windows;
 > x86_64 and arm64), passes the [gauntlet](https://github.com/funkyfunc/bundleup/blob/main/gauntlet/README.md)
 > on all four in CI, and the own test suites of click, packaging, markupsafe and itsdangerous give
-> the same results from a bundle as from a venv (nightly). Try it without installing via
-> `uvx bundleup build`, or install with `uv tool install bundleup` / `pip install bundleup`.
+> the same results from a bundle as from a venv (nightly).
+
+## Install
+
+```bash
+uvx bundleup build              # run directly without installing
+uv tool install bundleup        # install as a global CLI tool with uv
+pipx install bundleup           # or with pipx
+pip install bundleup            # or into an environment (CLI + Python API)
+```
 
 ## Usage
 
@@ -88,6 +96,9 @@ See [docs/vision.md](https://github.com/funkyfunc/bundleup/blob/main/docs/vision
 
 ## Where to start reading
 
+- [docs/recipes.md](https://github.com/funkyfunc/bundleup/blob/main/docs/recipes.md): copy-paste recipes for Claude Skills, AWS Lambda, Docker, host apps, CI and air-gapped servers
+- [docs/cli-reference.md](https://github.com/funkyfunc/bundleup/blob/main/docs/cli-reference.md): every command, flag, environment variable, `[tool.bundleup]` key, exit code and diagnostic code
+- [CHANGELOG.md](https://github.com/funkyfunc/bundleup/blob/main/CHANGELOG.md): what shipped in each release
 - [MISSION.md](https://github.com/funkyfunc/bundleup/blob/main/MISSION.md): goal, scope, what "done" means
 - [docs/vision.md](https://github.com/funkyfunc/bundleup/blob/main/docs/vision.md): where bundleup fits and who it's for
 - [docs/roadmap.md](https://github.com/funkyfunc/bundleup/blob/main/docs/roadmap.md): where it could go next

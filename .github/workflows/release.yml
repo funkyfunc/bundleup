@@ -32,10 +32,27 @@ jobs:
     environment: pypi
     permissions:
       id-token: write # trusted publishing
+      contents: write # GitHub Release
     steps:
+      - uses: actions/checkout@v7
       - uses: actions/download-artifact@v8
         with:
           name: dist
           path: dist
       - uses: astral-sh/setup-uv@v10.2.0
       - run: uv publish --trusted-publishing always
+      - name: Create GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python3 -c '
+          import os, re, subprocess
+          from pathlib import Path
+          tag = os.environ["GITHUB_REF_NAME"]
+          ver = re.escape(tag.removeprefix("v"))
+          text = Path("CHANGELOG.md").read_text(encoding="utf-8")
+          m = re.search(rf"(?ms)^## {ver} \([^\n]+\)\n+(.*?)(?=^## |\Z)", text)
+          notes = m.group(1).strip() if m else f"Release {tag}"
+          dists = [str(p) for p in sorted(Path("dist").glob("*")) if p.is_file()]
+          subprocess.run(["gh", "release", "create", tag, *dists, "--title", tag, "--notes", notes], check=True)
+          '

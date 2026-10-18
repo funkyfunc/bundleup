@@ -7,15 +7,23 @@ license = "MIT"
 license-files = ["LICENSE"]
 requires-python = ">=3.9"
 authors = [{ name = "funkyfunc" }]
-keywords = ["bundler", "pyz", "zipapp", "packaging", "distribution", "cli"]
+keywords = ["bundler", "pyz", "zipapp", "packaging", "distribution", "cli", "uv", "pep-723", "executable", "serverless"]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Environment :: Console",
     "Intended Audience :: Developers",
     "Operating System :: OS Independent",
     "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3 :: Only",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Topic :: Software Development :: Build Tools",
     "Topic :: System :: Software Distribution",
+    "Typing :: Typed",
 ]
 dependencies = [
     "packaging>=23",
@@ -25,8 +33,10 @@ dependencies = [
 
 [project.urls]
 Homepage = "https://github.com/funkyfunc/bundleup"
+Documentation = "https://github.com/funkyfunc/bundleup/blob/main/docs/cli-reference.md"
 Repository = "https://github.com/funkyfunc/bundleup"
 Issues = "https://github.com/funkyfunc/bundleup/issues"
+Changelog = "https://github.com/funkyfunc/bundleup/blob/main/CHANGELOG.md"
 
 [project.scripts]
 bundleup = "bundleup._cli:main"
