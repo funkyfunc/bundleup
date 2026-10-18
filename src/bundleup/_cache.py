@@ -84,10 +84,14 @@ def _bytecode_copies(path: Path) -> list[Path]:
     """The same bundle's bytecode under each known pycache_prefix, if any exists."""
     prefixes = list(PYCACHE_PREFIXES)
     own = getattr(sys, "pycache_prefix", None)  # this Python's, if it has one
-    if own:
+    if own and Path(own) not in prefixes:
         prefixes.append(Path(own))
     relative = os.path.splitdrive(str(path))[1].lstrip("\\/")
-    return [prefix / relative for prefix in prefixes if (prefix / relative).is_dir()]
+    return [
+        prefix / relative
+        for prefix in prefixes
+        if (prefix / relative).is_dir() and not (prefix / relative).is_symlink()
+    ]
 
 
 def _size(path: Path) -> int:
@@ -101,6 +105,9 @@ def _size(path: Path) -> int:
 # How the loader names an unpacked bundle: "<name>-<first 16 hex digits of the payload's hash>".
 # Anything else in a cache root (`build/`, `.tmp-`, `.lock-`) is left alone.
 UNPACKED = re.compile(r"(?P<name>[^.].*)-[0-9a-f]{16}")
+TMP_UNPACKED = re.compile(
+    r"\.tmp-(?P<unpacked>[^.].*-[0-9a-f]{16})-\d+-[0-9a-f]{8}(?:-(?:pruned|clean))?"
+)
 
 
 def list_cache() -> list[CachedBundle]:
@@ -161,9 +168,17 @@ def clean_cache(
         if lock is None:
             busy.append(unpacked.path)  # a running bundle holds it (the loader's _hold)
             continue
+        try:
+            if now - unpacked.path.stat().st_mtime <= older_than_days * DAY:
+                lock.close()
+                continue
+        except OSError:
+            lock.close()
+            continue
         held.append(lock)
         doomed += [unpacked.path, *_bytecode_copies(unpacked.path)]
     doomed_set = set(doomed)
+    claimed = set(doomed_set)
     for root in cache_roots():
         with contextlib.suppress(OSError):
             for entry in os.scandir(root):
@@ -171,17 +186,38 @@ def clean_cache(
                     age = now - entry.stat(follow_symlinks=False).st_mtime
                 except OSError:
                     continue
+                candidate = Path(entry.path)
+                if candidate in doomed_set:
+                    continue
                 if entry.name.startswith(".tmp-") and age > LEFTOVER_AGE:
-                    doomed.append(Path(entry.path))
+                    m = TMP_UNPACKED.fullmatch(entry.name)
+                    if m is not None:
+                        unpacked = root / m["unpacked"]
+                        if unpacked not in claimed:
+                            lock = _claim(unpacked)
+                            if lock is None:
+                                continue
+                            held.append(lock)
+                            claimed.add(unpacked)
+                    doomed.append(candidate)
+                    doomed_set.add(candidate)
                 elif entry.name.startswith(".lock-"):
                     unpacked = root / entry.name[len(".lock-") :]
                     if unpacked in doomed_set:
-                        doomed.append(Path(entry.path))
-                    elif not unpacked.exists() and age > LEFTOVER_AGE:
-                        lock = _claim(unpacked)
-                        if lock is not None:
+                        doomed.append(candidate)
+                        doomed_set.add(candidate)
+                    elif not unpacked.exists() and not unpacked.is_symlink() and age > LEFTOVER_AGE:
+                        if unpacked not in claimed:
+                            lock = _claim(unpacked)
+                            if lock is None:
+                                continue
+                            if unpacked.exists() or unpacked.is_symlink():
+                                lock.close()
+                                continue
                             held.append(lock)
-                            doomed.append(Path(entry.path))
+                            claimed.add(unpacked)
+                        doomed.append(candidate)
+                        doomed_set.add(candidate)
     if build:  # bytecode, Pythons installed to check code (ADR-0035), executables' parts (0047)
         builds = [
             _bytecode.cache_dir(),
@@ -189,7 +225,10 @@ def clean_cache(
             _bytecode.cache_dir().parent / "pythons",
             _bytecode.cache_dir().parent / "exe",
         ]
-        doomed += [path for path in builds if path.exists()]
+        for path in builds:
+            if path.exists() and path not in doomed_set:
+                doomed.append(path)
+                doomed_set.add(path)
     freed = 0
     for p in doomed:
         with contextlib.suppress(OSError):
@@ -197,7 +236,11 @@ def clean_cache(
             freed += _size(p) if is_dir else p.lstat().st_size
     if not dry_run:
         for path in doomed:
-            if path.is_dir() and not path.is_symlink():
+            try:
+                is_dir = path.is_dir() and not path.is_symlink()
+            except OSError:
+                is_dir = False
+            if is_dir:
                 if path.name.startswith(".tmp-"):
                     tmp = path
                 else:
@@ -206,11 +249,14 @@ def clean_cache(
                     )
                     try:
                         path.replace(tmp)
+                        with contextlib.suppress(OSError):
+                            os.utime(tmp, None)
                     except OSError:
                         tmp = path
                 _loader._rmtree(str(tmp))
             else:
-                path.unlink(missing_ok=True)
+                with contextlib.suppress(OSError):
+                    path.unlink(missing_ok=True)
     for lock in held:
         lock.close()
     return CleanReport(sorted(doomed), freed, dry_run, sorted(busy))

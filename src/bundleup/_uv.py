@@ -156,6 +156,14 @@ def _check_pylock_freshness(
         default_environment,
     )
     from packaging.requirements import InvalidRequirement, Requirement
+    from packaging.specifiers import InvalidSpecifier
+    from packaging.version import InvalidVersion
+
+    def _matches_spec(req: Requirement, ver: str) -> bool:
+        try:
+            return req.specifier.contains(ver, prereleases=True)
+        except (InvalidSpecifier, InvalidVersion):
+            return True
 
     env: dict[str, Any] = {
         **(markers or {k: str(v) for k, v in default_environment().items()}),
@@ -204,17 +212,54 @@ def _check_pylock_freshness(
                 detail=f"pyproject.toml requires {req}, which is missing from pylock.toml",
             )
         versions = [v for v in locked[canon] if isinstance(v, str)]
-        if (
-            versions
-            and req.specifier
-            and not any(req.specifier.contains(v, prereleases=True) for v in versions)
-        ):
+        if versions and req.specifier and not any(_matches_spec(req, v) for v in versions):
             raise LockfileOutdatedError(
                 "pylock.toml is out of date with pyproject.toml",
                 hint="regenerate pylock.toml, then build again (or --frozen bundles the lock "
                 "as it is)",
                 detail=f"pyproject.toml requires {req}, but pylock.toml has {versions[-1]}",
             )
+
+
+_NETWORK_ERROR_PATTERNS = (
+    "failed to fetch",
+    "failed to download",
+    "client error (connect)",
+    "error sending request",
+    "dns error",
+    "failed to lookup address information",
+    "nodename nor servname provided",
+    "name or service not known",
+    "network is unreachable",
+    "network down",
+    "no route to host",
+    "connection refused",
+    "temporary failure in name resolution",
+    "operation timed out",
+    "connection timed out",
+)
+
+
+def _is_network_error(detail: str | None) -> bool:
+    if not detail:
+        return False
+    low = detail.lower()
+    return any(p in low for p in _NETWORK_ERROR_PATTERNS)
+
+
+def _run_with_offline_fallback(cmd: list[str], *, cwd: Path, what: str, progress: Progress) -> str:
+    try:
+        return run(cmd, cwd=cwd, what=what, progress=progress)
+    except UvError as first_err:
+        if "--offline" in cmd or not _is_network_error(first_err.detail):
+            raise
+        offline_cmd = [cmd[0], *cmd[1:2], "--offline", *cmd[2:]]
+        if cmd[1:3] in (["pip", "compile"], ["pip", "install"]):
+            offline_cmd = [cmd[0], "pip", cmd[2], "--offline", *cmd[3:]]
+        try:
+            return run(offline_cmd, cwd=cwd, what=what, progress=progress)
+        except UvError:
+            raise first_err from None
 
 
 def from_pylock(
@@ -319,7 +364,13 @@ def _export_cache_key(
         else:
             lock = find_uv_lock(source.path)
             pyproject = source.path / "pyproject.toml"
-            if lock is None or lock.parent != source.path or not pyproject.is_file():
+            if (
+                lock is None
+                or lock.parent != source.path
+                or not pyproject.is_file()
+                or (source.path / "setup.py").is_file()
+                or (source.path / "setup.cfg").is_file()
+            ):
                 return None
             manifest_bytes = pyproject.read_bytes()
             if b"workspace" in manifest_bytes or b"dynamic" in manifest_bytes:
@@ -370,7 +421,7 @@ def _strip_script_external(script_path: Path, excluded: set[str], stage: Path) -
     new_deps = f"dependencies = [{', '.join(json.dumps(x) for x in kept)}]"
     patched_toml, count = re.subn(
         r'(?ms)^dependencies\s*=\s*\[(?:[^\]"\'#]|"(?:\\.|[^"\\])*"|\'[^\']*\'|#[^\n]*)*\]',
-        new_deps,
+        lambda _: new_deps,
         toml_body,
         count=1,
     )
@@ -423,7 +474,13 @@ def export(
     if not (source.is_script and source.pep723) and not source.locked:
         # Only a requirements.txt (or an input with no dependencies) can turn out to pin
         # everything; an unlocked project can't, so --locked / --frozen refuses it before resolving.
-        can_pin = source.declared is None or source.declared.suffix == ".txt"
+        can_pin = source.declared is None or (
+            source.declared.suffix == ".txt"
+            and (
+                lock_mode not in ("locked", "frozen")
+                or pinned_requirements(source.declared, external=external)[0] is not None
+            )
+        )
         exported = None
         if can_pin or lock_mode not in ("locked", "frozen"):
             exported = resolve(
@@ -477,9 +534,16 @@ def export(
             str(pylock),
         ]
         try:
-            run(command, cwd=source.workdir, what="uv export", progress=progress)
+            _run_with_offline_fallback(
+                command, cwd=source.workdir, what="uv export", progress=progress
+            )
         except UvError as e:
-            if mode == "locked" and "needs to be updated" in (e.detail or ""):
+            detail_low = (e.detail or "").lower()
+            if mode == "locked" and (
+                "needs to be updated" in detail_low
+                or "out of date" in detail_low
+                or ("lockfile" in detail_low and "--locked" in detail_low)
+            ):
                 what = f"{source.path.name}.lock" if source.is_script else "uv.lock"
                 fix = f"uv lock --script {source.path.name}" if source.is_script else "uv lock"
                 against = "the script" if source.is_script else "pyproject.toml"
@@ -518,12 +582,20 @@ def export(
         )
     text = pylock.read_text(encoding="utf-8")
     packages = _load_pylock_packages(text, pylock)
-    installs = [["-r", str(pylock), *_refresh_local(pylock)]] if packages else []
-    if not source.is_script:
-        me = canonicalize_name(source.name)
-        if not any(canonicalize_name(str(p.get("name", ""))) == me for p in packages):
-            installs.append([str(source.path)])
-            pylock.write_text(with_project(text, source.name), encoding="utf-8")
+    lock_for_install = pylock
+    add_self = not source.is_script and not any(
+        canonicalize_name(str(p.get("name", ""))) == canonicalize_name(source.name)
+        for p in packages
+    )
+    if add_self and packages:
+        lock_for_install = stage.resolve() / "pylock.install.toml"
+        shutil.copyfile(pylock, lock_for_install)
+    installs = (
+        [["-r", str(lock_for_install), *_refresh_local(lock_for_install)]] if packages else []
+    )
+    if add_self:
+        installs.append([str(source.path), "--refresh-package", canonicalize_name(source.name)])
+        pylock.write_text(with_project(text, source.name), encoding="utf-8")
     return Exported(installs, pylock, pinned=pinned)
 
 
@@ -542,10 +614,24 @@ def _strip_pyproject_external(declared: Path, excluded: set[str], stage: Path) -
         return declared
     project = data.get("project")
     tool = data.get("tool")
+    uv_cfg = tool.get("uv") if isinstance(tool, dict) else None
+    uv_custom_resolution = isinstance(uv_cfg, dict) and bool(
+        set(uv_cfg)
+        & {
+            "sources",
+            "index",
+            "index-url",
+            "extra-index-url",
+            "find-links",
+            "constraint-dependencies",
+            "override-dependencies",
+            "build-constraint-dependencies",
+        }
+    )
     if (
         not isinstance(project, dict)
         or "dynamic" in project
-        or (isinstance(tool, dict) and ("uv" in tool or "poetry" in tool))
+        or (isinstance(tool, dict) and (uv_custom_resolution or "poetry" in tool))
     ):
         return declared
     deps = project.get("dependencies", [])
@@ -575,6 +661,28 @@ def _strip_pyproject_external(declared: Path, excluded: set[str], stage: Path) -
     return staged
 
 
+def _requirement_lines(text: str) -> list[str]:
+    """Join backslash-continued requirement lines without continuing comment lines."""
+    lines: list[str] = []
+    buf: list[str] = []
+    for raw in text.splitlines():
+        if not buf and raw.lstrip().startswith("#"):
+            continue
+        clean = re.split(r"\s+#", raw, maxsplit=1)[0].rstrip()
+        if clean.endswith("\\"):
+            buf.append(clean[:-1].rstrip() + " ")
+        else:
+            joined = ("".join(buf) + clean).strip()
+            buf.clear()
+            if joined and not joined.startswith("#"):
+                lines.append(joined)
+    if buf:
+        joined = "".join(buf).strip()
+        if joined and not joined.startswith("#"):
+            lines.append(joined)
+    return lines
+
+
 def _strip_requirements_external(declared: Path, excluded: set[str], stage: Path) -> Path | None:
     """If `declared` is a `requirements.txt` or `pyproject.toml` and lists packages in `excluded`,
     write a staged copy without them so `uv pip compile` doesn't resolve them or their transitive
@@ -587,21 +695,19 @@ def _strip_requirements_external(declared: Path, excluded: set[str], stage: Path
         return declared
     from packaging.requirements import InvalidRequirement, Requirement
 
-    text = declared.read_text(encoding="utf-8-sig").replace("\r\n", "\n").replace("\\\n", " ")
+    text = declared.read_text(encoding="utf-8-sig")
     kept: list[str] = []
     kept_reqs = 0
     removed = False
-    for raw in text.splitlines():
-        line = re.split(r"\s+#", raw, maxsplit=1)[0].strip()
-        if not line or line.startswith("#"):
-            kept.append(raw)
-            continue
+    for line in _requirement_lines(text):
         if line.startswith("-"):
-            if line.split()[0].split("=")[0] in INCLUDES:
+            opt = line.split()[0].split("=")[0]
+            if opt in INCLUDES:
                 return declared
-            kept.append(raw)
+            if opt != "--require-hashes":
+                kept.append(line)
             continue
-        spec, _, _ = line.partition(" --")
+        spec = re.split(r"\s+--", line, maxsplit=1)[0]
         try:
             req = Requirement(spec.strip())
         except InvalidRequirement:
@@ -609,7 +715,7 @@ def _strip_requirements_external(declared: Path, excluded: set[str], stage: Path
         if canonicalize_name(req.name) in excluded:
             removed = True
         else:
-            kept.append(raw)
+            kept.append(spec.strip())
             kept_reqs += 1
     if not removed:
         return declared
@@ -657,7 +763,9 @@ def resolve(
             )
             cmd = [uv, "pip", "compile", "--quiet", "--universal", "--format", "pylock.toml"]
             cmd += ["--python-version", oldest, "-o", str(resolved), str(actual_input)]
-            run(cmd, cwd=declared.parent, what="uv pip compile", progress=progress)
+            _run_with_offline_fallback(
+                cmd, cwd=declared.parent, what="uv pip compile", progress=progress
+            )
         relocate_paths(resolved, declared.parent)
     text = _strip_external(resolved.read_text(encoding="utf-8"), external)
     text = re.sub(
@@ -720,16 +828,15 @@ def pinned_requirements(
     pins: dict[str, str] = {}
     hashed = True
     had_external = False
-    text = path.read_text(encoding="utf-8-sig").replace("\r\n", "\n").replace("\\\n", " ")
-    for raw in text.splitlines():
-        line = re.split(r"\s+#", raw, maxsplit=1)[0].strip()
-        if not line or line.startswith("#"):
-            continue
+    text = path.read_text(encoding="utf-8-sig")
+    for line in _requirement_lines(text):
         if line.startswith("-"):
             if line.split()[0].split("=")[0] in INCLUDES:
                 return None, False
             continue  # --index-url and friends: where from, not which version
-        spec, _, options = line.partition(" --")
+        parts = re.split(r"\s+--", line, maxsplit=1)
+        spec = parts[0]
+        options = parts[1] if len(parts) > 1 else ""
         try:
             req = Requirement(spec.strip())
         except InvalidRequirement:
@@ -782,7 +889,7 @@ def _script_pinned(source: Source, pylock: Path, *, external: Sequence[str] = ()
 
 # A local path in uv's pylock.toml export: `directory = { path = "." }`, `path = "dist/x.whl"`.
 LOCAL_PATH = re.compile(
-    r"(?P<key>\bpath = )(?P<raw>"
+    r"(?P<key>\bpath\s*=\s*)(?P<raw>"
     r'"""(?:[^\\]|\\.)*?"""|\'\'\'[\s\S]*?\'\'\'|"(?:[^"\\]|\\.)*"|\'[^\']*\''
     r")"
 )
@@ -870,7 +977,7 @@ def install(
     try:
         with untouched(source):
             for args in reqs:
-                run(
+                _run_with_offline_fallback(
                     [uv, "pip", "install", *common, *platform, *args],
                     cwd=source.workdir,
                     what="uv pip install",

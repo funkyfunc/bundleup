@@ -277,6 +277,15 @@ def build(
             )
         p = prepared[0]
         p_diagnostics = _merged_diagnostics(prepared)
+        if options.smoke is not None and fmt in LOADED:
+            smoke_p = _smoke_target(prepared, exe=fmt == "exe")
+            if smoke_p is None:
+                p_diagnostics.append(_SMOKE_SKIPPED)
+            elif smoke_p.entry is not None and smoke_p.entry.kind == "python" and not options.smoke:
+                raise UsageError(
+                    "--smoke needs a script to run for --entry python",
+                    hint="for example: --smoke 'scripts/tool.py --help'",
+                )
         failing = [d for d in p_diagnostics if d.level == "error" or options.strict]
         if failing:
             raise CheckFailedError(
@@ -339,7 +348,9 @@ def build(
                     reach=Portability(any_os=False, any_cpu=False),
                 )
                 prepared = [p]
-            if options.smoke is not None:
+            if options.smoke is not None and not any(
+                d.code == "smoke-skipped" for d in diagnostics
+            ):
                 steps.start("smoke")
                 smoked, skipped = _smoke_run(prepared, output, options.smoke, exe=fmt == "exe")
                 diagnostics += skipped
@@ -399,7 +410,33 @@ def _combinations(options: BuildOptions) -> list[BuildOptions]:
 
 
 # CPU names as Python reports them -> as targets name them.
-CPUS = {"arm64": "aarch64", "amd64": "x86_64", "x64": "x86_64"}
+CPUS = {"arm64": "aarch64", "amd64": "x86_64", "x64": "x86_64", "x86": "i686", "i386": "i686"}
+
+_SMOKE_SKIPPED = Diagnostic(
+    "smoke-skipped",
+    "warning",
+    "--smoke: the bundle is only for other platforms, so it can't run here",
+    hint="run the smoke test on a machine it's built for (CI, say)",
+)
+
+
+def _smoke_target(prepared: list[Prepared], *, exe: bool = False) -> Prepared | None:
+    import platform
+
+    here = CPUS.get(platform.machine().lower(), platform.machine().lower())
+    for p in prepared:
+        machine = CPUS.get(p.target.machine.lower(), p.target.machine.lower())
+        same_os = (not exe and p.reach.any_os) or p.target.platform == sys.platform
+        any_cpu = not exe and (p.reach.any_cpu or not p.native)
+        needs = runtime_needs(p.site, p.target)
+        libc = needs.libc
+        plat = p.target.python_platform
+        if exe and plat and plat.sys_platform == "linux" and libc is None:
+            libc = ("musl", (1, 2)) if plat.musl else ("glibc", (2, 17))
+        fits_system = _loader._libc_fits(libc) and _loader._macos_fits(needs.macos)
+        if same_os and (any_cpu or machine == here) and fits_system:
+            return p
+    return None
 
 
 def _smoke_run(
@@ -407,40 +444,24 @@ def _smoke_run(
 ) -> tuple[SmokeResult | None, list[Diagnostic]]:
     """`--smoke`: run the bundle with the interpreter of a payload that fits this machine (the
     one the build used); a bundle only for other platforms can't run here: a warning."""
-    import platform
-
-    here = CPUS.get(platform.machine().lower(), platform.machine().lower())
-    for p in prepared:
-        machine = CPUS.get(p.target.machine.lower(), p.target.machine.lower())
-        same_os = p.reach.any_os or p.target.platform == sys.platform
-        needs = runtime_needs(p.site, p.target)
-        libc = needs.libc
-        plat = p.target.python_platform
-        if exe and plat and plat.sys_platform == "linux" and libc is None:
-            libc = ("musl", (1, 2)) if plat.musl else ("glibc", (2, 17))
-        fits_system = _loader._libc_fits(libc) and _loader._macos_fits(needs.macos)
-        if same_os and (p.reach.any_cpu or not p.native or machine == here) and fits_system:
-            if p.entry is not None and p.entry.kind == "python" and not args:
-                raise UsageError(
-                    "--smoke needs a script to run for --entry python",
-                    hint="for example: --smoke 'scripts/tool.py --help'",
-                )
-            python = None if exe else p.target.executable  # an executable runs itself
-            return _smoke.run(output, python, args or ("--help",)), []
-    return None, [
-        Diagnostic(
-            "smoke-skipped",
-            "warning",
-            "--smoke: the bundle is only for other platforms, so it can't run here",
-            hint="run the smoke test on a machine it's built for (CI, say)",
-        )
-    ]
+    p = _smoke_target(prepared, exe=exe)
+    if p is not None:
+        if p.entry is not None and p.entry.kind == "python" and not args:
+            raise UsageError(
+                "--smoke needs a script to run for --entry python",
+                hint="for example: --smoke 'scripts/tool.py --help'",
+            )
+        python = None if exe else p.target.executable  # an executable runs itself
+        return _smoke.run(output, python, args or ("--help",)), []
+    return None, [_SMOKE_SKIPPED]
 
 
 def _lowest(combinations: list[BuildOptions]) -> tuple[int, int] | None:
     """The lowest Python version asked for: input without a lock is resolved from it for every
     payload, so they all bundle the same versions (fourth review: each resolved from its own)."""
-    asked = [c.python for c in combinations if c.python and re.fullmatch(r"\d+\.\d+", c.python)]
+    asked = [
+        c.python for c in combinations if c.python and re.fullmatch(r"\d+\.\d+(?:\.\d+)?", c.python)
+    ]
     found = [(int(v.split(".")[0]), int(v.split(".")[1])) for v in asked]
     return min(found) if len(found) > 1 else None
 
@@ -449,21 +470,26 @@ def _served(prepared: list[Prepared], options: BuildOptions) -> bool:
     """Whether an already prepared pure-Python payload runs on this combination too, so it needs
     no payload of its own: its Python range covers the version and it runs on any OS (or on this
     one, any CPU)."""
+    import platform as host_plat
+
     if options.python is None and prepared:
         wanted = prepared[0].target.version
     else:
-        version = re.fullmatch(r"(\d+)\.(\d+)", options.python or "")
+        version = re.fullmatch(r"(\d+)\.(\d+)(?:\.\d+)?", options.python or "")
         if version is None:
             return False  # uv's choice or an interpreter path: can't tell before building
         wanted = (int(version[1]), int(version[2]))
     platform = _platforms.parse(options.python_platform) if options.python_platform else None
     wanted_os = platform.sys_platform if platform else sys.platform
+    raw_cpu = platform.arch if platform else host_plat.machine().lower()
+    wanted_cpu = CPUS.get(raw_cpu, raw_cpu)
     for p in prepared:
         if p.native or not p.pythons.contains(wanted):
             continue
         if p.reach.any_os:
             return True
-        if p.reach.any_cpu and wanted_os == p.target.platform:
+        p_cpu = CPUS.get(p.target.machine.lower(), p.target.machine.lower())
+        if wanted_os == p.target.platform and (p.reach.any_cpu or wanted_cpu == p_cpu):
             return True
     return False
 
@@ -549,6 +575,11 @@ def _settle(options: BuildOptions, *, for_check: bool = False) -> tuple[BuildOpt
         raise UsageError(
             "--entry python makes a .pyz, .py or executable that runs the scripts it's given",
             hint=f"drop --entry: a {options.format} output's host decides what runs",
+        )
+    if not for_check and options.smoke == () and options.entry == "python":
+        raise UsageError(
+            "--smoke needs a script to run for --entry python",
+            hint="for example: --smoke 'scripts/tool.py --help'",
         )
     if options.split is not None and (options.format or "pyz") != "pyz":
         raise UsageError(
@@ -781,7 +812,7 @@ def _prepare(
     if options.external:
         me = canonicalize_name(source.name)
         for ext in options.external:
-            if canonicalize_name(ext.split("[", 1)[0].strip()) == me:
+            if canonicalize_name(re.split(r"[<>=!~;\[\s]", ext, maxsplit=1)[0].strip()) == me:
                 raise UsageError(
                     f"--external {ext}: can't exclude {source.name} itself from the bundle",
                     hint="--external is for dependencies that the host Python already provides",
@@ -901,7 +932,7 @@ def _prepare(
         owner=site_owners,
     )
     diagnostics += narrowed
-    every_import: set[str] = set().union(*(set(names) for _shown, names, _local in imported))
+    every_import: set[str] = set().union(*(set(names) - local for _shown, names, local in imported))
     pythons, by_stdlib = _check.stdlib_range(pythons, target.version, every_import, provided)
     diagnostics += by_stdlib
     reach = portability(pylock, target=target, pythons=pythons, native=native)

@@ -180,22 +180,27 @@ def apply(options: BuildOptions, *, for_check: bool = False) -> tuple[BuildOptio
             hint = f"did you mean `{close[0]}`?" if close else f"keys: {', '.join(sorted(KEYS))}"
             raise _invalid(where, f"unknown key `{key}`", hint, key=key)
         if key == "external":
-            if isinstance(value, str) and [x.strip() for x in value.split(",") if x.strip()]:
-                items = [value]
-            elif (
-                isinstance(value, list)
-                and value
-                and all(isinstance(v, str) and v.strip() for v in value)
-            ):
-                items = value
-            else:
+            raw_items = (
+                [value]
+                if isinstance(value, str)
+                else (
+                    value
+                    if isinstance(value, list)
+                    and all(isinstance(v, str) and v.strip() for v in value)
+                    else []
+                )
+            )
+            items = [x.strip() for v in raw_items for x in v.split(",") if x.strip()]
+            if not items:
                 raise _invalid(
                     where,
                     "`external` must be a string or a list of strings",
                     f"for example: external = {_example('external')}",
                     key=key,
                 )
-            if not options.external:
+            if not options.external and not (
+                fmt_override in ("exe", "scie") and table.get("format") not in ("exe", "scie")
+            ):
                 changes["external"] = tuple(items)
                 used.append(
                     f'external = "{value}"' if isinstance(value, str) else f"external = {value}"

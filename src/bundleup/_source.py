@@ -3,6 +3,7 @@ its dependencies: a lockfile, or, without one, what declares them (ADR-0041)."""
 
 from __future__ import annotations
 
+import contextlib
 import re
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -17,7 +18,7 @@ from ._errors import ProjectError
 from ._formats import LOADED, Format
 from ._imports import code_frame, external_modules, imports_of, stdlib_ever, top_level_modules
 
-PEP723 = re.compile(r"(?m)^# /// (?P<type>[a-zA-Z0-9-]+)$\s(?P<content>(^#(| .*)$\s)+)^# ///$")
+PEP723 = re.compile(r"(?m)^# /// (?P<type>[a-zA-Z0-9-]+)$\s(?P<content>(^#(| .*)$\s)*)^# ///$")
 
 
 @dataclass(frozen=True)
@@ -111,7 +112,7 @@ def read_python_text(path: Path) -> str:
         with tokenize.open(path) as f:
             return f.read().lstrip("\ufeff")
     except (SyntaxError, LookupError, UnicodeDecodeError):
-        return path.read_text(encoding="utf-8-sig", errors="replace")
+        return path.read_text(encoding="utf-8-sig", errors="replace").replace("\r\n", "\n")
 
 
 def _toml_error(
@@ -204,6 +205,14 @@ def _load_project(path: Path, pyproject: Path) -> Source:
             f"{pyproject} has no [project] name", hint='add `name = "..."` under [project]'
         )
     name = name or _legacy_name(path)
+    deps = project.get("dependencies")
+    if deps is not None and (
+        not isinstance(deps, list) or not all(isinstance(d, str) for d in deps)
+    ):
+        raise ProjectError(
+            f"[project] dependencies in {pyproject} must be a list of strings",
+            hint='write e.g. `dependencies = ["rich>=13"]` under [project]',
+        )
     req_py = _check_requires_python(project.get("requires-python"), str(pyproject))
     # uv.lock first (it's what uv users have); a standard pylock.toml otherwise (ADR-0026).
     # Without either, the dependencies pyproject.toml declares are resolved at build time, in
@@ -252,7 +261,7 @@ def third_party_imports(path: Path, *, local: Path, external: Sequence[str] = ()
     ever = stdlib_ever()
     if ever is None:
         return []
-    files = [path] if path.is_file() else list(_app_files(path, suffix=".py"))
+    files = [path] if path.is_file() else [f for _, f in python_files(path)]
     neighbours = top_level_modules(local)
     found: set[str] = set()
     for f in files:
@@ -416,9 +425,20 @@ def _is_member(project: Path, root: Path) -> bool:
     workspace = uv_table.get("workspace") if isinstance(uv_table, dict) else None
     if not isinstance(workspace, dict):
         return False
+    proj_res = project.resolve()
+    root_res = root.resolve()
 
     def matched(key: str) -> bool:
-        return any(project.resolve() in root.glob(g) for g in workspace.get(key, []))
+        patterns = workspace.get(key, [])
+        if not isinstance(patterns, list):
+            return False
+        for g in patterns:
+            if not isinstance(g, str) or not g.strip() or Path(g).is_absolute():
+                continue
+            with contextlib.suppress(OSError, ValueError, NotImplementedError):
+                if any(p.resolve() == proj_res for p in root_res.glob(g)):
+                    return True
+        return False
 
     return matched("members") and not matched("exclude")
 
@@ -427,7 +447,7 @@ def script_metadata(
     text: str, path: Path | None = None
 ) -> dict[str, Any]:  # Any: TOML values have no fixed type
     """The PEP 723 `script` block, parsed as TOML (empty if there is none)."""
-    text = text.lstrip("\ufeff")
+    text = text.lstrip("\ufeff").replace("\r\n", "\n")
     blocks = [m for m in PEP723.finditer(text) if m.group("type") == "script"]
     if len(blocks) > 1:
         raise ProjectError("the script has more than one `# /// script` block")

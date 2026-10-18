@@ -609,6 +609,10 @@ def _prune(root: str) -> None:
                 root, ".tmp-%s-%d-%s-pruned" % (entry, os.getpid(), os.urandom(4).hex())
             )
             os.rename(path, doomed)  # out of the way first: never a half-deleted copy in place
+            try:  # noqa: SIM105
+                os.utime(doomed, None)
+            except OSError:
+                pass
             _rmtree(doomed)
             # The lock file stays: a process may have just opened it, and would then hold a lock
             # on a deleted file (sixth review). `cache clean` removes stale ones.
@@ -891,7 +895,13 @@ def _bytecode_for_here(site: str) -> None:
     (the eighth review measured compiling all 3,339 files of a payload up front: 4.7 s instead of
     0.9 to use one). Costs nothing on the warm path unless the variable is set."""
     tag = getattr(sys.implementation, "cache_tag", None)
-    if sys.dont_write_bytecode and tag and tag != TAG:
+    if (
+        sys.dont_write_bytecode
+        and tag
+        and (
+            tag != TAG or getattr(sys, "pycache_prefix", None) or getattr(sys.flags, "optimize", 0)
+        )
+    ):
         import atexit
 
         atexit.register(_cache_imported, site)
@@ -901,18 +911,26 @@ def _cache_imported(site: str) -> None:
     """Write bytecode for the imported payload modules that have none for this interpreter, where
     Python looks for it (`__spec__.cached`: honours -O and sys.pycache_prefix). Stops at the first
     write that fails: a read-only cache."""
+    import importlib.util
     import py_compile
 
     prefix = os.path.join(site, "")
     for module in list(sys.modules.values()):
         spec = getattr(module, "__spec__", None)
-        origin, cached = getattr(spec, "origin", None), getattr(spec, "cached", None)
-        if not (origin and cached and origin.startswith(prefix) and origin.endswith(".py")):
+        origin = getattr(spec, "origin", None) or getattr(module, "__file__", None)
+        if not (isinstance(origin, str) and origin.startswith(prefix) and origin.endswith(".py")):
             continue
+        cached = getattr(spec, "cached", None)
+        if not cached:
+            try:
+                cached = importlib.util.cache_from_source(origin)
+            except (NotImplementedError, ValueError):
+                continue
         if os.path.exists(cached):
             continue
         part = "%s.%d.%s.tmp" % (cached, os.getpid(), os.urandom(4).hex())
         try:
+            os.makedirs(os.path.dirname(part), exist_ok=True)
             py_compile.compile(origin, cfile=part, doraise=True)
             os.replace(part, cached)
         except OSError:

@@ -342,7 +342,7 @@ def add_pth(sitedir: str, name: str, known: "set[str]") -> None:
                 sys.stderr.write("bundleup: error in %s line %d: %r\n" % (name, number, e))
                 return
             continue
-        raw_path = _abspath(os.path.join(sitedir, line.rstrip()))
+        raw_path = _abspath(os.path.join(sitedir, line.rstrip().replace("\\", "/")))
         norm_path = os.path.normcase(raw_path)
         if norm_path not in known and os.path.exists(raw_path):
             sys.path.append(raw_path)

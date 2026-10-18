@@ -265,14 +265,18 @@ def _locate_module(
             ),
             pkg_dirs=pkg_dirs,
         )
-    in_site = any(
-        _exact_dir(r, parts[0]) is not None
+    regular_in_site = any(
+        (
+            (d := _exact_dir(r, parts[0])) is not None
+            and (_exact_file(d, "__init__.py") is not None or _has_compiled(d, "__init__"))
+        )
         or _exact_file(r, f"{parts[0]}.py") is not None
         or _has_compiled(r, parts[0])
         for r in roots
     )
-    if not in_site and parts[0] in _imports.external_modules(external):
+    if not regular_in_site and parts[0] in _imports.external_modules(external):
         return _ModuleMatch(found=True)
+    in_site = regular_in_site or any(_exact_dir(r, parts[0]) is not None for r in roots)
     py_ver = target_version or sys.version_info[:2]
     std_names = _imports.stdlib(py_ver) or set()
     host_std = _imports.stdlib(sys.version_info[:2]) or set()
@@ -525,15 +529,18 @@ def _has_attr(
         elif isinstance(node, ast.MatchMapping) and node.rest:
             defined.add(node.rest)
         elif isinstance(node, (ast.Import, ast.ImportFrom)):
+            if py_file.name == "__init__.py" and isinstance(node, ast.ImportFrom):
+                if node.level == 1 and node.module:
+                    defined.add(node.module.split(".")[0])
+                elif node.level == 0 and node.module:
+                    for prefix in prefixes:
+                        if node.module.startswith(prefix):
+                            defined.add(node.module[len(prefix) :].split(".")[0])
             for alias in node.names:
                 if alias.name == "*":
                     return True, [], []
                 defined.add(alias.asname or alias.name.split(".")[0])
-                if (
-                    isinstance(node, ast.Import)
-                    and not alias.asname
-                    and py_file.name == "__init__.py"
-                ):
+                if isinstance(node, ast.Import) and py_file.name == "__init__.py":
                     for prefix in prefixes:
                         if alias.name.startswith(prefix):
                             defined.add(alias.name[len(prefix) :].split(".")[0])
@@ -544,7 +551,9 @@ def _has_attr(
                 if isinstance(func, ast.Name)
                 else (func.attr if isinstance(func, ast.Attribute) else "")
             )
-            if name in ("globals", "vars", "setattr", "exec"):
+            if name in ("globals", "locals", "vars", "setattr", "exec") or (
+                py_file.name == "__init__.py" and name in ("import_module", "__import__")
+            ):
                 return True, [], []
     if "__getattr__" in defined:
         return True, [], []
@@ -839,7 +848,10 @@ def portability(pylock: Path, *, target: Target, pythons: PythonRange, native: b
     lock = pylock.read_text(encoding="utf-8")
     selected = set(_verify.locked_packages(lock, target.markers))
     newest = pythons.max or NEWEST_KNOWN
-    versions = {target.full_version} | {f"3.{m}.0" for m in range(pythons.min[1], newest[1] + 1)}
+    versions = {
+        target.full_version if m == target.version[1] else f"3.{m}.0"
+        for m in range(pythons.min[1], newest[1] + 1)
+    } | {target.full_version}
 
     def same(name: str) -> bool:
         platform = _platforms.parse(name)
@@ -851,7 +863,9 @@ def portability(pylock: Path, *, target: Target, pythons: PythonRange, native: b
     results = {name: same(name) for name in SURVEY}
     any_os = all(results.values())
     own = [n for n in SURVEY if _platforms.parse(n).sys_platform == target.platform]
-    return Portability(any_os=any_os, any_cpu=any_os or all(results[n] for n in own))
+    return Portability(
+        any_os=any_os, any_cpu=any_os or (bool(own) and all(results[n] for n in own))
+    )
 
 
 def python_range(

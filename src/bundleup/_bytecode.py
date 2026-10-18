@@ -131,13 +131,15 @@ def _extra_distribution(
 def _restore(dist: Distribution, cache: Path, site: Path) -> bool:
     """Copy a distribution's cached bytecode into `site`. False if there's none."""
     cached = cache / dist.key
-    if not cached.is_dir():
+    if cached.is_symlink() or not cached.is_dir():
         return False
     files = walk_files(cached)
     if dist.sources and not files:
         return False
     made: set[str] = set()
     for rel, source in files:
+        if os.path.islink(source):
+            return False
         target = os.path.join(site, rel)
         parent = os.path.dirname(target)
         if parent not in made:
@@ -161,13 +163,13 @@ def _restore(dist: Distribution, cache: Path, site: Path) -> bool:
                 return False
         except OSError:
             return False
-    return True
+    return cached.is_dir() and not cached.is_symlink()
 
 
 def _store(dist: Distribution, cache: Path, site: Path, cache_tag: str) -> None:
     """Keep a distribution's freshly compiled bytecode, atomically (parallel builds may race)."""
     final = cache / dist.key
-    if final.exists():
+    if not dist.sources or final.exists():
         return
     tmp: Path | None = None
     try:
@@ -180,8 +182,10 @@ def _store(dist: Distribution, cache: Path, site: Path, cache_tag: str) -> None:
                 shutil.copyfile(site / pyc, tmp / pyc)
         tmp.rename(final)
     except OSError:
-        if tmp is not None:
-            shutil.rmtree(tmp, ignore_errors=True)  # someone else stored it first, or no space
+        pass  # someone else stored it first, or no space
+    finally:
+        if tmp is not None and tmp.exists():
+            shutil.rmtree(tmp, ignore_errors=True)
 
 
 def precompile(

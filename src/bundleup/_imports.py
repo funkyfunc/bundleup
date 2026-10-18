@@ -105,14 +105,54 @@ def external_modules(external: Sequence[str]) -> set[str]:
             dist = importlib.metadata.distribution(pkg)
             top = dist.read_text("top_level.txt")
             if top:
-                names.update(line.strip() for line in top.splitlines() if line.strip())
-            else:
-                rec = dist.read_text("RECORD") or ""
-                for line in rec.splitlines():
-                    rel = line.split(",", 1)[0].strip()
-                    head = rel.split("/", 1)[0]
-                    if head.endswith((".dist-info", ".data", ".egg-info")) or head == "..":
-                        continue
+                for line in top.splitlines():
+                    mod = line.strip().replace("\\", "/").split("/", 1)[0]
+                    if mod.isidentifier():
+                        names.add(mod)
+            rec = dist.read_text("RECORD") or ""
+            rels = [
+                line.split(",", 1)[0].strip().strip('"').replace("\\", "/")
+                for line in rec.splitlines()
+                if line.strip()
+            ]
+            pth_prefixes: list[str] = []
+            for rel in rels:
+                if "/" not in rel and rel.endswith(".pth"):
+                    pth_text = dist.read_text(rel) or ""
+                    for pth_line in pth_text.splitlines():
+                        cleaned = pth_line.strip().replace("\\", "/").strip("/")
+                        if cleaned and not cleaned.startswith(("#", "import ", "import\t")):
+                            pth_prefixes.append(cleaned + "/")
+            for rel in sorted(rels, key=lambda r: -len(r)):
+                for prefix in sorted(pth_prefixes, key=len, reverse=True):
+                    if rel.startswith(prefix):
+                        rel = rel[len(prefix) :]
+                        break
+                head = rel.split("/", 1)[0]
+                if head.endswith((".dist-info", ".data", ".egg-info")) or head in (
+                    "..",
+                    "bin",
+                    "Scripts",
+                    "share",
+                    "include",
+                    "etc",
+                ):
+                    continue
+                is_py_mod = rel.endswith((".py", ".pyc", ".so", ".pyd")) or (
+                    ".cpython-" in rel or ".abi3." in rel
+                )
+                if not is_py_mod:
+                    continue
+                if head == "__pycache__":
+                    rest = rel.split("/", 1)[1] if "/" in rel else ""
+                    if "/" not in rest:
+                        mod = rest.split(".", 1)[0]
+                        if mod.isidentifier():
+                            names.add(mod)
+                elif "/" in rel:
+                    if head.isidentifier():
+                        names.add(head)
+                else:
                     mod = head.split(".", 1)[0]
                     if mod.isidentifier():
                         names.add(mod)
@@ -255,6 +295,12 @@ def imports_in_with_lines(tree: ast.AST) -> dict[str, int]:
                 unparsed = ast.unparse(stmt.test)
                 if any(c in unparsed for c in CONDITIONAL):
                     cur_opt = True
+            elif not cur_opt and (isinstance(stmt, ast.Try) or type(stmt).__name__ == "TryStar"):
+                handlers = getattr(stmt, "handlers", ())
+                if any(
+                    _caught(h.type) in OPTIONAL_ERRORS and _terminates(h.body) for h in handlers
+                ):
+                    cur_branch = True
 
     def record(top: str, lineno: int, optional: bool, in_branch: bool) -> None:
         if optional:
@@ -306,6 +352,22 @@ def imports_in_with_lines(tree: ast.AST) -> dict[str, int]:
             visit(test, optional, in_branch)
             visit_stmts(node.body, optional, True)
             visit_stmts(node.orelse, optional, True)
+            return
+        if type(node).__name__ == "Match":
+            subject = getattr(node, "subject", None)
+            cond_match = subject is not None and any(c in ast.unparse(subject) for c in CONDITIONAL)
+            if subject is not None:
+                visit(subject, optional, in_branch)
+            for case in getattr(node, "cases", ()):
+                guard = getattr(case, "guard", None)
+                cond_guard = guard is not None and any(c in ast.unparse(guard) for c in CONDITIONAL)
+                if guard is not None:
+                    visit(guard, optional or cond_match, True)
+                visit_stmts(
+                    getattr(case, "body", ()),
+                    optional or cond_match or cond_guard,
+                    True,
+                )
             return
         if isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
             for child in ast.iter_child_nodes(node):
@@ -414,7 +476,7 @@ def search_roots(site: Path) -> list[Path]:
             continue
         for line in text.splitlines():
             if line.strip() and not line.startswith(("#", "import ", "import\t")):
-                sub = site / line.rstrip()
+                sub = site / line.rstrip().replace("\\", "/")
                 if sub.is_dir():
                     roots.append(sub)
     return roots

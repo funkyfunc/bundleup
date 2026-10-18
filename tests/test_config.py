@@ -2445,3 +2445,489 @@ def test_phase3_reviewer_audit_regressions(tmp_path: Path, monkeypatch: pytest.M
     _runtime.activate(str(c_site), [])
     assert "pth_shared_mod" not in sys.modules
     monkeypatch.setattr(sys, "path", orig_path)
+
+
+def test_phase4_deep_reasoning_audit_regressions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Regressions for all bugs found and fixed during the Phase 4 deep-reasoning audit across
+    Tracks 1, 2, 3, and 4."""
+    import ast
+    import importlib.metadata
+    import importlib.util
+    import os
+    import sys
+
+    from bundleup import (
+        BuildOptions,
+        _build,
+        _bytecode,
+        _cache,
+        _errors,
+        _imports,
+        _loader,
+        _payload,
+        _python,
+        _runtime,
+        _source,
+        _uv,
+        build,
+    )
+
+    # Track 1: offline fallback in _uv._run_with_offline_fallback
+    calls: list[list[str]] = []
+
+    def fake_run(cmd: list[str], **_kwargs: object) -> str:
+        calls.append(cmd)
+        if "--offline" not in cmd:
+            raise _errors.UvError("uv pip compile failed", detail="Failed to fetch: dns error")
+        return "ok"
+
+    with monkeypatch.context() as mp:
+        mp.setattr(_uv, "run", fake_run)
+        res = _uv._run_with_offline_fallback(
+            ["uv", "pip", "compile", "requirements.in"],
+            cwd=tmp_path,
+            what="uv pip compile",
+            progress=lambda _msg: None,
+        )
+        assert res == "ok"
+        assert len(calls) == 2
+        assert calls[1][:4] == ["uv", "pip", "compile", "--offline"]
+
+    # Track 1: export() when source.name is not in exported packages keeps lock_for_install separate
+    proj_self = tmp_path / "self_missing_proj"
+    proj_self.mkdir()
+    (proj_self / "pyproject.toml").write_text('[project]\nname = "self-missing"\nversion = "0.1"\n')
+    (proj_self / "uv.lock").write_text('version = 1\nrequires-python = ">=3.9"\n')
+    stage_self = tmp_path / "stage_self"
+    stage_self.mkdir()
+
+    def fake_export_run(cmd: list[str], **_kwargs: object) -> str:
+        out_idx = cmd.index("-o") + 1
+        Path(cmd[out_idx]).write_text(
+            'lock-version = "1.0"\n'
+            'created-by = "uv"\n'
+            "[[packages]]\n"
+            'name = "other-pkg"\n'
+            'version = "1.0.0"\n'
+            "wheels = []\n",
+            encoding="utf-8",
+        )
+        return ""
+
+    with monkeypatch.context() as mp:
+        mp.setattr(_uv, "run", fake_export_run)
+        src_self = _source.load_source(proj_self)
+        exported_self = _uv.export(
+            "uv",
+            src_self,
+            lock_mode="locked",
+            python=(3, 12),
+            stage=stage_self,
+            progress=lambda _msg: None,
+        )
+        install_lock = Path(exported_self.installs[0][1])
+        assert install_lock.name == "pylock.install.toml"
+        assert 'path = "."' not in install_lock.read_text(encoding="utf-8")
+        assert 'path = "."' in exported_self.pylock.read_text(encoding="utf-8")
+
+    # Track 1: unpinned requirements.txt with --locked raises NoLockfileError without resolve()
+    req_unpinned = tmp_path / "unpinned_app"
+    req_unpinned.mkdir()
+    (req_unpinned / "main.py").write_text("print('hi')\n")
+    (req_unpinned / "requirements.txt").write_text("rich>=13.0\n")
+    with monkeypatch.context() as mp:
+        mp.setattr(
+            _uv,
+            "resolve",
+            lambda *_a, **_kw: (_ for _ in ()).throw(AssertionError("resolve must not run")),
+        )
+        with pytest.raises(_errors.NoLockfileError):
+            _uv.export(
+                "uv",
+                _source.load_source(req_unpinned),
+                lock_mode="locked",
+                python=(3, 12),
+                stage=tmp_path / "stage_unpinned",
+                progress=lambda _msg: None,
+            )
+
+    # Track 1: _strip_pyproject_external works when [tool.uv] has non-resolution keys,
+    # and _strip_requirements_external strips --hash from kept lines
+    pyproj_ext = tmp_path / "pyproj_ext"
+    pyproj_ext.mkdir()
+    decl_pyproj = pyproj_ext / "pyproject.toml"
+    decl_pyproj.write_text(
+        '[project]\nname = "app"\nversion = "0.1"\ndependencies = ["rich>=13", "click>=8"]\n'
+        "[tool.uv]\npackage = true\n"
+    )
+    staged_in = _uv._strip_pyproject_external(decl_pyproj, {"rich"}, pyproj_ext)
+    assert staged_in is not None and staged_in.read_text(encoding="utf-8").strip() == "click>=8"
+
+    hashed_req = pyproj_ext / "requirements.txt"
+    hashed_req.write_text(
+        "rich==13.0.0 --hash=sha256:aaaa\nclick==8.1.7 \\\n    --hash=sha256:bbbb\n"
+    )
+    staged_req = _uv._strip_requirements_external(hashed_req, {"rich"}, pyproj_ext)
+    assert (
+        staged_req is not None and staged_req.read_text(encoding="utf-8").strip() == "click==8.1.7"
+    )
+
+    # Track 1: LOCAL_PATH relocates compact `path="."` without spaces, and _strip_script_external
+    # preserves backslashes in dependency strings
+    compact_lock = pyproj_ext / "compact_pylock.toml"
+    compact_lock.write_text(
+        'lock-version = "1.0"\n[[packages]]\nname = "a"\ndirectory = {path="."}\n'
+    )
+    _uv.relocate_paths(compact_lock, tmp_path)
+    assert 'path="' in compact_lock.read_text(encoding="utf-8")
+
+    pep_script = tmp_path / "pep_bs.py"
+    pep_script.write_text(
+        '# /// script\n# dependencies = ["rich", "foo; extra == \\"bar\\""]\n# ///\nprint(1)\n'
+    )
+    staged_script = _uv._strip_script_external(pep_script, {"rich"}, pyproj_ext)
+    assert staged_script != pep_script
+    assert _source.script_metadata(staged_script.read_text(encoding="utf-8"))["dependencies"] == [
+        'foo; extra == "bar"'
+    ]
+
+    # Track 1: empty PEP 723 block, CRLF script_metadata, non-list [project] dependencies,
+    # and symlinked workspace member resolution
+    assert _source.script_metadata("# /// script\r\n# ///\r\nprint(1)\r\n") == {}
+    empty_pep = tmp_path / "empty_pep.py"
+    empty_pep.write_text("# /// script\n# ///\nprint('ok')\n")
+    assert _source.load_source(empty_pep).pep723
+
+    bad_deps_proj = tmp_path / "bad_deps_proj"
+    bad_deps_proj.mkdir()
+    (bad_deps_proj / "pyproject.toml").write_text(
+        '[project]\nname = "bad"\nversion = "0.1"\ndependencies = "not-a-list"\n'
+    )
+    with pytest.raises(_errors.ProjectError, match="dependencies"):
+        _source.load_source(bad_deps_proj)
+
+    if os.name != "nt":
+        real_ws = tmp_path / "real_ws"
+        (real_ws / "packages" / "member_a").mkdir(parents=True)
+        (real_ws / "pyproject.toml").write_text(
+            '[tool.uv.workspace]\nmembers = ["packages/*"]\nexclude = [123, "/abs/path"]\n'
+        )
+        (real_ws / "uv.lock").write_text("version = 1\n")
+        link_ws = tmp_path / "link_ws"
+        link_ws.symlink_to(real_ws)
+        assert _source.find_uv_lock(link_ws / "packages" / "member_a") is not None
+
+    # Track 2: portability() does not false-negative when target.full_version has patch > 0
+    # and lock marker uses `python_full_version >= '3.12.1'`
+    patch_pylock = tmp_path / "patch_pylock.toml"
+    patch_pylock.write_text(
+        'lock-version = "1.0"\n'
+        "[[packages]]\n"
+        'name = "pure-pkg"\n'
+        'version = "1.0.0"\n'
+        "marker = \"python_full_version >= '3.12.1'\"\n"
+        'wheels = [{ name = "pure_pkg-1.0.0-py3-none-any.whl" }]\n'
+    )
+    patch_target = _python.Target(
+        executable=sys.executable,
+        version=(3, 12),
+        full_version="3.12.3",
+        implementation="cpython",
+        platform=sys.platform,
+        machine="x86_64",
+        abiflags="",
+        cache_tag="cpython-312",
+        markers=_python._platforms.parse("x86_64-unknown-linux-gnu").markers(
+            python_full_version="3.12.3"
+        ),
+    )
+    reach = _payload.portability(
+        patch_pylock,
+        target=patch_target,
+        pythons=_python.PythonRange((3, 12), (3, 14)),
+        native=False,
+    )
+    assert reach == _python.Portability(any_os=True, any_cpu=True)
+
+    # Track 2: _lowest and _served handle 3-part versions and same-OS same-CPU pure payloads
+    c1 = BuildOptions(path=tmp_path, python="3.11.4")
+    c2 = BuildOptions(path=tmp_path, python="3.12.1")
+    assert _build._lowest([c1, c2]) == (3, 11)
+    cpu_locked_prep = _payload.Prepared(
+        source=_source.load_source(empty_pep),
+        version=None,
+        target=patch_target,
+        pylock=patch_pylock,
+        site=tmp_path,
+        packages=0,
+        native=False,
+        entry=None,
+        script=None,
+        diagnostics=[],
+        sizes=[],
+        pythons=_python.PythonRange((3, 9), None),
+        reach=_python.Portability(any_os=False, any_cpu=False),
+    )
+    assert _build._served(
+        [cpu_locked_prep],
+        BuildOptions(
+            path=tmp_path,
+            python="3.12.3",
+            python_platform="x86_64-apple-darwin"
+            if sys.platform == "darwin"
+            else "x86_64-unknown-linux-gnu",
+        ),
+    )
+
+    # Track 2: --smoke with --entry python and no args fails early in _settle before building
+    with pytest.raises(_errors.UsageError, match="--smoke needs a script"):
+        build(BuildOptions(path=empty_pep, entry="python", smoke=()))
+
+    # Track 2: _has_attr recognizes `from .sub import x` and `from pkg.sub import x` in __init__.py
+    pkg_init = tmp_path / "mypkg" / "__init__.py"
+    pkg_init.parent.mkdir(parents=True)
+    pkg_init.write_text("from .sub import helper\nfrom mypkg.other import tool\n")
+    ok_sub, _, defs_sub = _payload._has_attr(pkg_init, "sub", module="mypkg")
+    ok_other, _, defs_other = _payload._has_attr(pkg_init, "other", module="mypkg")
+    assert ok_sub and "sub" in defs_sub
+    assert ok_other and "other" in defs_other
+
+    # Track 2: PEP 420 namespace package split between site and --external
+    ns_site = tmp_path / "ns_site"
+    (ns_site / "google" / "protobuf").mkdir(parents=True)
+    (ns_site / "google" / "protobuf" / "__init__.py").write_text("")
+    m_ns = _payload._locate_module(
+        [ns_site], "google.cloud.storage", (3, 12), external=("google-cloud-storage",)
+    )
+    assert m_ns.found
+
+    # Track 3: external_modules RECORD fallback ignores LICENSE.txt / .pth / bin / Scripts / share
+    # / non-Python dirs, handles whitespace-only top_level.txt, and unwraps top-level __pycache__
+    class DummyDist:
+        def read_text(self, filename: str) -> str | None:
+            if filename == "top_level.txt":
+                return "   \n"
+            if filename == "RECORD":
+                return (
+                    "LICENSE.txt,sha256=abc,10\n"
+                    "README.md,sha256=abc,10\n"
+                    "custom.pth,sha256=abc,10\n"
+                    "bin/my_tool,sha256=abc,10\n"
+                    "Scripts/my_tool.exe,sha256=abc,10\n"
+                    "share/doc/pkg/README.md,sha256=abc,10\n"
+                    "include/pkg/hdr.h,sha256=abc,10\n"
+                    "etc/pkg.conf,sha256=abc,10\n"
+                    "data_dir/config.json,sha256=abc,10\n"
+                    "__pycache__/pyc_only_mod.cpython-312.pyc,sha256=abc,10\n"
+                    "sub_dir/pth_mod.py,sha256=abc,10\n"
+                    "sub_dir/pth_pkg/__init__.py,sha256=abc,10\n"
+                    "top_ext.cpython-312-darwin.so,sha256=abc,10\n"
+                )
+            if filename == "custom.pth":
+                return "sub_dir\n"
+            return None
+
+    with monkeypatch.context() as mp:
+        mp.setattr(importlib.metadata, "distribution", lambda _name: DummyDist())
+        mods = _imports.external_modules(["custom-dist"])
+        assert {"pth_mod", "pth_pkg", "top_ext", "pyc_only_mod"} <= mods
+        for non_mod in (
+            "LICENSE",
+            "README",
+            "custom",
+            "bin",
+            "Scripts",
+            "share",
+            "include",
+            "etc",
+            "data_dir",
+            "__pycache__",
+        ):
+            assert non_mod not in mods
+
+    # Track 1: comment ending with backslash in requirements.txt must not swallow next requirement,
+    # and --require-hashes / tab-separated --hash are handled when stripping external requirements
+    req_backslash = tmp_path / "req_backslash.txt"
+    req_backslash.write_text(
+        "# Generated from C:\\Users\\dev\\\n"
+        "--require-hashes\n"
+        "ext-pkg==1.0.0\t--hash=sha256:1111\n"
+        "kept-pkg==2.0.0 \\\n"
+        "    --hash=sha256:2222\n"
+        "# Another comment ending with \\\n"
+        "unpinned-pkg>=1.0\n",
+        encoding="utf-8",
+    )
+    assert _uv.pinned_requirements(req_backslash, external=("ext-pkg",)) == (None, False)
+    staged_in = _uv._strip_requirements_external(req_backslash, {"ext-pkg"}, tmp_path)
+    assert staged_in is not None
+    staged_lines = staged_in.read_text(encoding="utf-8").splitlines()
+    assert "--require-hashes" not in staged_lines
+    assert "kept-pkg==2.0.0" in staged_lines
+    assert "unpinned-pkg>=1.0" in staged_lines
+
+    # Track 1: _is_network_error recognizes OS DNS and reqwest error messages;
+    # _export_cache_key returns None when setup.py or setup.cfg exists alongside pyproject.toml
+    for net_msg in (
+        "nodename nor servname provided, or not known",
+        "failed to lookup address information: Name or service not known",
+        "error sending request for url",
+        "No route to host (os error 65)",
+        "Network down",
+    ):
+        assert _uv._is_network_error(net_msg)
+    (proj_self / "setup.cfg").write_text("[metadata]\nname = self-missing\n")
+    assert (
+        _uv._export_cache_key("uv", _source.load_source(proj_self), ["--locked"], "locked") is None
+    )
+    (proj_self / "setup.cfg").unlink()
+
+    # Track 1 & 2: [tool.bundleup] rejects comma-only external = [","], skips external when CLI
+    # overrides --format exe, and _prepare rejects --external with version specifier on self
+    from bundleup import _config
+
+    cfg_proj = tmp_path / "cfg_proj"
+    cfg_proj.mkdir()
+    (cfg_proj / "pyproject.toml").write_text(
+        '[project]\nname = "cfg-proj"\nversion = "0.1.0"\n[tool.bundleup]\nexternal = [" , "]\n'
+    )
+    with pytest.raises(_errors.UsageError, match="`external` must be a string or a list"):
+        _config.apply(BuildOptions(path=cfg_proj))
+    (cfg_proj / "pyproject.toml").write_text(
+        '[project]\nname = "cfg-proj"\nversion = "0.1.0"\n[tool.bundleup]\nexternal = ["boto3"]\n'
+    )
+    settled_exe, fmt_exe = _build._settle(BuildOptions(path=cfg_proj, format="exe"))
+    assert fmt_exe == "exe" and settled_exe.external == ()
+    with pytest.raises(_errors.UsageError, match="can't exclude cfg-proj itself"):
+        _build._prepare(
+            BuildOptions(path=cfg_proj, external=("cfg-proj>=0.1",)),
+            fmt="pyz",
+            stage=tmp_path,
+            steps=_build.Steps(lambda _e: None),
+            progress=lambda _e: None,
+        )
+
+    # Track 2: CPUS maps 32-bit x86/i386, portability() avoids vacuous any_cpu on unknown OS,
+    # and _has_attr handles `import pkg.sub as alias` and `import_module` in __init__.py
+    assert _build.CPUS["x86"] == "i686" and _build.CPUS["i386"] == "i686"
+    freebsd_target = _python.Target(
+        executable=sys.executable,
+        version=(3, 12),
+        full_version="3.12.0",
+        implementation="cpython",
+        platform="freebsd14",
+        machine="x86_64",
+        abiflags="",
+        cache_tag="cpython-312",
+        markers={"sys_platform": "freebsd14"},
+    )
+    os_gated_pylock = tmp_path / "os_gated_pylock.toml"
+    os_gated_pylock.write_text(
+        'lock-version = "1.0"\n'
+        "[[packages]]\n"
+        'name = "win-only"\n'
+        'version = "1.0"\n'
+        "marker = \"sys_platform == 'win32'\"\n"
+        'wheels = [{ name = "win_only-1.0-py3-none-any.whl" }]\n'
+    )
+    fb_reach = _payload.portability(
+        os_gated_pylock,
+        target=freebsd_target,
+        pythons=_python.PythonRange((3, 12), (3, 12)),
+        native=False,
+    )
+    assert fb_reach == _python.Portability(any_os=False, any_cpu=False)
+    pkg_init.write_text("import mypkg.aliased_sub as _sub\n")
+    ok_alias, _, defs_alias = _payload._has_attr(pkg_init, "aliased_sub", module="mypkg")
+    assert ok_alias and "aliased_sub" in defs_alias
+    pkg_init.write_text("import importlib\nimportlib.import_module('.dyn_sub', __name__)\n")
+    ok_dyn, _, _ = _payload._has_attr(pkg_init, "dyn_sub", module="mypkg")
+    assert ok_dyn
+
+    # Track 3: imports_in_with_lines handles terminating `try: ... except ImportError: return`
+    # and `match sys.platform:` blocks
+    guard_tree = ast.parse(
+        "def run():\n"
+        "    try:\n"
+        "        import rich\n"
+        "    except ImportError:\n"
+        "        return\n"
+        "    from rich.console import Console\n"
+        "    import mandatory_mod\n"
+        "match sys.platform:\n"
+        "    case 'win32':\n"
+        "        import win_match_mod\n"
+        "    case _:\n"
+        "        import posix_match_mod\n"
+    )
+    assert _imports.imports_in(guard_tree) == {"mandatory_mod"}
+
+    # Track 3: search_roots and add_pth normalize backslashes in .pth files
+    pth_site = tmp_path / "pth_site"
+    (pth_site / "win32" / "lib").mkdir(parents=True)
+    (pth_site / "pywin32.pth").write_text("win32\\lib\n")
+    assert (pth_site / "win32" / "lib") in _imports.search_roots(pth_site)
+    orig_sys_path = list(sys.path)
+    _runtime.add_pth(str(pth_site), "pywin32.pth", set())
+    assert str(pth_site / "win32" / "lib") in sys.path
+    monkeypatch.setattr(sys, "path", orig_sys_path)
+
+    # Track 4: _cache_imported compiles modules when __spec__ is None (like __main__)
+    cache_site = tmp_path / "cache_site"
+    cache_site.mkdir()
+    main_py = cache_site / "script_main.py"
+    main_py.write_text("X = 42\n")
+    dummy_main = type(sys)("__bundleup_test_main__")
+    dummy_main.__file__ = str(main_py)
+    dummy_main.__spec__ = None
+    with monkeypatch.context() as mp:
+        mp.setitem(sys.modules, "__bundleup_test_main__", dummy_main)
+        _loader._cache_imported(str(cache_site))
+    expected_pyc = Path(importlib.util.cache_from_source(str(main_py)))
+    assert expected_pyc.is_file()
+
+    # Track 4: _restore rejects symlinked cache entries & symlinked files inside cache entries,
+    # clean_cache skips locked .tmp-*-pruned directories, and _bytecode_copies deduplicates prefixes
+    sym_cache = tmp_path / "sym_bcache"
+    sym_cache.mkdir()
+    real_dir = tmp_path / "real_bcache_dir"
+    real_dir.mkdir()
+    if os.name != "nt":
+        import fcntl
+        import time
+
+        (sym_cache / "key123").symlink_to(real_dir)
+        dist_obj = _bytecode.Distribution("pkg", "key123", [])
+        assert not _bytecode._restore(dist_obj, sym_cache, cache_site)
+        inner_sym_dir = sym_cache / "key_inner"
+        inner_sym_dir.mkdir()
+        (inner_sym_dir / "mod.pyc").symlink_to(expected_pyc)
+        assert not _bytecode._restore(
+            _bytecode.Distribution("pkg", "key_inner", ["mod.py"]), sym_cache, cache_site
+        )
+        prune_root = tmp_path / "prune_race_root"
+        prune_root.mkdir()
+        pruning_tmp = prune_root / ".tmp-app-0123456789abcdef-999-deadbeef-pruned"
+        pruning_tmp.mkdir()
+        pruning_lock = prune_root / ".lock-app-0123456789abcdef"
+        pruning_lock.write_bytes(b"")
+        ancient = time.time() - 40 * 86400
+        os.utime(pruning_tmp, (ancient, ancient))
+        os.utime(pruning_lock, (ancient, ancient))
+        with monkeypatch.context() as mp:
+            mp.setenv("BUNDLEUP_CACHE", str(prune_root))
+            with open(pruning_lock, "r+b") as held_prune:
+                fcntl.flock(held_prune.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                _cache.clean_cache(older_than_days=30)
+                assert pruning_tmp.is_dir() and pruning_lock.is_file()
+            _cache.clean_cache(older_than_days=30)
+            assert not pruning_tmp.exists() and not pruning_lock.exists()
+    with monkeypatch.context() as mp:
+        mp.setattr(_cache, "PYCACHE_PREFIXES", [tmp_path / "dup_prefix"])
+        mp.setattr(sys, "pycache_prefix", str(tmp_path / "dup_prefix"))
+        rel = os.path.splitdrive(str(cache_site))[1].lstrip("\\/")
+        (tmp_path / "dup_prefix" / rel).mkdir(parents=True)
+        copies = _cache._bytecode_copies(cache_site)
+        assert len(copies) == 1
