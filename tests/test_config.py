@@ -3015,3 +3015,38 @@ def test_phase4_deep_reasoning_audit_regressions(
         (unsafe_ro / "sub").chmod(0o444)
         _loader._rmtree(str(unsafe_ro))
         assert not unsafe_ro.exists()
+
+    if sys.version_info >= (3, 11):
+        spec = importlib.util.spec_from_file_location(
+            "corpus_issues",
+            Path(__file__).resolve().parent.parent / "gauntlet" / "corpus_issues.py",
+        )
+        assert spec is not None and spec.loader is not None
+        ci_mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(ci_mod)
+        systemic_rows = [
+            {
+                "name": f"pkg-{i}",
+                "kind": "app",
+                "pin": f"pkg-{i}==1.0",
+                "phase": "build",
+                "code": "uv-failed",
+                "outcome": "fail",
+                "os": "linux",
+                "python": "3.12",
+                "network_blocked": True,
+                "detail": "err",
+            }
+            for i in range(12)
+        ]
+        grouped = ci_mod.group_failures(systemic_rows)
+        assert list(grouped) == ["systemic build uv-failed"]
+        assert "12 programs fail at build (uv-failed)" in ci_mod.title(
+            grouped["systemic build uv-failed"], "corpus"
+        )
+        assert "**12 programs**" in ci_mod.body(
+            "systemic build uv-failed",
+            grouped["systemic build uv-failed"],
+            "https://example.com",
+            "corpus",
+        )

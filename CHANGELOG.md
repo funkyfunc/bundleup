@@ -3,6 +3,37 @@
 Versions follow uv's scheme until 1.0: a minor version may break things
 ([style guide](docs/cli-style-guide.md) rule 37).
 
+## 0.2.1 (2026-10-18)
+
+Hardening across virtual projects, `--external`, ZIP64 verification, `--format exe`, `--smoke`, and
+cache concurrency:
+
+- Virtual / wrapper projects (`[tool.uv] package = false` and `[tool.poetry] package-mode = false`)
+  install only their locked or declared dependencies without attempting to build the root directory
+  as a wheel; stage-isolated `pylock.install.toml` keeps `with_project()` from mutating the lock
+  path passed to `uv pip install`.
+- `--external` strips excluded packages before `uv pip compile` on unlocked `pyproject.toml` and
+  `requirements.txt` inputs (preserving line continuations and dropping invalidated `--hash` flags)
+  and prunes them from `uv export`, preventing transitive dependency resolution of host-provided
+  packages.
+- `uv` commands (`export`, `pip compile`, `pip install`, `python find`) automatically retry with
+  `--offline` when a transient DNS or network failure occurs and wheels are already cached locally.
+- `bundleup verify` and `_zipwriter` validate ZIP64 end-of-central-directory records, 64-bit sizes
+  and offsets, and trailer boundaries across `.pyz`, `--format py`, `--format zip`, and `--format
+  exe`; `--split` accounts for ZIP64 header overhead so split parts never exceed the byte budget.
+- `--format exe` builds isolate `SCIE_BASE` inside `--smoke` and runtime caches, handle read-only
+  and hardlinked entries in `python-build-standalone` tarballs, and verify downloaded archive size
+  and SHA-256 atomically.
+- `--smoke` assigns spawned bundles to a Windows Job Object (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`)
+  and terminates process trees so background grandchildren cannot hold locks on temporary working
+  directories, and falls back to `<build-cache>/smoke` when `TMPDIR` is mounted `noexec`.
+- Runtime `.pth` processing normalizes Windows drive/path casing like `site.py` and backslashes in
+  relative `.pth` entries, while nested bundle invocations cleanly replace parent bundle `sys.path`
+  and `sys.modules` entries without leaking into host tools.
+- `bundleup cache clean` respects active locks on `.tmp-*-pruned` directories, handles read-only
+  cached trees on Windows without recursion errors, and ignores NTFS `st_mtime` skew when `--all`
+  is passed.
+
 ## 0.2.0 (2026-10-16)
 
 Smaller CLI surface, `--external`, undeclared-import detection, inline code frames, and why-included

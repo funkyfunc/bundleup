@@ -52,37 +52,75 @@ def from_smoke(row: Row, os_name: str) -> Row:
     }
 
 
+SYSTEMIC_THRESHOLD = 10
+
+
 def signature(row: Row) -> str:
     return f"{row['name']} {row['phase']} {row['code']}"
 
 
 def group_failures(rows: list[Row]) -> dict[str, list[Row]]:
-    groups: dict[str, list[Row]] = {}
+    by_phase_code: dict[tuple[str, str], list[Row]] = {}
     for row in rows:
         if row["outcome"] in ("fail", "harness-error"):
-            groups.setdefault(signature(row), []).append(row)
+            by_phase_code.setdefault((row["phase"], row["code"]), []).append(row)
+    groups: dict[str, list[Row]] = {}
+    for (phase, code), failed in by_phase_code.items():
+        if len({r["name"] for r in failed}) > SYSTEMIC_THRESHOLD:
+            groups[f"systemic {phase} {code}"] = failed
+        else:
+            for row in failed:
+                groups.setdefault(signature(row), []).append(row)
     return groups
 
 
 def title(rows: list[Row], kind: str = "corpus") -> str:
     first = rows[0]
+    names = sorted({r["name"] for r in rows})
+    if len(names) > 1:
+        return (
+            f"{kind}: {len(names)} programs fail at {first['phase'] or 'harness'} ({first['code']})"
+        )
     return f"{kind}: {first['name']} fails at {first['phase'] or 'harness'} ({first['code']})"
 
 
 def body(sig: str, rows: list[Row], run_url: str, kind: str = "corpus") -> str:
     first = rows[0]
+    names = sorted({r["name"] for r in rows})
+    if len(names) > 1:
+        sample = ", ".join(f"`{n}`" for n in names[:10])
+        more = f" (+{len(names) - 10} more)" if len(names) > 10 else ""
+        head = (
+            f"**{len(names)} programs** ({sample}{more}) fail at the "
+            f"**{first['phase'] or 'harness'}** step with `{first['code']}`."
+        )
+    else:
+        head = (
+            f"**{first['name']}** ({first['kind']}, `{first['pin']}`) fails at the "
+            f"**{first['phase'] or 'harness'}** step with `{first['code']}`."
+        )
     lines = [
         MARKER.format(sig),
-        f"**{first['name']}** ({first['kind']}, `{first['pin']}`) fails at the "
-        f"**{first['phase'] or 'harness'}** step with `{first['code']}`.",
+        head,
         f"Last seen {date.today().isoformat()} in [the nightly {kind} run]({run_url}).",
         "",
-        "| OS | Python | Network blocked | Detail |",
-        "|---|---|---|---|",
+        "| Program | OS | Python | Network blocked | Detail |"
+        if len(names) > 1
+        else "| OS | Python | Network blocked | Detail |",
+        "|---|---|---|---|---|" if len(names) > 1 else "|---|---|---|---|",
     ]
-    for row in sorted(rows, key=lambda r: (r["os"], r["python"])):
+    ordered = sorted(rows, key=lambda r: (r["name"], r["os"], r["python"]))[:25]
+    for row in ordered:
         detail = row["detail"].replace("\n", " ").replace("|", "\\|")[:500]
-        lines.append(f"| {row['os']} | {row['python']} | {row['network_blocked']} | {detail} |")
+        if len(names) > 1:
+            lines.append(
+                f"| `{row['name']}` | {row['os']} | {row['python']} "
+                f"| {row['network_blocked']} | {detail} |"
+            )
+        else:
+            lines.append(f"| {row['os']} | {row['python']} | {row['network_blocked']} | {detail} |")
+    if len(rows) > len(ordered):
+        lines.append(f"\n*({len(rows) - len(ordered)} additional rows omitted)*")
     lines += [
         "",
         "Reproduce on a CI runner (third-party code: never on a personal machine, ADR-0017):",
