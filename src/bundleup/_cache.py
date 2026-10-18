@@ -162,14 +162,14 @@ def clean_cache(
     busy: list[Path] = []
     held: list[IO[bytes]] = []  # exclusive locks on the copies being removed, released when done
     for unpacked in list_cache():
-        if now - unpacked.last_used <= older_than_days * DAY:
+        if older_than_days > 0 and now - unpacked.last_used <= older_than_days * DAY:
             continue
         lock = _claim(unpacked.path)
         if lock is None:
             busy.append(unpacked.path)  # a running bundle holds it (the loader's _hold)
             continue
         try:
-            if now - unpacked.path.stat().st_mtime <= older_than_days * DAY:
+            if older_than_days > 0 and now - unpacked.path.stat().st_mtime <= older_than_days * DAY:
                 lock.close()
                 continue
         except OSError:

@@ -551,6 +551,8 @@ PRUNE_AFTER = 30 * 86400.0  # seconds unused before an older copy of this bundle
 def _rmtree(path: str) -> None:
     import shutil
 
+    retried = set()  # type: set[str]
+
     def _onerror(func: "Callable[[str], object]", p: str, _exc: "object") -> None:
         for target in (os.path.dirname(p), p):
             try:
@@ -560,8 +562,10 @@ def _rmtree(path: str) -> None:
                 pass
         try:
             if func in (os.open, os.listdir, getattr(os, "scandir", None)):
-                shutil.rmtree(p, onerror=_onerror)
-            else:
+                if p not in retried and os.path.isdir(p) and not os.path.islink(p):
+                    retried.add(p)
+                    shutil.rmtree(p, onerror=_onerror)
+            elif func in (os.unlink, os.remove, os.rmdir):
                 func(p)
         except (OSError, TypeError):
             pass

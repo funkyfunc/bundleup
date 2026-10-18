@@ -85,15 +85,51 @@ def _resolve_args(args: tuple[str, ...]) -> list[str]:
     return out
 
 
-def _kill_tree(proc: subprocess.Popen[bytes]) -> None:
+def _create_job() -> int | None:
+    if os.name != "nt":
+        return None
+    with contextlib.suppress(Exception):
+        import ctypes
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+        k32.CreateJobObjectW.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        k32.CreateJobObjectW.restype = ctypes.c_void_p
+        job: int | None = k32.CreateJobObjectW(None, None)
+        return job or None
+    return None
+
+
+def _assign_job(job: int | None, proc: subprocess.Popen[bytes]) -> None:
+    if os.name != "nt" or job is None:
+        return
+    with contextlib.suppress(Exception):
+        import ctypes
+
+        k32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+        k32.AssignProcessToJobObject.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        k32.AssignProcessToJobObject.restype = ctypes.c_int
+        k32.AssignProcessToJobObject(job, int(proc._handle))  # type: ignore[attr-defined]
+
+
+def _kill_tree(proc: subprocess.Popen[bytes], job: int | None = None) -> None:
     if os.name == "nt":
-        if proc.poll() is None:
-            with contextlib.suppress(OSError, subprocess.SubprocessError):
-                subprocess.run(
-                    ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                    capture_output=True,
-                    timeout=5,
-                )
+        if job is not None:
+            with contextlib.suppress(Exception):
+                import ctypes
+
+                k32 = ctypes.WinDLL("kernel32", use_last_error=True)  # type: ignore[attr-defined]
+                k32.TerminateJobObject.argtypes = [ctypes.c_void_p, ctypes.c_uint]
+                k32.TerminateJobObject.restype = ctypes.c_int
+                k32.CloseHandle.argtypes = [ctypes.c_void_p]
+                k32.CloseHandle.restype = ctypes.c_int
+                k32.TerminateJobObject(job, 1)
+                k32.CloseHandle(job)
+        with contextlib.suppress(OSError, subprocess.SubprocessError):
+            subprocess.run(
+                ["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                capture_output=True,
+                timeout=5,
+            )
     elif hasattr(os, "killpg"):
         with contextlib.suppress(OSError):
             os.killpg(proc.pid, signal.SIGKILL)
@@ -155,21 +191,31 @@ def run(bundle: Path, python: str | None, args: tuple[str, ...]) -> SmokeResult:
             log = root / "output.log"
             started = time.perf_counter()
             with log.open("w+b") as out_file:
-                proc = subprocess.Popen(
-                    wrapped,
-                    cwd=root / "work",
-                    env=env,
-                    stdin=subprocess.DEVNULL,
-                    stdout=out_file,
-                    stderr=subprocess.STDOUT,
-                    start_new_session=(os.name != "nt"),
-                )
+                job = _create_job()
+                proc: subprocess.Popen[bytes] | None = None
                 try:
-                    code = proc.wait(timeout=TIMEOUT)
-                except subprocess.TimeoutExpired:
-                    code = -1
+                    proc = subprocess.Popen(
+                        wrapped,
+                        cwd=root / "work",
+                        env=env,
+                        stdin=subprocess.DEVNULL,
+                        stdout=out_file,
+                        stderr=subprocess.STDOUT,
+                        start_new_session=(os.name != "nt"),
+                    )
+                    _assign_job(job, proc)
+                    try:
+                        code = proc.wait(timeout=TIMEOUT)
+                    except subprocess.TimeoutExpired:
+                        code = -1
                 finally:
-                    _kill_tree(proc)
+                    if proc is not None:
+                        _kill_tree(proc, job)
+                    elif job is not None and os.name == "nt":
+                        with contextlib.suppress(Exception):
+                            import ctypes
+
+                            ctypes.WinDLL("kernel32").CloseHandle(ctypes.c_void_p(job))  # type: ignore[attr-defined]
             out = _text(log.read_bytes()) if log.exists() else ""
             result = SmokeResult(
                 ["python", bundle.name, *args] if python else [f"./{bundle.name}", *args],
@@ -178,6 +224,12 @@ def run(bundle: Path, python: str | None, args: tuple[str, ...]) -> SmokeResult:
             )  # fmt: skip
         finally:
             _make_writable(root)
+            if os.name == "nt":
+                for _ in range(20):
+                    shutil.rmtree(root, ignore_errors=True)
+                    if not root.exists():
+                        break
+                    time.sleep(0.05)
     if code != 0:
         shown = " ".join(result.command)
         why = f"didn't finish in {TIMEOUT:.0f} s" if code == -1 else f"exited with {code}"

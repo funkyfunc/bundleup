@@ -290,20 +290,24 @@ def test_phase3_platform_levels_prerelease_python_runtime_and_cli(
     site_a.mkdir()
     front_dir = site_a / "front_pth"
     front_dir.mkdir()
-    (site_a / "front.pth").write_text(f"import sys; sys.path.insert(0, {str(front_dir)!r})\n")
+    (site_a / "front.pth").write_text(
+        f"import sys; sys.path.insert(0, {str(front_dir)!r})\n", encoding="utf-8"
+    )
     script_dir_a = tmp_path / "script_dir_a"
     script_dir_a.mkdir()
     site_b = tmp_path / "site_b"
     site_b.mkdir()
     mixed_case_sub = site_b / "MixedCaseSub"
     mixed_case_sub.mkdir()
-    (site_b / "sub.pth").write_text("MixedCaseSub  \n")
+    (site_b / "sub.pth").write_text("MixedCaseSub  \n", encoding="utf-8")
 
     monkeypatch.setattr(sys, "path", [stdlib_dir, str(host_sp)])
     monkeypatch.setattr(_runtime, "_HOST_TAIL", None)
     monkeypatch.delitem(sys.__dict__, "_bundleup_host_tail", raising=False)
+    monkeypatch.delenv("PYTHONPATH", raising=False)
     monkeypatch.delenv("BUNDLEUP_RUNTIME_SITE", raising=False)
     monkeypatch.delenv("BUNDLEUP_RUNTIME_PATHS", raising=False)
+    monkeypatch.delenv("BUNDLEUP_RUNTIME_PYTHON", raising=False)
     monkeypatch.delenv("BUNDLEUP_RUNTIME_SCRIPTS", raising=False)
     monkeypatch.delenv("BUNDLEUP_RUNTIME_INHERIT", raising=False)
     monkeypatch.delenv("BUNDLEUP_INHERIT_PATH", raising=False)
@@ -322,7 +326,7 @@ def test_phase3_platform_levels_prerelease_python_runtime_and_cli(
     assert str(script_dir_a) not in sys.path
     assert str(site_a) not in sys.path
     assert str(site_b) in sys.path
-    assert str(mixed_case_sub) in sys.path
+    assert os.path.normcase(str(mixed_case_sub)) in sys.path
     assert str(host_sp) in sys.path
 
     shim_b = os.path.join(str(site_b), _runtime.SHIM)
@@ -372,14 +376,15 @@ def test_phase3_platform_levels_prerelease_python_runtime_and_cli(
     # cache_dir().parent / "smoke" are mounted noexec
     from bundleup import _smoke
 
-    flag = getattr(os, "ST_NOEXEC", 0)
-    if flag:
+    flag = getattr(os, "ST_NOEXEC", 0) or 1
+    with monkeypatch.context() as mp:
+        mp.setattr(os, "ST_NOEXEC", flag, raising=False)
         smoke_dir = tmp_path / "noexec_cache" / "smoke"
         bundle_dir = tmp_path / "exec_dist"
         bundle_dir.mkdir(parents=True)
         bundle_file = bundle_dir / "app.pyz"
         bundle_file.write_bytes(b"")
-        monkeypatch.setenv("BUNDLEUP_CACHE", str(tmp_path / "noexec_cache" / "bundles"))
+        mp.setenv("BUNDLEUP_BUILD_CACHE", str(tmp_path / "noexec_cache"))
 
         class _FakeStatVfs:
             def __init__(self, f_flag: int) -> None:
@@ -391,7 +396,7 @@ def test_phase3_platform_levels_prerelease_python_runtime_and_cli(
                 return _FakeStatVfs(0)
             return _FakeStatVfs(flag)
 
-        monkeypatch.setattr(os, "statvfs", fake_statvfs)
+        mp.setattr(os, "statvfs", fake_statvfs, raising=False)
         assert _smoke._runnable(bundle_file) == str(bundle_dir)
         assert smoke_dir.is_dir()
 

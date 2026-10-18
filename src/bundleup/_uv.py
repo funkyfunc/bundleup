@@ -309,7 +309,7 @@ def from_pylock(
     else:
         lock_for_install = source.pylock
     installs = [["-r", str(lock_for_install)]] if packages else []  # uv rejects an empty lock
-    if not mine:
+    if not mine and source.packaged:
         installs.append([str(source.path)])
         text = with_project(text, source.name)
     check.write_text(text, encoding="utf-8")
@@ -583,9 +583,13 @@ def export(
     text = pylock.read_text(encoding="utf-8")
     packages = _load_pylock_packages(text, pylock)
     lock_for_install = pylock
-    add_self = not source.is_script and not any(
-        canonicalize_name(str(p.get("name", ""))) == canonicalize_name(source.name)
-        for p in packages
+    add_self = (
+        not source.is_script
+        and source.packaged
+        and not any(
+            canonicalize_name(str(p.get("name", ""))) == canonicalize_name(source.name)
+            for p in packages
+        )
     )
     if add_self and packages:
         lock_for_install = stage.resolve() / "pylock.install.toml"
@@ -786,7 +790,9 @@ def resolve(
             # Every line pinned and hashed, nothing missing: install from the file itself,
             # which makes uv check the hashes it lists.
             installs = [["-r", str(declared)]]
-    else:  # the project itself, built from its folder like `pip install .`, and in the check
+    elif (
+        source.packaged
+    ):  # the project itself, built from its folder like `pip install .`, and in the check
         installs.append([str(source.path)])
         text = with_project(text, source.name)
     check.write_text(text, encoding="utf-8")

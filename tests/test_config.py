@@ -1022,6 +1022,7 @@ def test_pass4_iteration2_regressions(tmp_path: Path, monkeypatch: pytest.Monkey
     """Pass 2 regressions: BUNDLEUP_RUNTIME_INHERIT isolation + .pth ordering, --entry with
     --external, --external + --format exe rejection, _export_cache_key with local path deps,
     and py_header external."""
+    import os
     import sys
 
     from bundleup import BuildOptions, UsageError, _build, _outputs, _payload, _runtime, _uv
@@ -1038,12 +1039,23 @@ def test_pass4_iteration2_regressions(tmp_path: Path, monkeypatch: pytest.Monkey
     host_sp = tmp_path / "host-site-packages"
     host_sp.mkdir()
 
+    for var in (
+        "PYTHONPATH",
+        _runtime.ENV_SITE,
+        _runtime.ENV_PATHS,
+        _runtime.ENV_PYTHON,
+        _runtime.ENV_SCRIPTS,
+        _runtime.ENV_INHERIT,
+    ):
+        monkeypatch.delenv(var, raising=False)
+    monkeypatch.setattr(_runtime, "_HOST_TAIL", None)
+    monkeypatch.delitem(sys.__dict__, "_bundleup_host_tail", raising=False)
     monkeypatch.setattr(sys, "path", ["/stdlib", str(host_sp)])
     monkeypatch.setenv("BUNDLEUP_RUNTIME_INHERIT", str(bundle_a))
     monkeypatch.delenv("BUNDLEUP_INHERIT_PATH", raising=False)
     _runtime.activate(str(bundle_a), ["extra.pth"])
     # Order must be: /stdlib, bundle_a, bundle_a/win32_extra, host_sp
-    assert sys.path == ["/stdlib", str(bundle_a), str(pth_sub), str(host_sp)]
+    assert sys.path == ["/stdlib", str(bundle_a), os.path.normcase(str(pth_sub)), str(host_sp)]
 
     # Child bundle_b without EXTERNAL should NOT inherit host_sp from bundle_a
     bundle_b = tmp_path / "bundle_b"
@@ -1415,46 +1427,57 @@ def test_runtime_and_loader_audit_regressions(
     fake_pp = str(tmp_path / "custom" / "site-packages")
     fake_stdlib = (os.__file__ and os.path.dirname(os.__file__)) or "/stdlib"
     fake_host_sp = str(tmp_path / "venv" / "lib" / "python3.12" / "site-packages")
-    monkeypatch.setattr(sys, "path", [fake_pp, fake_stdlib, fake_host_sp])
-    idx = _runtime.site_packages_index()
-    assert idx == 2  # after fake_stdlib, never 0!
+    with monkeypatch.context() as mp:
+        for var in (
+            "PYTHONPATH",
+            _runtime.ENV_SITE,
+            _runtime.ENV_PATHS,
+            _runtime.ENV_PYTHON,
+            _runtime.ENV_SCRIPTS,
+            _runtime.ENV_INHERIT,
+            "BUNDLEUP_INHERIT_PATH",
+        ):
+            mp.delenv(var, raising=False)
+        mp.setattr(_runtime, "_HOST_TAIL", None)
+        mp.delitem(sys.__dict__, "_bundleup_host_tail", raising=False)
+        mp.setattr(sys, "path", [fake_pp, fake_stdlib, fake_host_sp])
+        idx = _runtime.site_packages_index()
+        assert idx == 2  # after fake_stdlib, never 0!
 
-    bundle_site = tmp_path / "b_site"
-    bundle_site.mkdir()
-    monkeypatch.delenv("BUNDLEUP_RUNTIME_INHERIT", raising=False)
-    monkeypatch.delenv("BUNDLEUP_INHERIT_PATH", raising=False)
-    _runtime.activate(str(bundle_site), [])
-    assert fake_stdlib in sys.path
-    assert fake_pp not in sys.path and fake_host_sp not in sys.path
+        bundle_site = tmp_path / "b_site"
+        bundle_site.mkdir()
+        _runtime.activate(str(bundle_site), [])
+        assert fake_stdlib in sys.path
+        assert fake_pp not in sys.path and fake_host_sp not in sys.path
 
-    # 2. Nested bundle activation evicts parent bundle's modules from sys.modules
-    parent_site = tmp_path / "parent_site"
-    parent_site.mkdir()
-    child_site = tmp_path / "child_site"
-    child_site.mkdir()
-    dummy_mod = type(sys)("dummy_shared_pkg")
-    dummy_mod.__file__ = str(parent_site / "dummy_shared_pkg" / "__init__.py")
-    monkeypatch.setitem(sys.modules, "dummy_shared_pkg", dummy_mod)
-    monkeypatch.setenv("BUNDLEUP_RUNTIME_SITE", str(parent_site))
-    _runtime.activate(str(child_site), [])
-    assert "dummy_shared_pkg" not in sys.modules
+        # 2. Nested bundle activation evicts parent bundle's modules from sys.modules
+        parent_site = tmp_path / "parent_site"
+        parent_site.mkdir()
+        child_site = tmp_path / "child_site"
+        child_site.mkdir()
+        dummy_mod = type(sys)("dummy_shared_pkg")
+        dummy_mod.__file__ = str(parent_site / "dummy_shared_pkg" / "__init__.py")
+        mp.setitem(sys.modules, "dummy_shared_pkg", dummy_mod)
+        mp.setenv("BUNDLEUP_RUNTIME_SITE", str(parent_site))
+        _runtime.activate(str(child_site), [])
+        assert "dummy_shared_pkg" not in sys.modules
 
-    # 3. runs_bundle_code recognizes attached -m<mod> and skips child `--format py` bundles
-    py_bundle_file = tmp_path / "child_bundle.py"
-    py_bundle_file.write_text("#!/usr/bin/env python3\n# /// bundleup\nEMBEDDED = True\n")
-    normal_script = tmp_path / "normal_script.py"
-    normal_script.write_text("print(1)\n")
-    monkeypatch.setenv(_runtime.ENV_SCRIPTS, str(tmp_path))
-    if hasattr(sys, "orig_argv"):
-        monkeypatch.setattr(sys, "argv", ["-m"])
-        monkeypatch.setattr(sys, "orig_argv", ["python3", "-munittest"])
-        assert _runtime.runs_bundle_code(str(bundle_site)) is True
-        monkeypatch.setattr(sys, "argv", [str(py_bundle_file)])
-        monkeypatch.setattr(sys, "orig_argv", ["python3", str(py_bundle_file)])
-        assert _runtime.runs_bundle_code(str(bundle_site)) is False
-        monkeypatch.setattr(sys, "argv", [str(normal_script)])
-        monkeypatch.setattr(sys, "orig_argv", ["python3", str(normal_script)])
-        assert _runtime.runs_bundle_code(str(bundle_site)) is True
+        # 3. runs_bundle_code recognizes attached -m<mod> and skips child `--format py` bundles
+        py_bundle_file = tmp_path / "child_bundle.py"
+        py_bundle_file.write_text("#!/usr/bin/env python3\n# /// bundleup\nEMBEDDED = True\n")
+        normal_script = tmp_path / "normal_script.py"
+        normal_script.write_text("print(1)\n")
+        mp.setenv(_runtime.ENV_SCRIPTS, str(tmp_path))
+        if hasattr(sys, "orig_argv"):
+            mp.setattr(sys, "argv", ["-m"])
+            mp.setattr(sys, "orig_argv", ["python3", "-munittest"])
+            assert _runtime.runs_bundle_code(str(bundle_site)) is True
+            mp.setattr(sys, "argv", [str(py_bundle_file)])
+            mp.setattr(sys, "orig_argv", ["python3", str(py_bundle_file)])
+            assert _runtime.runs_bundle_code(str(bundle_site)) is False
+            mp.setattr(sys, "argv", [str(normal_script)])
+            mp.setattr(sys, "orig_argv", ["python3", str(normal_script)])
+            assert _runtime.runs_bundle_code(str(bundle_site)) is True
 
     # 4. End-to-end runtime checks:
     # - `--format py` with hostile `fcntl.py` and `zipfile.py` in the bundle's directory
@@ -1537,28 +1560,36 @@ def test_blackbox_subagent_and_whitebox_regressions(
     )
 
     # 1. Host .pth entries after stdlib are stripped even without a site-packages folder
-    orig_sys_path = list(sys.path)
-    fake_stdlib = (os.__file__ and os.path.dirname(os.__file__)) or "/stdlib"
-    leaked_editable = str(tmp_path / "some_editable_src")
-    monkeypatch.setattr(sys, "path", [fake_stdlib, leaked_editable])
-    assert _runtime.site_packages_index() == 1
+    with monkeypatch.context() as mp:
+        for var in (
+            "PYTHONPATH",
+            _runtime.ENV_SITE,
+            _runtime.ENV_PATHS,
+            _runtime.ENV_PYTHON,
+            _runtime.ENV_SCRIPTS,
+            _runtime.ENV_INHERIT,
+            "BUNDLEUP_INHERIT_PATH",
+        ):
+            mp.delenv(var, raising=False)
+        mp.setattr(_runtime, "_HOST_TAIL", None)
+        mp.delitem(sys.__dict__, "_bundleup_host_tail", raising=False)
+        fake_stdlib = (os.__file__ and os.path.dirname(os.__file__)) or "/stdlib"
+        leaked_editable = str(tmp_path / "some_editable_src")
+        mp.setattr(sys, "path", [fake_stdlib, leaked_editable])
+        assert _runtime.site_packages_index() == 1
 
-    # 2. PEP 420 namespace packages from parent bundle are evicted when child bundle activates
-    parent_site = tmp_path / "p_site"
-    parent_site.mkdir()
-    child_site = tmp_path / "c_site"
-    child_site.mkdir()
-    ns_mod = type(sys)("ns_shared")
-    ns_mod.__file__ = None
-    ns_mod.__path__ = [str(parent_site / "ns_shared")]  # type: ignore[attr-defined]
-    monkeypatch.setitem(sys.modules, "ns_shared", ns_mod)
-    monkeypatch.setenv("BUNDLEUP_RUNTIME_SITE", str(parent_site))
-    monkeypatch.delenv("BUNDLEUP_RUNTIME_INHERIT", raising=False)
-    monkeypatch.delenv("BUNDLEUP_INHERIT_PATH", raising=False)
-    _runtime.activate(str(child_site), [])
-    assert "ns_shared" not in sys.modules
-    monkeypatch.setattr(sys, "path", orig_sys_path)
-    monkeypatch.delenv("BUNDLEUP_RUNTIME_SITE", raising=False)
+        # 2. PEP 420 namespace packages from parent bundle are evicted when child bundle activates
+        parent_site = tmp_path / "p_site"
+        parent_site.mkdir()
+        child_site = tmp_path / "c_site"
+        child_site.mkdir()
+        ns_mod = type(sys)("ns_shared")
+        ns_mod.__file__ = None
+        ns_mod.__path__ = [str(parent_site / "ns_shared")]  # type: ignore[attr-defined]
+        mp.setitem(sys.modules, "ns_shared", ns_mod)
+        mp.setenv("BUNDLEUP_RUNTIME_SITE", str(parent_site))
+        _runtime.activate(str(child_site), [])
+        assert "ns_shared" not in sys.modules
 
     # 3. _orig_module skips value args of -W, -X, and --check-hash-based-pycs
     assert (
@@ -1747,6 +1778,7 @@ def test_systems_correctness_audit_regressions(
     """Regression suite for concurrency/cache, multi-target/verify, lockfile/import analysis,
     and multiprocessing/runtime edge cases."""
     import ast
+    import contextlib
     import os
     import shutil
     import subprocess
@@ -1842,7 +1874,8 @@ def test_systems_correctness_audit_regressions(
     ro_file = ro_sub / "data.txt"
     ro_file.write_text("locked")
     ro_file.chmod(0o444)
-    (ro_sub / "link.txt").symlink_to(ext_target)
+    with contextlib.suppress(OSError):
+        (ro_sub / "link.txt").symlink_to(ext_target)
     zero_sub = ro_sub / "zero_sub"
     zero_sub.mkdir()
     (zero_sub / "inner.txt").write_text("inner")
@@ -2328,7 +2361,7 @@ def test_phase3_reviewer_audit_regressions(tmp_path: Path, monkeypatch: pytest.M
 
     # Track 2: relocate_paths handles triple-quoted and single-quoted TOML strings with quotes
     ws_root = tmp_path / "ws_quote"
-    dep_name = "dep \"quote\" 'single' %s café"
+    dep_name = "dep 'single' %s café" if os.name == "nt" else "dep \"quote\" 'single' %s café"
     dep_dir = ws_root / dep_name
     dep_dir.mkdir(parents=True)
     (dep_dir / "pyproject.toml").write_text('[project]\nname = "dep"\nversion = "0.1.0"\n')
@@ -2339,7 +2372,8 @@ def test_phase3_reviewer_audit_regressions(tmp_path: Path, monkeypatch: pytest.M
         'lock-version = "1.0"\n'
         "[[packages]]\n"
         'name = "dep"\n'
-        f'directory = {{ path = """{dep_name}""" }}\n'
+        f'directory = {{ path = """{dep_name}""" }}\n',
+        encoding="utf-8",
     )
     _uv.relocate_paths(pylock_file, ws_root)
     parsed_lock = _toml.loads(pylock_file.read_text(encoding="utf-8"))
@@ -2405,46 +2439,62 @@ def test_phase3_reviewer_audit_regressions(tmp_path: Path, monkeypatch: pytest.M
     assert _platforms.runtime_needs(dual_mac_tags, arch="x86_64").macos == (10, 9)
 
     # Track 3: _find_env drops broken VIRTUAL_ENV symlinks; _make_writable ignores symlinks
+    import contextlib
+
     broken_venv = tmp_path / "broken_venv"
     (broken_venv / "bin").mkdir(parents=True)
-    (broken_venv / "bin" / "python").symlink_to(tmp_path / "missing_python_bin")
-    with monkeypatch.context() as mp:
-        mp.setenv("VIRTUAL_ENV", str(broken_venv))
-        env = _python._find_env(tmp_path, is_script=True)
-        assert env is not None and "VIRTUAL_ENV" not in env
+    with contextlib.suppress(OSError):
+        (broken_venv / "bin" / "python").symlink_to(tmp_path / "missing_python_bin")
+        with monkeypatch.context() as mp:
+            mp.setenv("VIRTUAL_ENV", str(broken_venv))
+            env = _python._find_env(tmp_path, is_script=True)
+            assert env is not None and "VIRTUAL_ENV" not in env
 
     ext_ro = tmp_path / "external_readonly.txt"
     ext_ro.write_text("secret")
     ext_ro.chmod(0o400)
+    before_mode = ext_ro.stat().st_mode & 0o777
     smoke_dir = tmp_path / "smoke_root"
     smoke_dir.mkdir()
-    (smoke_dir / "link.txt").symlink_to(ext_ro)
+    with contextlib.suppress(OSError):
+        (smoke_dir / "link.txt").symlink_to(ext_ro)
     _smoke._make_writable(smoke_dir)
-    assert (ext_ro.stat().st_mode & 0o777) == 0o400
+    assert (ext_ro.stat().st_mode & 0o777) == before_mode
     ext_ro.chmod(0o600)
 
     # Track 4: site_packages_index strips editable .pth entries between stdlib and site-packages,
     # and activate() evicts modules under parent BUNDLEUP_RUNTIME_PATHS
-    orig_path = list(sys.path)
-    fake_stdlib = (os.__file__ and os.path.dirname(os.__file__)) or "/stdlib"
-    leaked_pth = str(tmp_path / "editable_src")
-    fake_sp = str(tmp_path / "venv" / "lib" / "python3.12" / "site-packages")
-    monkeypatch.setattr(sys, "path", [fake_stdlib, leaked_pth, fake_sp])
-    assert _runtime.site_packages_index() == 1
+    with monkeypatch.context() as mp:
+        for var in (
+            "PYTHONPATH",
+            _runtime.ENV_SITE,
+            _runtime.ENV_PATHS,
+            _runtime.ENV_PYTHON,
+            _runtime.ENV_SCRIPTS,
+            _runtime.ENV_INHERIT,
+            "BUNDLEUP_INHERIT_PATH",
+        ):
+            mp.delenv(var, raising=False)
+        mp.setattr(_runtime, "_HOST_TAIL", None)
+        mp.delitem(sys.__dict__, "_bundleup_host_tail", raising=False)
+        fake_stdlib = (os.__file__ and os.path.dirname(os.__file__)) or "/stdlib"
+        leaked_pth = str(tmp_path / "editable_src")
+        fake_sp = str(tmp_path / "venv" / "lib" / "python3.12" / "site-packages")
+        mp.setattr(sys, "path", [fake_stdlib, leaked_pth, fake_sp])
+        assert _runtime.site_packages_index() == 1
 
-    p_site = tmp_path / "p_site2"
-    p_pth = tmp_path / "p_pth2"
-    c_site = tmp_path / "c_site2"
-    for d in (p_site, p_pth, c_site):
-        d.mkdir()
-    pth_mod = type(sys)("pth_shared_mod")
-    pth_mod.__file__ = str(p_pth / "pth_shared_mod.py")
-    monkeypatch.setitem(sys.modules, "pth_shared_mod", pth_mod)
-    monkeypatch.setenv("BUNDLEUP_RUNTIME_SITE", str(p_site))
-    monkeypatch.setenv("BUNDLEUP_RUNTIME_PATHS", os.pathsep.join([str(p_site), str(p_pth)]))
-    _runtime.activate(str(c_site), [])
-    assert "pth_shared_mod" not in sys.modules
-    monkeypatch.setattr(sys, "path", orig_path)
+        p_site = tmp_path / "p_site2"
+        p_pth = tmp_path / "p_pth2"
+        c_site = tmp_path / "c_site2"
+        for d in (p_site, p_pth, c_site):
+            d.mkdir()
+        pth_mod = type(sys)("pth_shared_mod")
+        pth_mod.__file__ = str(p_pth / "pth_shared_mod.py")
+        mp.setitem(sys.modules, "pth_shared_mod", pth_mod)
+        mp.setenv("BUNDLEUP_RUNTIME_SITE", str(p_site))
+        mp.setenv("BUNDLEUP_RUNTIME_PATHS", os.pathsep.join([str(p_site), str(p_pth)]))
+        _runtime.activate(str(c_site), [])
+        assert "pth_shared_mod" not in sys.modules
 
 
 def test_phase4_deep_reasoning_audit_regressions(
@@ -2531,6 +2581,30 @@ def test_phase4_deep_reasoning_audit_regressions(
         assert install_lock.name == "pylock.install.toml"
         assert 'path = "."' not in install_lock.read_text(encoding="utf-8")
         assert 'path = "."' in exported_self.pylock.read_text(encoding="utf-8")
+
+        proj_virtual = tmp_path / "virtual_proj"
+        proj_virtual.mkdir()
+        (proj_virtual / "pyproject.toml").write_text(
+            '[project]\nname = "virtual-proj"\nversion = "0.2.0"\n[tool.uv]\npackage = false\n',
+            encoding="utf-8",
+        )
+        (proj_virtual / "uv.lock").write_text('version = 1\nrequires-python = ">=3.9"\n')
+        src_virtual = _source.load_source(proj_virtual)
+        assert not src_virtual.packaged
+        assert src_virtual.version == "0.2.0"
+        assert _source.project_version(tmp_path, src_virtual) == "0.2.0"
+        stage_virtual = tmp_path / "stage_virtual"
+        stage_virtual.mkdir()
+        exported_virtual = _uv.export(
+            "uv",
+            src_virtual,
+            lock_mode="locked",
+            python=(3, 12),
+            stage=stage_virtual,
+            progress=lambda _msg: None,
+        )
+        assert len(exported_virtual.installs) == 1
+        assert 'path = "."' not in exported_virtual.pylock.read_text(encoding="utf-8")
 
     # Track 1: unpinned requirements.txt with --locked raises NoLockfileError without resolve()
     req_unpinned = tmp_path / "unpinned_app"
@@ -2635,7 +2709,7 @@ def test_phase4_deep_reasoning_audit_regressions(
         version=(3, 12),
         full_version="3.12.3",
         implementation="cpython",
-        platform=sys.platform,
+        platform="linux",
         machine="x86_64",
         abiflags="",
         cache_tag="cpython-312",
@@ -2675,9 +2749,7 @@ def test_phase4_deep_reasoning_audit_regressions(
         BuildOptions(
             path=tmp_path,
             python="3.12.3",
-            python_platform="x86_64-apple-darwin"
-            if sys.platform == "darwin"
-            else "x86_64-unknown-linux-gnu",
+            python_platform="x86_64-unknown-linux-gnu",
         ),
     )
 
@@ -2871,7 +2943,7 @@ def test_phase4_deep_reasoning_audit_regressions(
     assert (pth_site / "win32" / "lib") in _imports.search_roots(pth_site)
     orig_sys_path = list(sys.path)
     _runtime.add_pth(str(pth_site), "pywin32.pth", set())
-    assert str(pth_site / "win32" / "lib") in sys.path
+    assert os.path.normcase(str(pth_site / "win32" / "lib")) in sys.path
     monkeypatch.setattr(sys, "path", orig_sys_path)
 
     # Track 4: _cache_imported compiles modules when __spec__ is None (like __main__)
@@ -2925,9 +2997,21 @@ def test_phase4_deep_reasoning_audit_regressions(
             _cache.clean_cache(older_than_days=30)
             assert not pruning_tmp.exists() and not pruning_lock.exists()
     with monkeypatch.context() as mp:
+        import shutil
+
         mp.setattr(_cache, "PYCACHE_PREFIXES", [tmp_path / "dup_prefix"])
         mp.setattr(sys, "pycache_prefix", str(tmp_path / "dup_prefix"))
         rel = os.path.splitdrive(str(cache_site))[1].lstrip("\\/")
         (tmp_path / "dup_prefix" / rel).mkdir(parents=True)
         copies = _cache._bytecode_copies(cache_site)
         assert len(copies) == 1
+
+        mp.setattr(shutil, "_use_fd_functions", False, raising=False)
+        _loader._rmtree(str(tmp_path / "nonexistent_dir_on_windows"))
+        unsafe_ro = tmp_path / "unsafe_ro_tree"
+        (unsafe_ro / "sub").mkdir(parents=True)
+        (unsafe_ro / "sub" / "f.txt").write_text("x")
+        (unsafe_ro / "sub" / "f.txt").chmod(0o444)
+        (unsafe_ro / "sub").chmod(0o444)
+        _loader._rmtree(str(unsafe_ro))
+        assert not unsafe_ro.exists()

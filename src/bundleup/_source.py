@@ -35,6 +35,10 @@ class Source:
     declared: Path | None = None
     app: bool = False  # a folder of modules and a requirements.txt: its files go in as they are
     pep723: bool = True  # a script with a `# /// script` block (else: requirements.txt or none)
+    version: str | None = None
+    packaged: bool = (
+        True  # False when [tool.uv] package = false or [tool.poetry] package-mode = false
+    )
 
     @property
     def workdir(self) -> Path:
@@ -194,6 +198,8 @@ def _load_project(path: Path, pyproject: Path) -> Source:
     tool = raw_tool if isinstance(raw_tool, dict) else {}
     raw_poetry = tool.get("poetry")
     poetry = raw_poetry if isinstance(raw_poetry, dict) else {}
+    raw_uv = tool.get("uv")
+    uv_cfg = raw_uv if isinstance(raw_uv, dict) else {}
     name = project.get("name") or poetry.get("name")
     if name is not None and not isinstance(name, str):
         raise ProjectError(
@@ -205,6 +211,9 @@ def _load_project(path: Path, pyproject: Path) -> Source:
             f"{pyproject} has no [project] name", hint='add `name = "..."` under [project]'
         )
     name = name or _legacy_name(path)
+    raw_version = project.get("version") or poetry.get("version")
+    version = raw_version if isinstance(raw_version, str) else None
+    packaged = uv_cfg.get("package") is not False and poetry.get("package-mode") is not False
     deps = project.get("dependencies")
     if deps is not None and (
         not isinstance(deps, list) or not all(isinstance(d, str) for d in deps)
@@ -228,6 +237,8 @@ def _load_project(path: Path, pyproject: Path) -> Source:
         is_script=False,
         pylock=pylock,
         declared=declared,
+        version=version,
+        packaged=packaged,
     )
 
 
@@ -486,4 +497,4 @@ def project_version(site: Path, source: Source) -> str | None:
     for dist in _verify.installed_distributions(site):
         if dist.name == want:
             return dist.version
-    return None
+    return source.version
