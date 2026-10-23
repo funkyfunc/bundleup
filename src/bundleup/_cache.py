@@ -103,7 +103,7 @@ def _size(path: Path) -> int:
 
 
 # How the loader names an unpacked bundle: "<name>-<first 16 hex digits of the payload's hash>".
-# Anything else in a cache root (`build/`, `.tmp-`, `.lock-`) is left alone.
+# Anything else in a cache root (`build/`, `.tmp-`, `.lock-`, `.unpack-`) is left alone.
 UNPACKED = re.compile(r"(?P<name>[^.].*)-[0-9a-f]{16}")
 TMP_UNPACKED = re.compile(
     r"\.tmp-(?P<unpacked>[^.].*-[0-9a-f]{16})-\d+-[0-9a-f]{8}(?:-(?:pruned|clean))?"
@@ -145,6 +145,23 @@ def _claim(unpacked: Path) -> IO[bytes] | None:
         handle.close()
         return None
     return handle
+
+
+def _unpacking(unpack_lock: Path) -> bool:
+    """Whether a bundle is unpacking now: it holds this `.unpack-` lock file. Where locks aren't
+    available, removing the file fails while it's open anyway."""
+    if os.name == "nt":
+        return False
+    import fcntl
+
+    try:
+        with open(unpack_lock, "r+b") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError:
+        return True
+    except OSError:
+        return False
+    return False
 
 
 def clean_cache(
@@ -201,6 +218,14 @@ def clean_cache(
                             claimed.add(unpacked)
                     doomed.append(candidate)
                     doomed_set.add(candidate)
+                elif entry.name.startswith(".unpack-"):
+                    # The loader's unpack lock: stale with its copy gone, unless an unpack holds it.
+                    unpacked = root / entry.name[len(".unpack-") :]
+                    gone = not unpacked.exists() and not unpacked.is_symlink()
+                    stale = unpacked in doomed_set or (gone and age > LEFTOVER_AGE)
+                    if stale and not _unpacking(candidate):
+                        doomed.append(candidate)
+                        doomed_set.add(candidate)
                 elif entry.name.startswith(".lock-"):
                     unpacked = root / entry.name[len(".lock-") :]
                     if unpacked in doomed_set:

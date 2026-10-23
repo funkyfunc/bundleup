@@ -804,12 +804,16 @@ def _lock(root: str) -> "BinaryIO | None":
     Best effort: if locking isn't possible, or takes longer than LOCK_TIMEOUT, carry on without
     it; the atomic rename in _extract() is what keeps results correct. The operating system
     releases the lock if its holder dies.
+
+    Its own file, not the `.lock-` one running copies hold shared (_hold): waiting on that one
+    meant waiting for every running copy to exit, 120 s, when a copy was deleted while in use
+    (twelfth review).
     """
     import time
 
     try:
         # Returned open on purpose: the open file is the lock, released by closing it.
-        handle = open(os.path.join(root, ".lock-" + DIRNAME), "a+b")  # noqa: SIM115
+        handle = open(os.path.join(root, ".unpack-" + DIRNAME), "a+b")  # noqa: SIM115
     except OSError:
         return None
     final = os.path.join(root, DIRNAME)
@@ -1268,6 +1272,20 @@ def _hold(site: str) -> bool:
     return True
 
 
+def _extract_and_hold() -> str:
+    """Unpack this bundle (or find its copy) and hold it. Holding fails while `bundleup cache
+    clean` has claimed the copy to remove it: wait for that, then unpack again, rather than run
+    from files about to be deleted (twelfth review: 5% of starts crashed during a clean)."""
+    import time
+
+    deadline = time.time() + LOCK_TIMEOUT
+    while True:
+        site = _extract()
+        if _hold(site) or time.time() > deadline:
+            return site
+        time.sleep(0.05)
+
+
 if __name__ == "__main__":
     _drop_bundle_from_sys_path()
     _SCIE_EXE = os.environ.pop("SCIE", None)
@@ -1278,10 +1296,7 @@ if __name__ == "__main__":
     _check()
     _site = _find()
     if not _site or not _hold(_site):
-        _site = _extract()
-        if not _hold(_site):
-            _site = _extract()
-            _hold(_site)
+        _site = _extract_and_hold()
     _bytecode_for_here(_site)
     _activate(_site)
     _run(_site)

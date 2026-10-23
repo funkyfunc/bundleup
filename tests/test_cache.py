@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -156,10 +157,8 @@ def test_cache_needs_a_subcommand(cache: Path) -> None:
     assert _cli.main(["cache"]) == 2
 
 
-@pytest.mark.skipif(sys.platform == "win32", reason="the in-use lock is POSIX only")
-def test_clean_never_removes_a_copy_a_running_program_uses(cache: Path, tmp_path: Path) -> None:
-    """Third review: a long-running service's copy looked unused after 30 days (the mark is set at
-    start-up) and `cache clean` deleted files it still needed."""
+def service_bundle(tmp_path: Path) -> Path:
+    """A bundle that says "ready", then runs until its stdin closes."""
     script = tmp_path / "service.py"
     script.write_text(
         '# /// script\n# requires-python = ">=3.9"\n# dependencies = []\n# ///\n'
@@ -167,6 +166,14 @@ def test_clean_never_removes_a_copy_a_running_program_uses(cache: Path, tmp_path
     )
     bundle = tmp_path / "service.pyz"
     assert _cli.main(["build", str(script), "-o", str(bundle), "-q"]) == 0
+    return bundle
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the in-use lock is POSIX only")
+def test_clean_never_removes_a_copy_a_running_program_uses(cache: Path, tmp_path: Path) -> None:
+    """Third review: a long-running service's copy looked unused after 30 days (the mark is set at
+    start-up) and `cache clean` deleted files it still needed."""
+    bundle = service_bundle(tmp_path)
     service = subprocess.Popen(
         [sys.executable, str(bundle)],
         stdin=subprocess.PIPE,
@@ -184,3 +191,64 @@ def test_clean_never_removes_a_copy_a_running_program_uses(cache: Path, tmp_path
     finally:
         service.communicate("")
     assert copy.path in bundleup.clean_cache(older_than_days=30).removed  # once it has exited
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the in-use lock is POSIX only")
+def test_a_copy_deleted_while_in_use_unpacks_again_at_once(cache: Path, tmp_path: Path) -> None:
+    """Twelfth review: running copies hold their `.lock-` file shared, and unpacking waited for
+    the same file exclusively. With the copy deleted under a running program (as `verify`'s hint
+    says to do), the next start hung, silently, for 120 s."""
+    bundle = service_bundle(tmp_path)
+    service = subprocess.Popen(
+        [sys.executable, str(bundle)], stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True
+    )
+    try:
+        assert service.stdout and service.stdout.readline().strip() == "ready"
+        (copy,) = bundleup.list_cache()
+        shutil.rmtree(copy.path)
+        started = time.monotonic()
+        try:
+            again = subprocess.run(
+                [sys.executable, str(bundle)], input="", capture_output=True, text=True, timeout=30
+            )
+        except subprocess.TimeoutExpired:
+            pytest.fail("the start waited for the running copy to exit")
+        assert again.returncode == 0 and again.stdout.strip() == "ready", again.stderr
+        assert time.monotonic() - started < 15
+    finally:
+        service.communicate("")
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="the in-use lock is POSIX only")
+def test_a_start_waits_while_clean_removes_its_copy(cache: Path, tmp_path: Path) -> None:
+    """Twelfth review: a start that couldn't hold its copy because `cache clean` had claimed it
+    ran from it anyway, and crashed once clean deleted its files (5% of starts during a clean).
+    Now it waits for the clean, then unpacks again."""
+    import fcntl
+
+    script = tmp_path / "late.py"
+    script.write_text(
+        '# /// script\n# requires-python = ">=3.9"\n# dependencies = []\n# ///\n'
+        "import sys, time\nopen(sys.argv[1], 'w').close()\ntime.sleep(1)\n"
+        "print(len(open(__file__).read()))\n"  # reads its own file in the unpacked copy, late
+    )
+    bundle = tmp_path / "late.pyz"
+    assert _cli.main(["build", str(script), "-o", str(bundle), "-q"]) == 0
+    began = tmp_path / "began"
+    subprocess.run([sys.executable, str(bundle), str(began)], check=True, capture_output=True)
+    began.unlink()
+    (copy,) = bundleup.list_cache()
+    with open(cache / f".lock-{copy.path.name}", "r+b") as claim:  # what `cache clean` holds
+        fcntl.flock(claim.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        start = subprocess.Popen(
+            [sys.executable, str(bundle), str(began)],
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+        )
+        time.sleep(1.5)
+        assert not began.exists(), "it ran from a copy `cache clean` had claimed"
+        shutil.rmtree(copy.path)  # clean removes the copy, then lets go of it
+    out, err = start.communicate(timeout=60)
+    assert start.returncode == 0 and int(out) > 0, err
+    assert copy.path.is_dir()  # unpacked again

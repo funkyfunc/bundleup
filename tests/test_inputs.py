@@ -312,6 +312,39 @@ def test_downloading_a_python_is_announced(monkeypatch: pytest.MonkeyPatch, tmp_
     assert [e.kind for e in events] == ["note"] and "UV_PYTHON_DOWNLOADS=never" in events[0].text
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="checks the lock with fcntl")
+def test_downloading_a_python_leaves_uvs_own_lock_free(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """Twelfth review: bundleup held `<install dir>/.lock` while `uv python install` ran, the
+    file uv locks itself, so every build that needed a download hung for five minutes."""
+    import fcntl
+
+    from bundleup import _python
+
+    monkeypatch.setattr(_python, "find_interpreter", lambda *a, **k: None)
+    python = tmp_path / "python3.8"
+    python.write_text("")
+    installed: list[bool] = []
+
+    def fake_uv(cmd: list[str], *, env: dict[str, str], **kwargs: object) -> str:
+        if cmd[1:3] == ["python", "install"]:
+            with open(Path(env["UV_PYTHON_INSTALL_DIR"]) / ".lock", "a+b") as lock:
+                try:  # what uv does before installing
+                    fcntl.flock(lock.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                except BlockingIOError:
+                    pytest.fail("bundleup holds uv's install lock, so uv would wait on it")
+            installed.append(True)
+            return ""
+        if installed:
+            return str(python)
+        raise UvError("uv python find failed")
+
+    monkeypatch.setattr(_python, "run", fake_uv)
+    found = _python.fetch_interpreter("uv", "3.8", cwd=tmp_path, progress=lambda e: None)
+    assert found == str(python.resolve())
+
+
 def test_package_main_module_fallback_and_output_validation(tmp_path: Path) -> None:
     """Ninth review: a project without `[project.scripts]` falls back to `<pkg>/__main__.py`;
     and `-o <existing_dir>` or `-o <input_script>` is rejected with a clear UsageError."""

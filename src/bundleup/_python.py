@@ -355,10 +355,13 @@ def private_pythons() -> Path:
 
 @contextlib.contextmanager
 def _install_lock(folder: Path) -> Iterator[None]:
+    """One install into `folder` at a time. The lock file sits beside the folder, not in it:
+    `uv python install` locks `<install dir>/.lock` itself, so holding that one made uv wait on
+    its own parent until it timed out, five minutes later (twelfth review)."""
     handle = None
     try:
         folder.mkdir(parents=True, exist_ok=True)
-        handle = open(folder / ".lock", "a+b")  # noqa: SIM115
+        handle = open(folder.with_name(folder.name + ".lock"), "a+b")  # noqa: SIM115
         if os.name == "nt":
             import msvcrt
 

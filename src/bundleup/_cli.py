@@ -746,7 +746,7 @@ def _run_cache(opts: argparse.Namespace) -> ExitCode:
         _emit_json(command, ExitCode.OK, report.to_json_dict(), [])
     elif opts.quiet == 0:
         verb = "Would remove" if report.dry_run else "Removed"
-        shown = [p for p in report.removed if not p.name.startswith(".lock-")]
+        shown = [p for p in report.removed if not p.name.startswith((".lock-", ".unpack-"))]
         items = plural(len(shown), "item")
         print(f"{style.bold(verb)} {items} ({_size(report.freed_bytes)})", file=err)
         if report.in_use:
