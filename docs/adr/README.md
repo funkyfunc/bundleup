@@ -38,7 +38,7 @@ and change only the old one's status line.
 | [0027](0027-children-see-the-bundle-only-from-its-own-python.md) | Child processes see the bundle only when they run the bundle's own Python | Accepted (amended by 0037) |
 | [0028](0028-a-project-needs-a-lockfile.md) | A project needs a lockfile; bundleup never writes one into it | Accepted; first decision superseded by 0041 |
 | [0029](0029-start-up-checks-c-library-and-macos-version.md) | Bundles check the C library and macOS version at start-up | Accepted |
-| [0030](0030-pure-python-bundles-run-on-a-range.md) | A pure-Python bundle runs on every Python version its lock allows | Accepted (shebang superseded by 0036) |
+| [0030](0030-pure-python-bundles-run-on-a-range.md) | A pure-Python bundle runs on every Python version its lock allows | Accepted (shebang superseded by 0036; native single-version rule superseded by 0052) |
 | [0031](0031-wheel-coverage-from-the-lock.md) | Wheel coverage is checked from the lock, before installing, for any number of targets | Accepted (`--also-platform` unified into `--python-platform` by 0050) |
 | [0032](0032-tool-bundleup-configuration.md) | Project settings live in `[tool.bundleup]` | Accepted |
 | [0033](0033-a-stale-lock-is-an-error.md) | A stale lock is an error by default; bundleup never rewrites it | Accepted |
@@ -60,3 +60,4 @@ and change only the old one's status line.
 | [0049](0049-zip-format-replaces-lambda.md) | `--format zip` replaces `--format lambda` | Accepted |
 | [0050](0050-consolidate-cli-and-in-process-range-checks.md) | Consolidate CLI flags and check older Pythons' syntax in-process | Accepted |
 | [0051](0051-learnings-from-js-bundlers.md) | Learnings from JavaScript bundlers: `--external`, code frames, dependency chains, and CLI ergonomics | Accepted |
+| [0052](0052-native-bundles-run-on-a-python-range.md) | Native bundles run on every compatible Python version by default | Accepted |

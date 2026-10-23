@@ -22,6 +22,13 @@ ALIASES = {
     "macos": "aarch64-apple-darwin",
     "windows": "x86_64-pc-windows-msvc",
 }
+ALL_PLATFORMS = (
+    "aarch64-apple-darwin",
+    "x86_64-apple-darwin",
+    "x86_64-manylinux_2_28",
+    "aarch64-manylinux_2_28",
+    "x86_64-pc-windows-msvc",
+)
 # How each OS names a CPU (what the loader compares at start-up): os.uname().machine on Linux and
 # macOS, PROCESSOR_ARCHITECTURE on Windows.
 MACHINES = {
@@ -245,6 +252,33 @@ def is_native(tags: list[str]) -> bool:
     return any(not tag.endswith("-any") for tag in tags)
 
 
+def wheel_allows_python(
+    tags: list[str],
+    python: tuple[int, int],
+    *,
+    abiflags: str = "",
+    platform: Platform | None = None,
+) -> bool:
+    """Whether an installed wheel's `tags` include at least one tag compatible with CPython
+    `python` (`(3, 12)`), e.g. `py3-none-<platform>` or `cp38-abi3-<platform>`."""
+    if not tags:
+        return False
+    if platform is not None:
+        return any(platform.accepts(tag, python=python, abiflags=abiflags) for tag in tags)
+    from packaging.tags import parse_tag
+
+    cp = f"cp{python[0]}{python[1]}"
+    abi = f"{cp}{abiflags}"
+    valid_abi = {
+        (t.interpreter, t.abi)
+        for t in (
+            *cpython_tags(python, abis=[abi], platforms=["any"]),
+            *compatible_tags(python, interpreter=cp, platforms=["any"]),
+        )
+    }
+    return any((t.interpreter, t.abi) in valid_abi for tag in tags for t in parse_tag(tag))
+
+
 LEGACY_MANYLINUX = {"manylinux1": (2, 5), "manylinux2010": (2, 12), "manylinux2014": (2, 17)}
 LEVEL = re.compile(r"(?P<kind>manylinux|musllinux|macosx)_(?P<major>\d+)_(?P<minor>\d+)_")
 
@@ -310,14 +344,21 @@ def runtime_needs(
     target_musl = platform.musl if platform is not None else musl
     need: dict[str, tuple[int, int]] = {}
     for tags in wheels:
-        per_wheel: dict[str, tuple[int, int]] = {}
         matching = [t for t in tags if platform.accepts(t)] if platform is not None else list(tags)
+        by_abi: dict[tuple[str, ...], list[str]] = {}
         for tag in matching or tags:
-            for kind, level in _levels(tag, platform=platform, arch=arch, musl=target_musl).items():
-                if kind not in per_wheel or level < per_wheel[kind]:
-                    per_wheel[kind] = level
-        for kind, level in per_wheel.items():
-            need[kind] = max(need.get(kind, level), level)
+            abi_key = tuple(tag.split("-", 2)[:2]) if tag.count("-") >= 2 else ("",)
+            by_abi.setdefault(abi_key, []).append(tag)
+        for abi_tags in by_abi.values():
+            per_wheel: dict[str, tuple[int, int]] = {}
+            for tag in abi_tags:
+                for kind, level in _levels(
+                    tag, platform=platform, arch=arch, musl=target_musl
+                ).items():
+                    if kind not in per_wheel or level < per_wheel[kind]:
+                        per_wheel[kind] = level
+            for kind, level in per_wheel.items():
+                need[kind] = max(need.get(kind, level), level)
     libc = None
     if target_musl is True and "musllinux" in need:
         libc = ("musl", need["musllinux"])

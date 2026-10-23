@@ -1,7 +1,8 @@
 # ADR-0030: A pure-Python bundle runs on every Python version its lock allows
 
 - **Status:** Accepted (2026-10-07); the versioned shebang is superseded by
-  [ADR-0036](0036-wrong-python-reruns-and-a-platform-matrix.md)
+  [ADR-0036](0036-wrong-python-reruns-and-a-platform-matrix.md); the "compiled bundles run on one
+  version" rule is superseded by [ADR-0052](0052-native-bundles-run-on-a-python-range.md)
 - **Date:** 2026-10-07
 - **Deciders:** the owner approved fixing the [independent review](../findings/2026-10-07-independent-review.md)'s
   findings, from a plan that named this fix; the details were designed by an agent and haven't

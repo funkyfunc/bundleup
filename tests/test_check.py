@@ -11,7 +11,7 @@ import pytest
 
 from bundleup import _bytecode
 from bundleup import _check as c
-from bundleup._python import Target
+from bundleup._python import PythonRange, Target
 from bundleup._verify import record_hash
 
 TARGET = Target(
@@ -292,3 +292,22 @@ def test_eleventh_review_canonical_project_else_imports_pth_bom_and_audit(
     (site / "src_sub" / "extra_mod.py").write_text("x = 1\n")
     (site / ".hidden.pth").write_text("ghost_dir\n")
     assert "extra_mod" in _imports.provided_by(site)
+
+
+def test_a_payload_for_other_pythons_claims_only_those_its_code_runs_on(tmp_path: Path) -> None:
+    """Twelfth review: payloads built for other Python versions than the build's own (ADR-0052)
+    skipped every code check, so a `match` statement got a payload claiming 3.9."""
+    code = tmp_path / "tool.py"
+    code.write_text("import sys\nmatch sys.argv:\n    case _:\n        pass\n")
+    old = PythonRange((3, 9), (3, 9))
+    assert c.fork_range(old, code=[code], imported={"sys"}, provided=set()) is None
+    wide = c.fork_range(PythonRange((3, 9), None), code=[code], imported={"sys"}, provided=set())
+    assert wide == PythonRange((3, 10), None)
+
+    code.write_text("import tomllib\n")  # in the standard library from 3.11
+    found = c.fork_range(
+        PythonRange((3, 9), (3, 12)), code=[code], imported={"tomllib"}, provided=set()
+    )
+    assert found == PythonRange((3, 11), (3, 12))
+    provided = c.fork_range(old, code=[code], imported={"tomllib"}, provided={"tomllib"})
+    assert provided == old  # a package in the payload provides it

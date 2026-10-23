@@ -20,10 +20,12 @@ from packaging.utils import canonicalize_name
 from . import _bytecode, _loader, _verify
 from . import _toml as tomllib
 from ._errors import (
+    BundleupError,
     LockfileOutdatedError,
     NoCompatibleWheelError,
     NoLockfileError,
     ProjectError,
+    UsageError,
     UvError,
     UvNotFoundError,
 )
@@ -382,7 +384,14 @@ def _export_cache_key(
     except OSError:
         return None
     digest = hashlib.sha256()
-    for part in (uv, uv_mtime, str(source.workdir), *selection):
+    for part in (
+        uv,
+        uv_mtime,
+        str(source.workdir),
+        source.requires_python or "",
+        str(source.packaged),
+        *selection,
+    ):
         digest.update(part.encode("utf-8", "replace") + b"\0")
     digest.update(manifest_bytes + b"\0" + lock_bytes)
     return digest.hexdigest()[:32]
@@ -440,6 +449,42 @@ def _strip_script_external(script_path: Path, excluded: set[str], stage: Path) -
     return staged
 
 
+def _script_from_oldest(script: Path, stage: Path) -> Path | None:
+    """A staged copy of an unlocked script that names no requires-python, saying it's for every
+    Python bundles run on (as a requirements file is resolved, `_oldest_python`): uv resolves
+    such a script for its own default Python only, which left out what older ones need, so the
+    bundle couldn't claim them (twelfth review). None when it says, or uses local paths."""
+    from ._source import PEP723, read_python_text, script_metadata
+
+    text = read_python_text(script)
+    meta = script_metadata(text)
+    match = next((m for m in PEP723.finditer(text) if m.group("type") == "script"), None)
+    if match is None or meta.get("requires-python") or "path" in str(meta.get("tool") or ""):
+        return None
+    staged = stage.resolve() / "oldest" / script.name
+    staged.parent.mkdir(parents=True, exist_ok=True)
+    start = match.start("content")
+    staged.write_text(
+        text[:start] + '# requires-python = ">=3.9"\n' + text[start:], encoding="utf-8"
+    )
+    return staged
+
+
+def _built_for_this_machine(detail: str, platform: str) -> NoCompatibleWheelError:
+    """uv built a package without wheels from source, for this machine, not `platform`. Named,
+    with what to do: it said "a package", and pointed at a `check` that failed the same way
+    (twelfth review)."""
+    built = re.search(r"([A-Za-z0-9][A-Za-z0-9_.]*)-[^-\s`'\"]+-[^\s`'\"]+\.whl", detail)
+    which = canonicalize_name(built[1]) if built else "a package"
+    return NoCompatibleWheelError(
+        f"{which} has no wheel for {platform}, only source, and a build from source here runs on "
+        "this machine only",
+        detail=detail,
+        hint="build on the target, or pin a version (or a replacement) that publishes wheels "
+        "for it",
+    )
+
+
 @dataclass(frozen=True)
 class Exported:
     """What to install (`uv pip install` argument lists, one call each) and the pylock.toml the
@@ -461,6 +506,7 @@ def export(
     progress: Progress,
     external: Sequence[str] = (),
     markers: dict[str, str] | None = None,
+    interpreter: str | None = None,
 ) -> Exported:
     """What to install, as `uv pip install` arguments, and the pylock.toml (PEP 751) the
     lock-vs-bundle check reads. From uv.lock: exported as a pylock.toml, which names each
@@ -504,7 +550,14 @@ def export(
         if source.is_script and not locked_file
         else source.path
     )
+    oldest_script = (
+        _script_from_oldest(script_arg, stage) if source.is_script and not locked_file else None
+    )
     selection = ["--script", str(script_arg)] if source.is_script else ["--no-dev", "--no-editable"]
+    if source.is_script and interpreter:
+        # The target's Python, not uv's default or an active virtualenv's: a script that names
+        # no requires-python is resolved, and its lock judged, for that one (twelfth review).
+        selection += ["--python", interpreter]
     for clean in sorted(excluded):
         selection.extend(["--prune", clean])
     # A lock is checked against pyproject.toml / the script by default: uv would otherwise
@@ -534,9 +587,20 @@ def export(
             str(pylock),
         ]
         try:
-            _run_with_offline_fallback(
-                command, cwd=source.workdir, what="uv export", progress=progress
-            )
+            if oldest_script is not None:
+                try:
+                    _run_with_offline_fallback(
+                        [str(oldest_script) if c == str(script_arg) else c for c in command],
+                        cwd=source.workdir,
+                        what="uv export",
+                        progress=progress,
+                    )
+                except UvError:
+                    oldest_script = None  # a dependency needs a newer Python: as uv resolves it
+            if oldest_script is None:
+                _run_with_offline_fallback(
+                    command, cwd=source.workdir, what="uv export", progress=progress
+                )
         except UvError as e:
             detail_low = (e.detail or "").lower()
             if mode == "locked" and (
@@ -752,11 +816,12 @@ def resolve(
         check.write_text(EMPTY_PYLOCK, encoding="utf-8")
         return Exported([], check)
     excluded = _clean_external(external)
+    if declared.suffix == ".txt":
+        _refuse_editable_folder(declared)
     compile_input = _strip_requirements_external(declared, excluded, stage)
     if compile_input is None:
         resolved.write_text(EMPTY_PYLOCK, encoding="utf-8")
     else:
-        oldest = _oldest_python(source.requires_python, python)
         with untouched(source):  # reading a setup.py/setup.cfg project's metadata builds it
             actual_input = (
                 declared.parent / "setup.py"
@@ -766,10 +831,28 @@ def resolve(
                 else compile_input
             )
             cmd = [uv, "pip", "compile", "--quiet", "--universal", "--format", "pylock.toml"]
-            cmd += ["--python-version", oldest, "-o", str(resolved), str(actual_input)]
-            _run_with_offline_fallback(
-                cmd, cwd=declared.parent, what="uv pip compile", progress=progress
-            )
+            cmd += ["-o", str(resolved), str(actual_input)]
+            oldest = _oldest_python(source.requires_python, python)
+            try:
+                _run_with_offline_fallback(
+                    [*cmd, "--python-version", oldest],
+                    cwd=declared.parent,
+                    what="uv pip compile",
+                    progress=progress,
+                )
+            except UvError:
+                # Nothing declared which Pythons it's for, so it was resolved for every one
+                # bundles run on; a dependency that needs a newer Python stops that, not the
+                # build: resolve for the target's (twelfth review).
+                target_python = f"{python[0]}.{python[1]}"
+                if source.requires_python or oldest == target_python:
+                    raise
+                _run_with_offline_fallback(
+                    [*cmd, "--python-version", target_python],
+                    cwd=declared.parent,
+                    what="uv pip compile",
+                    progress=progress,
+                )
         relocate_paths(resolved, declared.parent)
     text = _strip_external(resolved.read_text(encoding="utf-8"), external)
     text = re.sub(
@@ -800,21 +883,47 @@ def resolve(
     return Exported([[*args, *extra] for args in installs], check, pinned=pinned)
 
 
+def _refuse_editable_folder(requirements: Path) -> None:
+    """`-e .` in a folder app's requirements.txt asks to install the folder as a package, which it
+    isn't: uv's error said only that it "does not appear to be a Python project" (twelfth
+    review). The folder's modules go into the bundle as they are anyway (ADR-0041)."""
+    try:
+        lines = requirements.read_text(encoding="utf-8-sig").splitlines()
+    except (OSError, UnicodeDecodeError):
+        return
+    for raw in lines:
+        line = raw.split(" #", 1)[0].strip()
+        match = re.fullmatch(r"(?:-e|--editable)(?:\s+|=)(\S+)", line)
+        if not match or re.match(r"[A-Za-z][A-Za-z0-9+.-]*://|git\+", match[1]):
+            continue
+        folder = (requirements.parent / match[1]).resolve()
+        if folder.is_dir() and not any(
+            (folder / name).is_file() for name in ("pyproject.toml", "setup.py", "setup.cfg")
+        ):
+            raise ProjectError(
+                f"{requirements.name} installs {match[1]} as a package (`{line}`), but it has no "
+                "pyproject.toml or setup.py",
+                hint="remove that line: the folder's own modules go into the bundle as they are",
+            )
+
+
 def _oldest_python(requires: str | None, python: tuple[int, int]) -> str:
     """The lowest Python the resolution covers: the project's requires-python (from 3.9, the
-    oldest Python bundles target), or the target's."""
-    if requires:
-        from packaging.specifiers import InvalidSpecifier, SpecifierSet
+    oldest Python bundles target), or, when nothing says, 3.9 itself: resolving for the target's
+    Python alone left out what older ones need (`tomli; python_version < '3.11'`), and the
+    bundle can't claim them then (twelfth review)."""
+    oldest = min(9, python[1])
+    if not requires:
+        return f"3.{oldest}"
+    from packaging.specifiers import InvalidSpecifier, SpecifierSet
 
-        try:
-            spec = SpecifierSet(requires)
-        except InvalidSpecifier:
-            spec = None
-        for minor in range(min(9, python[1]), python[1] + 1):
-            if spec is not None and any(
-                spec.contains(f"3.{minor}.{p}", prereleases=True) for p in (0, 99)
-            ):
-                return f"3.{minor}"
+    try:
+        spec = SpecifierSet(requires)
+    except InvalidSpecifier:
+        return f"{python[0]}.{python[1]}"
+    for minor in range(oldest, python[1] + 1):
+        if any(spec.contains(f"3.{minor}.{p}", prereleases=True) for p in (0, 99)):
+            return f"3.{minor}"
     return f"{python[0]}.{python[1]}"
 
 
@@ -971,6 +1080,7 @@ def install(
     site: Path,
     script: str | None,
     progress: Progress,
+    entry: str | None = None,
 ) -> list[str]:
     """Install the exported set into `site`, the directory that becomes the payload. `reqs` is
     one `uv pip install` argument list per call (uv takes a pylock.toml only on its own). Returns
@@ -978,7 +1088,18 @@ def install(
     # The export is the complete, pinned set, so --no-deps installs exactly the lock. Relative
     # paths in it (the project itself, workspace members) resolve against the working directory.
     platform = ["--python-platform", target.python_platform.name] if target.python_platform else []
-    common = ["--quiet", "--no-deps", "--target", str(site), "--python", target.executable]
+    # The full version: uv reads "3.9" as 3.9.0, and a lock forked at `python_full_version <= '3.9'`
+    # then installs what 3.9.0 gets, not what this 3.9.6 is locked to (twelfth review).
+    py_ver = ["--python-version", target.full_version]
+    common = [
+        "--quiet",
+        "--no-deps",
+        "--target",
+        str(site),
+        "--python",
+        target.executable,
+        *py_ver,
+    ]
     site.mkdir(parents=True, exist_ok=True)  # also when there's nothing to install
     try:
         with untouched(source):
@@ -991,26 +1112,9 @@ def install(
                 )
     except UvError as e:
         if target.python_platform and "is not compatible with the target" in (e.detail or ""):
-            raise NoCompatibleWheelError(
-                f"a package has no wheel for {target.python_platform.name}",
-                detail=e.detail,
-                hint="uv could only build it from source, which works for this machine only; "
-                "`bundleup check --python-platform ...` lists which platforms the locked wheels "
-                "support",
-            ) from None
+            raise _built_for_this_machine(e.detail or "", target.python_platform.name) from None
         raise
-    _ensure_site_writable(site)
-    for name in SKIP_TOP:
-        p = site / name
-        if p.is_dir() and not p.is_symlink():
-            _loader._rmtree(str(p))
-        elif p.exists() or p.is_symlink():
-            p.unlink(missing_ok=True)
-    for launcher in launchers(site):
-        (site / launcher).unlink(missing_ok=True)
-    for folder in _verify.SCRIPT_DIRS:
-        with contextlib.suppress(OSError):  # missing, or holds files a wheel ships: keep it
-            (site / folder).rmdir()
+    _clean_installed_site(site)
     if script:
         dst = site / script
         if dst.exists():
@@ -1023,7 +1127,19 @@ def install(
         with contextlib.suppress(OSError):
             dst.chmod(dst.stat().st_mode | 0o200)
     copied = []
-    if source.app:  # its modules and files at the top, where a project's packages would be
+    from ._source import APP_MAINS
+
+    copy_local = source.app or (
+        not source.packaged
+        and not source.is_script
+        and entry != "python"
+        and (
+            entry is not None
+            or bool(source.scripts)
+            or any((source.path / m).is_file() for m in APP_MAINS)
+        )
+    )
+    if copy_local:  # its modules and files at the top, where a project's packages would be
         for rel, file in app_files(source):
             dst = site / rel
             if dst.exists():
@@ -1038,6 +1154,240 @@ def install(
             copied.append(rel)
     _strip_local_build_meta(site)
     return copied
+
+
+def _clean_installed_site(site: Path) -> None:
+    _ensure_site_writable(site)
+    for name in SKIP_TOP:
+        p = site / name
+        if p.is_dir() and not p.is_symlink():
+            _loader._rmtree(str(p))
+        elif p.exists() or p.is_symlink():
+            p.unlink(missing_ok=True)
+    for launcher in launchers(site):
+        (site / launcher).unlink(missing_ok=True)
+    for folder in _verify.SCRIPT_DIRS:
+        with contextlib.suppress(OSError):  # missing, or holds files a wheel ships: keep it
+            (site / folder).rmdir()
+
+
+def merge_native_wheels(
+    uv: str,
+    source: Source,
+    *,
+    site: Path,
+    pylock: Path,
+    target: Target,
+    candidates: Sequence[tuple[int, int]],
+    stage: Path,
+    progress: Progress,
+) -> bool:
+    """When `site` contains per-interpreter CPython wheels (`cp3XX-cp3XX-*`), install those
+    distributions' wheels for neighbouring compatible Python versions in `candidates` and merge
+    their ABI-tagged extension files (`.cpython-3XX*`, `.cp3XX*`), `WHEEL` tags, and `RECORD`
+    entries into `site` whenever all shared files are byte-for-byte identical.
+
+    Returns `True` if merging stopped on a file conflict (e.g. `pywin32`'s untagged `.pyd` files),
+    so the caller can layer the remaining Python versions instead.
+    """
+    import csv
+    import io
+
+    from packaging.specifiers import InvalidSpecifier, SpecifierSet
+
+    from . import _coverage, _platforms
+    from ._exe import host_platform
+
+    if target.implementation != "cpython" or not candidates:
+        return False
+    dists = _verify.installed_distributions(site)
+    if not dists:
+        return False
+    dist_tags = {d.name: _platforms.wheel_tags(site / d.dist_info) for d in dists}
+    if any(not t for t in dist_tags.values()) or not any(
+        _platforms.is_native(t) for t in dist_tags.values()
+    ):
+        return False
+    candidate_set = set(candidates)
+    if all(
+        _platforms.wheel_allows_python(
+            dist_tags[d.name],
+            v,
+            abiflags=target.abiflags or "",
+            platform=target.python_platform,
+        )
+        for v in candidate_set
+        for d in dists
+    ):
+        return False
+    try:
+        eff_platform = target.python_platform or host_platform(target)
+    except UsageError:
+        return False
+    lock = pylock.read_text(encoding="utf-8")
+    selected = set(_verify.locked_packages(lock, target.markers))
+    selected_names = {p.name for p in selected}
+    all_lock_names = {
+        canonicalize_name(str(p.get("name", "")))
+        for p in tomllib.loads(lock).get("packages", [])
+        if isinstance(p, dict) and p.get("name")
+    }
+    specs: list[SpecifierSet] = []
+    texts = [source.requires_python or "", _verify.lock_requires_python(lock)]
+    for text in [*texts, *(d.requires_python for d in dists)]:
+        try:
+            specs.append(SpecifierSet(text))
+        except InvalidSpecifier:
+            continue
+    here_minor = target.version[1]
+    directions = [
+        range(here_minor - 1, 8, -1),
+        range(here_minor + 1, 15),
+    ]
+    had_conflict = False
+    for direction in directions:
+        for minor in direction:
+            if (3, minor) not in candidate_set:
+                break
+            if not all(
+                any(spec.contains(f"3.{minor}.{p}", prereleases=True) for p in (0, 99))
+                for spec in specs
+            ):
+                break
+            full = f"3.{minor}.0"
+            env = {
+                **target.markers,
+                "python_version": f"3.{minor}",
+                "python_full_version": full,
+                "implementation_version": full,
+            }
+            if set(_verify.locked_packages(lock, env)) != selected:
+                break
+            needed = [
+                d
+                for d in dists
+                if not _platforms.wheel_allows_python(
+                    dist_tags[d.name],
+                    (3, minor),
+                    abiflags=target.abiflags or "",
+                    platform=target.python_platform,
+                )
+            ]
+            if not needed:
+                continue
+            needed_names = {d.name for d in needed}
+            if not (needed_names <= selected_names) or (
+                source.packaged and canonicalize_name(source.name) in needed_names
+            ):
+                break
+            gaps = _coverage.gaps(lock, eff_platform, (3, minor), abiflags=target.abiflags or "")
+            if any(canonicalize_name(g.package) in needed_names for g in gaps):
+                break
+            sub_lock = stage / f"pylock.cp3{minor}.toml"
+            sub_lock.write_text(
+                _strip_external(lock, sorted(all_lock_names - needed_names)),
+                encoding="utf-8",
+            )
+            tmp_site = stage / f"native-cp3{minor}"
+            tmp_site.mkdir(parents=True, exist_ok=True)
+            plat_args = (
+                ["--python-platform", target.python_platform.name] if target.python_platform else []
+            )
+            cmd = [
+                uv,
+                "pip",
+                "install",
+                "--quiet",
+                "--no-deps",
+                "--target",
+                str(tmp_site),
+                "--python",
+                target.executable,
+                "--python-version",
+                f"3.{minor}",
+                *plat_args,
+                "-r",
+                str(sub_lock),
+            ]
+            try:
+                _run_with_offline_fallback(
+                    cmd, cwd=source.workdir, what="uv pip install", progress=progress
+                )
+            except (UvError, BundleupError):
+                _loader._rmtree(str(tmp_site))
+                break
+            _clean_installed_site(tmp_site)
+            _strip_local_build_meta(tmp_site)
+            new_files: list[tuple[str, Path]] = []
+            conflict = False
+            build_meta = re.compile(
+                r"(?:^|/)(?:__config__|_build_config)\.py$|\.(?:a|lib|pc|cmake)$"
+            )
+            for rel, path_str in _bytecode.walk_files(tmp_site):
+                if rel.split("/", 1)[0].endswith(".dist-info"):
+                    continue
+                src_file = Path(path_str)
+                dst_file = site / rel
+                if dst_file.exists():
+                    if dst_file.read_bytes() != src_file.read_bytes() and not build_meta.search(
+                        rel
+                    ):
+                        conflict = True
+                        break
+                elif re.search(r"\.(?:cpython-3\d+|cp3\d+)[-.]", rel.rsplit("/", 1)[-1]):
+                    new_files.append((rel, src_file))
+                else:
+                    # Only that version's own extensions may join a shared payload: any other new
+                    # file would reach every version, so that one gets its own payload instead
+                    # (twelfth review).
+                    conflict = True
+                    break
+            if conflict:
+                had_conflict = True
+                _loader._rmtree(str(tmp_site))
+                break
+            for rel, src_file in new_files:
+                dst_file = site / rel
+                dst_file.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(src_file, dst_file)
+                with contextlib.suppress(OSError):
+                    dst_file.chmod(dst_file.stat().st_mode | 0o200)
+            for d in needed:
+                site_di = site / d.dist_info
+                tmp_di = tmp_site / d.dist_info
+                new_tags = [t for t in _platforms.wheel_tags(tmp_di) if t not in dist_tags[d.name]]
+                wheel_path = site_di / "WHEEL"
+                if new_tags and wheel_path.is_file():
+                    wheel_text = wheel_path.read_text(encoding="utf-8").rstrip("\r\n")
+                    wheel_text += "\n" + "\n".join(f"Tag: {t}" for t in new_tags) + "\n"
+                    wheel_path.write_text(wheel_text, encoding="utf-8", newline="\n")
+                    dist_tags[d.name].extend(new_tags)
+                rec_path = site_di / "RECORD"
+                tmp_rec = tmp_di / "RECORD"
+                if rec_path.is_file() and tmp_rec.is_file():
+                    rows = [
+                        row
+                        for row in csv.reader(io.StringIO(rec_path.read_text(encoding="utf-8")))
+                        if row
+                    ]
+                    seen_paths = {row[0].replace("\\", "/") for row in rows}
+                    for row in csv.reader(io.StringIO(tmp_rec.read_text(encoding="utf-8"))):
+                        if not row:
+                            continue
+                        norm_p = row[0].replace("\\", "/")
+                        if norm_p not in seen_paths and (site / norm_p).is_file():
+                            rows.append([norm_p, *row[1:]])
+                            seen_paths.add(norm_p)
+                    if wheel_path.is_file():
+                        wb = wheel_path.read_bytes()
+                        w_rel = f"{d.dist_info}/WHEEL"
+                        w_row = [w_rel, _verify.record_hash(wb), str(len(wb))]
+                        rows = [w_row if r[0].replace("\\", "/") == w_rel else r for r in rows]
+                    buf = io.StringIO()
+                    csv.writer(buf, lineterminator="\n").writerows(rows)
+                    rec_path.write_text(buf.getvalue(), encoding="utf-8", newline="\n")
+            _loader._rmtree(str(tmp_site))
+    return had_conflict
 
 
 def _strip_local_build_meta(site: Path) -> None:
@@ -1072,7 +1422,7 @@ def _strip_local_build_meta(site: Path) -> None:
             ]
             buf = io.StringIO()
             csv.writer(buf, lineterminator="\n").writerows(rows)
-            record.write_text(buf.getvalue(), encoding="utf-8")
+            record.write_text(buf.getvalue(), encoding="utf-8", newline="\n")
 
 
 def _ensure_site_writable(site: Path) -> None:

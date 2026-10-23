@@ -3050,3 +3050,350 @@ def test_phase4_deep_reasoning_audit_regressions(
             "https://example.com",
             "corpus",
         )
+
+
+def test_multi_python_abi3_py3_none_wheel_ranges_and_python_specifiers(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Native wheels with `py3-none-<platform>` or `cp3X-abi3-<platform>` tags widen `python_range`
+    across compatible CPython versions, `_served` deduplicates redundant Python builds per platform,
+    `--python` / `[tool.bundleup]` expand `3.10-3.14` / `3.11+` / `>=3.11,<3.14`, and `check`
+    analyzes skill/virtual projects without requiring `--entry python`."""
+    import sys
+    from dataclasses import replace
+
+    from bundleup import (
+        BuildOptions,
+        _build,
+        _check,
+        _cli,
+        _config,
+        _loader,
+        _payload,
+        _platforms,
+        _python,
+        _source,
+        check,
+    )
+
+    # 1. `wheel_allows_python` on py3-none-<platform>, cp310-abi3, and cp312-cp312
+    mac_arm = _platforms.parse("aarch64-apple-darwin")
+    assert _platforms.wheel_allows_python(["py3-none-macosx_11_0_arm64"], (3, 9), platform=mac_arm)
+    assert _platforms.wheel_allows_python(["py3-none-macosx_11_0_arm64"], (3, 14), platform=mac_arm)
+    assert not _platforms.wheel_allows_python(
+        ["cp310-abi3-macosx_11_0_arm64"], (3, 9), platform=mac_arm
+    )
+    assert _platforms.wheel_allows_python(
+        ["cp310-abi3-macosx_11_0_arm64"], (3, 10), platform=mac_arm
+    )
+    assert _platforms.wheel_allows_python(
+        ["cp310-abi3-macosx_11_0_arm64"], (3, 14), platform=mac_arm
+    )
+    assert not _platforms.wheel_allows_python(
+        ["cp310-abi3-macosx_11_0_arm64"], (3, 13), abiflags="t", platform=mac_arm
+    )
+    assert _platforms.wheel_allows_python(["cp312-cp312-macosx_11_0_arm64"], (3, 12))
+    assert not _platforms.wheel_allows_python(["cp312-cp312-macosx_11_0_arm64"], (3, 13))
+
+    # 2. `python_range` widens for abi3 + py3-none-<platform> wheels, locks for cp312 C extensions
+    abi_site = tmp_path / "abi_site"
+    for dist_name, tag in [
+        ("pw_driver", "py3-none-macosx_11_0_arm64"),
+        ("crypto_abi", "cp310-abi3-macosx_11_0_arm64"),
+    ]:
+        di = abi_site / f"{dist_name}-1.0.dist-info"
+        di.mkdir(parents=True)
+        (di / "METADATA").write_text(
+            f"Metadata-Version: 2.1\nName: {dist_name}\nVersion: 1.0\nRequires-Python: >=3.9\n"
+        )
+        (di / "WHEEL").write_text(f"Wheel-Version: 1.0\nTag: {tag}\n")
+        (di / "RECORD").write_text(f"{di.name}/METADATA,,\n{di.name}/WHEEL,,\n{di.name}/RECORD,,\n")
+    (abi_site / "crypto_abi.abi3.so").write_bytes(b"\xcf\xfa\xed\xfe")
+    pylock = tmp_path / "pylock.toml"
+    pylock.write_text(
+        'lock-version = "1.0"\nrequires-python = ">=3.9"\n'
+        '[[packages]]\nname = "pw-driver"\nversion = "1.0"\n'
+        '[[packages]]\nname = "crypto-abi"\nversion = "1.0"\n'
+    )
+    target_312 = _python.Target(
+        executable=sys.executable,
+        version=(3, 12),
+        full_version="3.12.0",
+        platform="darwin",
+        machine="arm64",
+        abiflags="",
+        implementation="cpython",
+        cache_tag="cpython-312",
+        markers=mac_arm.markers(python_full_version="3.12.0"),
+        python_platform=mac_arm,
+    )
+    src = _source.Source(
+        path=tmp_path,
+        name="app",
+        requires_python=">=3.9",
+        is_script=False,
+        pep723=False,
+        pylock=pylock,
+        declared=None,
+    )
+    assert _payload.python_range(
+        abi_site, pylock=pylock, target=target_312, source=src, native=True
+    ) == _python.PythonRange((3, 10), None)
+
+    # Adding a per-interpreter `.cpython-312-darwin.so` binary locks `python_range` to 3.12
+    g_di = abi_site / "greenlet-3.0.dist-info"
+    g_di.mkdir(parents=True)
+    (g_di / "METADATA").write_text(
+        "Metadata-Version: 2.1\nName: greenlet\nVersion: 3.0\nRequires-Python: >=3.9\n"
+    )
+    (g_di / "WHEEL").write_text("Wheel-Version: 1.0\nTag: cp312-cp312-macosx_11_0_arm64\n")
+    (g_di / "RECORD").write_text(
+        f"{g_di.name}/METADATA,,\n{g_di.name}/WHEEL,,\n{g_di.name}/RECORD,,\n"
+    )
+    (abi_site / "_greenlet.cpython-312-darwin.so").write_bytes(b"\xcf\xfa\xed\xfe")
+    pylock.write_text(pylock.read_text() + '[[packages]]\nname = "greenlet"\nversion = "3.0"\n')
+    assert _payload.python_range(
+        abi_site, pylock=pylock, target=target_312, source=src, native=True
+    ) == _python.PythonRange((3, 12), (3, 12))
+
+    # Merging 3.11 and 3.13 `.cpython-3XX` binaries + WHEEL tags widens `python_range` to 3.11-3.13
+    (abi_site / "_greenlet.cpython-311-darwin.so").write_bytes(b"\xcf\xfa\xed\xfe")
+    (abi_site / "_greenlet.cpython-313-darwin.so").write_bytes(b"\xcf\xfa\xed\xfe")
+    (g_di / "WHEEL").write_text(
+        "Wheel-Version: 1.0\n"
+        "Tag: cp311-cp311-macosx_11_0_arm64\n"
+        "Tag: cp312-cp312-macosx_11_0_arm64\n"
+        "Tag: cp313-cp313-macosx_11_0_arm64\n"
+    )
+    assert _payload.python_range(
+        abi_site, pylock=pylock, target=target_312, source=src, native=True
+    ) == _python.PythonRange((3, 11), (3, 13))
+
+    # A requested Python that can't be found or fetched is an error, never another interpreter in
+    # its place (twelfth review: a "3.14" bundle was built and checked by 3.12)
+    real_run = _python.run
+
+    def fake_run(cmd: list[str], **kw: object) -> str:
+        if kw.get("what") == "finding a Python":
+            raise _python.UvError("no python 3.11")
+        return real_run(cmd, **kw)  # type: ignore[arg-type]
+
+    with monkeypatch.context() as mp:
+        mp.setattr(_python, "run", fake_run)
+        mp.setattr(_python, "fetch_interpreter", lambda *_a, **_kw: None)
+        with pytest.raises(_python.PythonNotFoundError, match=r"couldn't find Python 3\.11"):
+            _python.find_python(
+                "uv",
+                src,
+                request="3.11",
+                python_platform="aarch64-apple-darwin",
+                progress=lambda _s, _d=None: None,
+            )
+        with pytest.raises(_python.PythonNotFoundError) as too_old:
+            _python.find_python(
+                "uv", src, request="3.7", python_platform=None, progress=lambda _s, _d=None: None
+            )
+        assert too_old.value.hint and "3.9 and newer" in too_old.value.hint
+
+    # 3. `_served` reuses native payloads whose `pythons` range covers `wanted` on the same platform
+    prep_abi = _payload.Prepared(
+        source=src,
+        target=target_312,
+        site=abi_site,
+        pylock=pylock,
+        script=None,
+        entry=_payload.Entry("python", ""),
+        packages=2,
+        native=True,
+        version="1.0",
+        diagnostics=[],
+        sizes=[],
+        pythons=_python.PythonRange((3, 10), None),
+        reach=_python.Portability(any_os=False, any_cpu=False),
+    )
+    assert _build._served(
+        [prep_abi], BuildOptions(python="3.14", python_platform="aarch64-apple-darwin")
+    )
+    assert not _build._served(
+        [prep_abi], BuildOptions(python="3.9", python_platform="aarch64-apple-darwin")
+    )
+    assert not _build._served(
+        [prep_abi], BuildOptions(python="3.14", python_platform="x86_64-apple-darwin")
+    )
+
+    # 4. Python version range & PEP 440 specifier expansion in BuildOptions and [tool.bundleup]
+    assert BuildOptions(python="3.10-3.14").python == "3.10"
+    assert BuildOptions(python="3.10-3.14").more_pythons == ("3.11", "3.12", "3.13", "3.14")
+    assert BuildOptions(python="3.11..3.13").more_pythons == ("3.12", "3.13")
+    assert BuildOptions(python="3.12+").more_pythons == ("3.13", "3.14")
+    spec_opts = BuildOptions(python=">=3.11,<3.14")
+    assert spec_opts.python == "3.11" and spec_opts.more_pythons == ("3.12", "3.13")
+
+    cfg_range = tmp_path / "cfg_range"
+    cfg_range.mkdir()
+    (cfg_range / "pyproject.toml").write_text(
+        '[project]\nname = "skill"\n[tool.bundleup]\npython = "3.11-3.13"\n'
+    )
+    applied_build, _ = _config.apply(BuildOptions(path=cfg_range))
+    assert applied_build.python == "3.11" and applied_build.more_pythons == ("3.12", "3.13")
+    applied_check, _ = _config.apply(BuildOptions(path=cfg_range), for_check=True)
+    assert applied_check.python == "3.11" and applied_check.more_pythons == ()
+
+    # 5. `_cli._payloads_line`, `_combined_pythons`, and `_lock_fork_pythons` with Python ranges
+    line = _cli._payloads_line(
+        [
+            {
+                "python": "3.10",
+                "python_range": {"min": "3.10", "max": None},
+                "any_os": False,
+                "platform": "darwin",
+                "machine": "arm64",
+            },
+            {
+                "python": "3.10",
+                "python_range": {"min": "3.10", "max": "3.13"},
+                "any_os": False,
+                "platform": "linux",
+                "machine": "x86_64",
+            },
+        ]
+    )
+    assert line == "2 payloads: Python 3.10+ on macOS arm64; 3.10-3.13 on Linux x86_64"
+    same_plat_line = _cli._payloads_line(
+        [
+            {
+                "python": "3.12",
+                "python_range": {"min": "3.12", "max": "3.14"},
+                "any_os": False,
+                "platform": "darwin",
+                "machine": "arm64",
+            },
+            {
+                "python": "3.10",
+                "python_range": {"min": "3.10", "max": "3.11"},
+                "any_os": False,
+                "platform": "darwin",
+                "machine": "arm64",
+            },
+        ]
+    )
+    assert same_plat_line == "2 payloads: Python 3.10-3.14 on macOS arm64"
+    prep_lo = replace(prep_abi, pythons=_python.PythonRange((3, 10), (3, 11)))
+    prep_hi = replace(prep_abi, pythons=_python.PythonRange((3, 12), (3, 14)))
+    assert _build._combined_pythons([prep_hi, prep_lo]) == _python.PythonRange((3, 10), (3, 14))
+    fork_lock = tmp_path / "fork.pylock.toml"
+    fork_lock.write_text(
+        'lock-version = "1.0"\nrequires-python = ">=3.10"\n'
+        '[[packages]]\nname = "pyee"\nversion = "13.0.1"\n'
+        "marker = \"python_full_version < '3.12'\"\n"
+        'wheels = [{ name = "pyee-13.0.1-py3-none-any.whl" }]\n'
+        '[[packages]]\nname = "pyee"\nversion = "14.0.0"\n'
+        "marker = \"python_full_version >= '3.12'\"\n"
+        'wheels = [{ name = "pyee-14.0.0-py3-none-any.whl" }]\n'
+    )
+    fork_prep = replace(
+        prep_hi,
+        pylock=fork_lock,
+        source=replace(src, requires_python=">=3.10", pylock=fork_lock),
+    )
+    assert _build._lock_fork_pythons(fork_prep, [(3, 9), (3, 10), (3, 11), (3, 12), (3, 13)]) == [
+        "3.10"
+    ]
+    win_lock = tmp_path / "win.pylock.toml"
+    win_lock.write_text(
+        'lock-version = "1.0"\nrequires-python = ">=3.10"\n'
+        '[[packages]]\nname = "pywin32"\nversion = "311"\n'
+        "wheels = [\n"
+        '  { name = "pywin32-311-cp310-cp310-win_amd64.whl" },\n'
+        '  { name = "pywin32-311-cp311-cp311-win_amd64.whl" },\n'
+        '  { name = "pywin32-311-cp312-cp312-win_amd64.whl" },\n'
+        '  { name = "pywin32-311-cp313-cp313-win_amd64.whl" },\n'
+        "]\n"
+    )
+    win_target = replace(
+        prep_hi.target,
+        platform="win32",
+        machine="AMD64",
+        python_platform=_platforms.parse("x86_64-pc-windows-msvc"),
+    )
+    win_prep = replace(
+        prep_hi,
+        target=win_target,
+        pylock=win_lock,
+        pythons=_python.PythonRange((3, 12), (3, 12)),
+        source=replace(src, requires_python=">=3.10", pylock=win_lock),
+        merge_conflict=True,
+    )
+    assert _build._lock_fork_pythons(
+        win_prep, [(3, 9), (3, 10), (3, 11), (3, 12), (3, 13), (3, 14)]
+    ) == ["3.10", "3.11", "3.13"]
+
+    # 6. `bundleup check` on a virtual skill project without `[project.scripts]` or `--entry`
+    skill_dir = tmp_path / "my_skill"
+    (skill_dir / "scripts").mkdir(parents=True)
+    (skill_dir / "SKILL.md").write_text("# Skill\n")
+    (skill_dir / "pyproject.toml").write_text(
+        '[project]\nname = "my-skill"\nversion = "0.1.0"\nrequires-python = ">=3.10"\n'
+        "dependencies = []\n\n[tool.uv]\npackage = false\n"
+    )
+    (skill_dir / "scripts" / "render.py").write_text("import missing_skill_dep\n")
+    rep = check(BuildOptions(path=skill_dir))
+    assert any(
+        d.code == "undeclared-import" and "missing_skill_dep" in d.message for d in rep.diagnostics
+    )
+
+    # 7. `--python-platform all` / `universal` expansion and `effective_requires_python` relaxation
+    all_plat_opts = BuildOptions(python_platform="all")
+    assert (
+        all_plat_opts.python_platform,
+        *all_plat_opts.more_python_platforms,
+    ) == _platforms.ALL_PLATFORMS
+    cfg_all = tmp_path / "cfg_all"
+    cfg_all.mkdir()
+    (cfg_all / "pyproject.toml").write_text(
+        '[project]\nname = "skill"\n[tool.bundleup]\npython-platform = "all"\n'
+    )
+    applied_all, _ = _config.apply(BuildOptions(path=cfg_all))
+    assert (
+        applied_all.python_platform,
+        *applied_all.more_python_platforms,
+    ) == _platforms.ALL_PLATFORMS
+
+    # requires-python is never lowered behind the user's back (twelfth review): a build says
+    # when it's what keeps the bundle off older Pythons, and how to change it
+    virt_src = replace(src, requires_python=">=3.13", packaged=False, is_script=False)
+    note = _build._floor_note(virt_src, (3, 13), (3, 13))
+    assert note and '">=3.13" in pyproject.toml' in note and "`uv lock`" in note
+    assert _build._floor_note(virt_src, (3, 14), (3, 14)) is None  # something else limits it
+    assert _build._floor_note(virt_src, (3, 13), (3, 14)) is None  # chosen, not uv init's
+    assert _build._floor_note(replace(virt_src, requires_python=">=3.9"), (3, 9), (3, 9)) is None
+
+    # 8. `uv init --bare` virtual project detection (no [build-system], no package = false)
+    bare_dir = tmp_path / "bare_skill"
+    (bare_dir / "scripts").mkdir(parents=True)
+    (bare_dir / "pyproject.toml").write_text(
+        '[project]\nname = "bare-skill"\nversion = "0.1.0"\nrequires-python = ">=3.13"\n'
+        "dependencies = []\n"
+    )
+    (bare_dir / "scripts" / "tool.py").write_text("import json\nprint(json.dumps('ok'))\n")
+    bare_src = _source.load_source(bare_dir)
+    assert not bare_src.packaged and bare_src.requires_python == ">=3.13"
+    with pytest.raises(_payload.EntryPointError) as exc_info:
+        build(BuildOptions(path=bare_dir))
+    assert (
+        exc_info.value.hint is not None
+        and "--entry python" in exc_info.value.hint
+        and "--entry scripts/tool.py" in exc_info.value.hint
+    )
+
+    # 9. Script inside a pyproject.toml directory suggests `bundleup build <dir> --entry ...`
+    (bare_dir / "scripts" / "needs_dep.py").write_text("import rich\n")
+    with pytest.raises(_source.ProjectError) as script_exc:
+        _source.load_source(bare_dir / "scripts" / "needs_dep.py")
+    assert (
+        script_exc.value.hint is not None
+        and "--entry scripts/needs_dep.py" in script_exc.value.hint
+    )
+
+    _ = replace(_check.PackageSize("a", "1.0", 0, False), size_bytes=1)
+    _ = _loader.VERSIONS

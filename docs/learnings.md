@@ -6,6 +6,55 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-10-22** · review · Using the released tool as a user would found main-path bugs that
+  eleven code-reading reviews missed, and none of them showed in CI:
+  - `uv python install` locks `$UV_PYTHON_INSTALL_DIR/.lock` itself, so a caller holding that file
+    deadlocks uv until its 300 s timeout. CI never downloads a Python.
+  - A lock file held shared by every running copy can't also be the unpack lock: one running copy
+    blocks every re-unpack.
+  - A script lock without `requires-python` is stamped with uv's default Python. The bundle's range
+    must respect the lock's top-level `requires-python`, or marker-gated backports (`tomli`,
+    `exceptiongroup`) go missing. That stamp also turns "stale" when a newer Python is installed,
+    unless `uv export --python <the lock's version>` is passed.
+  - Apple's `/usr/bin/python3` keeps its `pycache_prefix` under `-s -S`, so compileall writes
+    nothing into the payload (`-X pycache_prefix=` turns it off).
+  - `uv pip install --python-version 3.9` means 3.9.0 for markers: a lock forked at
+    `python_full_version <= '3.9'` installs the other side for a real 3.9.6. Pass the full version.
+  - An atexit handler that imports anything loses Ctrl-C's exit status on Python 3.9-3.12
+    (exit 1, not 130): import beforehand.
+  - A payload built for another Python than the build's own skips compiling and analysis, so
+    anything it claims needs its own check; claims nothing ran are where bundles break.
+
+  Evidence: [twelfth review](findings/2026-10-22-twelfth-review.md).
+- **2026-10-21** · platforms · Testing our multi-Python skill bundling on Windows (`x86_64-pc-windows-msvc`)
+  and Intel macOS (`x86_64-apple-darwin`) uncovered two more real-world wheel packaging patterns:
+  (1) `pywin32` on Windows ships 59 untagged `.pyd`/`.dll`/`.exe` files (`win32/win32api.pyd`,
+  `pythonwin/win32ui.pyd`, `win32/pythonservice.exe`) at identical relative paths across its `cp310`–`cp314`
+  wheels instead of using `.cp3XX-win_amd64.pyd` filenames, and `Pillow` on `x86_64-apple-darwin`
+  ships `PIL/.dylibs/*.dylib` built with different `MACOSX_DEPLOYMENT_TARGET` headers (`10_10` for
+  3.10–3.11, `10_13` for 3.12–3.13, `10_15` for 3.14)—when `merge_native_wheels()` stops on such a
+  file conflict (`merge_conflict=True`), `_lock_fork_pythons()` must layer the remaining Python
+  versions or groups so `write_layers()` stores shared files once and only separates the conflicting
+  binaries per Python version; (2) `uv python find --no-project` still returns an active `$VIRTUAL_ENV`
+  unless `--system` is also passed; and (3) on Windows, `Path.write_text()` without `newline="\n"`
+  writes CRLF into modified `WHEEL`/`RECORD` files and `os.path.realpath()` preserves drive/path
+  case variation unless wrapped in `os.path.normcase()`. Evidence:
+  [ADR-0052](adr/0052-native-bundles-run-on-a-python-range.md), `.github/workflows/ci.yml` (`skill`
+  and `skill-run`), `tests/test_config.py`.
+- **2026-10-20** · ecosystem · Five Python packaging gotchas surfaced when bundling a real skill
+  (`playwright`): (1) `uv init --bare` stamps the build host's Python (`requires-python = ">=3.13"`)
+  into `pyproject.toml`, silently excluding Python 3.10–3.12 on virtual dependency-only projects;
+  (2) wheels like `playwright` (`py3-none-<platform>`) and `cryptography` (`cp3X-abi3-<platform>`)
+  work across Python versions as-is, while `cp3XX` wheels (`greenlet`, `lxml`, `Pillow`, `numpy`) can
+  stack `.cpython-310` through `.cpython-314` extensions in one payload if build metadata files
+  (`numpy/__config__.py`, `libnpymath.a`) are ignored when checking non-binary diffs; (3) universal
+  locks fork pure-Python dependencies across Python versions (`pyee 13.0.1` on `<3.12` vs `14.0.0` on
+  `>=3.12` in `playwright`), requiring automatic fork layering (`_lock_fork_pythons`) to cover the
+  full range with zero flags; and (4) macOS users who install Python via `uv python install` often
+  keep only `/usr/bin/python3` (3.9) on `PATH`, so runtime re-exec must fall back to
+  `uv python find --no-project --no-python-downloads`. Evidence:
+  [ADR-0052](adr/0052-native-bundles-run-on-a-python-range.md),
+  `tests/test_config.py::test_multi_python_abi3_py3_none_wheel_ranges_and_python_specifiers`.
 - **2026-10-15** · design · Studying six winning JS bundlers (`esbuild`, `rollup`, `parcel`,
   `@vercel/ncc`, `tsup`, `rolldown`) showed why `bundleup`'s two-zip extract-to-cache architecture
   avoids `ncc`'s fragile AST `__dirname`/`.node` relocation, while highlighting six high-leverage

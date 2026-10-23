@@ -3,6 +3,29 @@
 Versions follow uv's scheme until 1.0: a minor version may break things
 ([style guide](docs/cli-style-guide.md) rule 37).
 
+## Unreleased
+
+- Native bundles run on a range of Python versions by default (ADR-0052): each version's compiled
+  extensions are merged into one payload (`.pyz` and `.py` outputs only), and where the lock picks
+  other packages for older Pythons, those get a payload of their own, checked against the
+  project's code. `--python` accepts ranges (`3.10-3.14`); `--python-platform all`.
+- A bundle's Python range stays within its lock's `requires-python`: a script locked for 3.13
+  claimed 3.10 and crashed there on a missing `tomli`. An unlocked script or requirements file that
+  names no `requires-python` is resolved from 3.9; a locked script is built with the Python its
+  lock was made for (an active virtualenv or a newer Python no longer makes it "out of date").
+- The build says when `requires-python` (which `uv init` sets to its own Python) is what keeps a
+  bundle off older Pythons, and how to lower it.
+- Downloading a Python no longer deadlocks on uv's own install lock (a five-minute hang).
+- Start-up: deleting a copy in use no longer stalls the next start for 120 s; a start no longer
+  runs from a copy `cache clean` is removing; a bundle replaced while it starts is refused instead
+  of unpacked under the old build's name; a Ctrl-C during the first unpack leaves nothing behind,
+  and unpacks abandoned by killed runs are removed; Ctrl-C exits 130 on Python 3.9-3.12 too;
+  `BUNDLEUP_CACHE=~/x` means the home folder; `-m missing` is one line.
+- Builds with macOS's own Python carry their bytecode (it went to Apple's pycache prefix).
+- Clearer errors: an unwritable `-o` folder, a package with only source built for another
+  platform (now named), a wheel that needs a newer macOS (`MACOSX_DEPLOYMENT_TARGET`), `-e .` in a
+  folder app's requirements.txt, `--python` below 3.9; syntax errors point at the column.
+
 ## 0.2.1 (2026-10-18)
 
 Hardening across virtual projects, `--external`, ZIP64 verification, `--format exe`, `--smoke`, and

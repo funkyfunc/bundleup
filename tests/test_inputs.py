@@ -370,3 +370,69 @@ def test_package_main_module_fallback_and_output_validation(tmp_path: Path) -> N
     script.write_text("# /// script\n# dependencies = []\n# ///\nprint(1)\n")
     with pytest.raises(UsageError, match="would overwrite the input script"):
         build(BuildOptions(path=script, output=script, format="py"))
+
+
+def test_an_unlocked_script_that_names_no_python_is_resolved_for_every_one(
+    tmp_path: Path, private_index: str
+) -> None:
+    """Twelfth review: uv resolves such a script for its own default Python only, which leaves
+    out what older ones need (`tomli; python_version < '3.11'`), so the bundle can claim only
+    that Python and newer. Resolved from 3.9, as a requirements file is, it claims them all."""
+    script = tmp_path / "tool.py"
+    header = private_index.replace('# requires-python = ">=3.9"\n', "")
+    script.write_text(header + "import acme_private\nprint(acme_private.WHO)\n")
+    result = build(BuildOptions(path=script, output=tmp_path / "tool.pyz", python=sys.executable))
+    assert result.pythons is not None and result.pythons.min == (3, 9)
+    assert not script.with_name("tool.py.lock").exists()
+
+
+def test_a_locked_script_that_names_no_python_is_built_with_the_one_it_was_locked_for(
+    tmp_path: Path,
+) -> None:
+    """Twelfth review: uv stamps its default Python into such a script's lock and calls the lock
+    out of date for any other, so an active virtualenv, or a newer Python installed since, made
+    a fresh lock "stale" and the build fail. The build asks for the lock's own Python."""
+    from bundleup._python import _find_cmd
+    from bundleup._source import Source
+
+    script = tmp_path / "tool.py"
+    script.write_text("# /// script\n# dependencies = []\n# ///\n")
+    (tmp_path / "tool.py.lock").write_text('version = 1\nrequires-python = ">=3.11"\n')
+    bare = Source(path=script, name="tool", requires_python=None, is_script=True)
+    assert _find_cmd("uv", bare, request=None) == ["uv", "python", "find", "3.11", "--no-project"]
+    assert _find_cmd("uv", bare, request="3.12")[3] == "3.12"  # --python still decides
+    says = Source(path=script, name="tool", requires_python=">=3.9", is_script=True)
+    assert "--script" in _find_cmd("uv", says, request=None)  # its own requires-python decides
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX permissions")
+def test_an_output_folder_that_cant_be_written_is_a_plain_error(tmp_path: Path) -> None:
+    """Twelfth review: `-o` into a read-only folder ended in "bundleup crashed ... this is a
+    bug" with a traceback hint, after the whole build."""
+    from bundleup import UsageError
+
+    script = tmp_path / "tool.py"
+    script.write_text("# /// script\n# dependencies = []\n# ///\nprint(1)\n")
+    locked = tmp_path / "locked"
+    locked.mkdir()
+    locked.chmod(0o555)
+    try:
+        with pytest.raises(UsageError, match="can't write") as e:
+            build(BuildOptions(path=script, output=locked / "tool.pyz"))
+        assert e.value.hint and "-o" in e.value.hint
+    finally:
+        locked.chmod(0o755)
+
+
+def test_an_editable_install_of_the_folder_itself_is_explained(
+    tmp_path: Path, private_index: str
+) -> None:
+    """Twelfth review: `-e .` in a folder app's requirements.txt (common in apps) failed with
+    uv's "does not appear to be a Python project" and no word on what to do."""
+    app = tmp_path / "app"
+    requirements(app, private_index)
+    (app / "requirements.txt").write_text((app / "requirements.txt").read_text() + "-e .\n")
+    (app / "main.py").write_text("import acme_private\n")
+    with pytest.raises(ProjectError, match=r"installs \. as a package") as e:
+        build(BuildOptions(path=app, output=tmp_path / "app.pyz"))
+    assert e.value.hint and "remove that line" in e.value.hint

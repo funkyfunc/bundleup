@@ -1,12 +1,14 @@
-"""Which OSes and CPUs a pure-Python bundle runs on (ADR-0034), from the lock's markers."""
+"""Which OSes and CPUs a pure-Python bundle runs on (ADR-0034), from the lock's markers, and
+which Python versions (ADR-0030)."""
 
 from __future__ import annotations
 
 from pathlib import Path
 
-from bundleup._payload import portability
+from bundleup._payload import portability, python_range
 from bundleup._platforms import parse
 from bundleup._python import Portability, PythonRange, Target
+from bundleup._source import Source
 
 LINUX = parse("x86_64-unknown-linux-gnu")
 TARGET = Target(
@@ -51,3 +53,25 @@ def test_a_marker_on_one_python_version_in_the_range_counts(tmp_path: Path) -> N
     old_windows = '\n[[packages]]\nname = "colorama"\nversion = "0.4.6"\n'
     old_windows += "marker = \"python_version == '3.11' and sys_platform == 'win32'\"\n"
     assert reach(tmp_path, old_windows).any_os is False
+
+
+def test_the_range_stays_within_the_pythons_the_lock_was_resolved_for(tmp_path: Path) -> None:
+    """Twelfth review: a script without requires-python is locked for the Python uv picks
+    (`requires-python = ">=3.12"` here), so `tomli; python_version < '3.11'` isn't in the lock at
+    all. The packages' own metadata allowed 3.9, the bundle claimed it, and crashed on 3.10."""
+    site = tmp_path / "site"
+    dist_info = site / "pure-1.0.dist-info"
+    dist_info.mkdir(parents=True)
+    (dist_info / "METADATA").write_text("Metadata-Version: 2.1\nName: pure\nVersion: 1.0\n")
+    (dist_info / "WHEEL").write_text("Wheel-Version: 1.0\nTag: py3-none-any\n")
+    (site / "pure.py").write_text("")
+    lock = tmp_path / "pylock.toml"
+    script = Source(path=tmp_path / "tool.py", name="tool", requires_python=None, is_script=True)
+
+    lock.write_text(HEAD + 'requires-python = ">=3.12"\n' + PURE)
+    found = python_range(site, pylock=lock, target=TARGET, source=script, native=False)
+    assert found == PythonRange((3, 12), None)
+
+    lock.write_text(HEAD + PURE)  # a lock that doesn't say: the packages decide, as before
+    found = python_range(site, pylock=lock, target=TARGET, source=script, native=False)
+    assert found.min < (3, 12)

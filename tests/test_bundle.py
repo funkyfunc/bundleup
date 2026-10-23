@@ -812,3 +812,117 @@ def test_bytecode_compilation_is_deterministic_and_cached_across_builds(
     build(BuildOptions(path=script, output=tmp_path / "c.pyz"), progress=events.append)
     compile_cmds = [e for e in events if e.kind == "command" and "py_compile" in e.text]
     assert compile_cmds == []
+
+
+def test_a_bundle_replaced_while_it_starts_is_not_unpacked_under_its_name(tmp_path: Path) -> None:
+    """Twelfth review: the loader reopens its file by path to unpack it. Replaced by another
+    build in the meantime (an update), that build's payload was unpacked under this build's name,
+    and every later run of this build ran the other's code."""
+    script = tmp_path / "tool.py"
+    script.write_text("# /// script\n# dependencies = []\n# ///\nprint('first')\n")
+    first = tmp_path / "first.pyz"
+    assert main(["build", str(script), "-o", str(first), "-q"]) == 0
+    script.write_text("# /// script\n# dependencies = []\n# ///\nprint('second')\n")
+    second = tmp_path / "second.pyz"
+    assert main(["build", str(script), "-o", str(second), "-q"]) == 0
+    mixed = tmp_path / "mixed.pyz"  # what the first build's loader reads once the file was swapped
+    with zipfile.ZipFile(first) as old, zipfile.ZipFile(second) as new, open(mixed, "wb") as f:
+        f.write(b"#!/usr/bin/env python3\n")
+        with zipfile.ZipFile(f, "w") as zf:
+            zf.writestr("__main__.py", old.read("__main__.py"))
+            zf.writestr("payload.zip", new.read("payload.zip"))
+    env = env_for(tmp_path)
+    done = run(mixed, env)
+    assert done.returncode == 1 and "was replaced" in done.stderr, done.stderr
+    assert run(first, env).stdout.strip() == "first"  # its own copy is still its own
+
+
+def test_a_tilde_in_bundleup_cache_means_home(bundle: Path, tmp_path: Path) -> None:
+    """Twelfth review: `BUNDLEUP_CACHE='~/cache'` made a folder named `~` in the working
+    directory, so every folder a bundle ran from got its own copy."""
+    env = env_for(tmp_path, BUNDLEUP_CACHE="~/bundles")
+    env["USERPROFILE"] = env["HOME"]  # where Windows' expanduser looks
+    done = subprocess.run(
+        [sys.executable, str(bundle)], env=env, capture_output=True, text=True, cwd=tmp_path
+    )
+    assert done.returncode == 0, done.stderr
+    assert (tmp_path / "home" / "bundles").is_dir() and not (tmp_path / "~").exists()
+
+
+@pytest.mark.skipif(WINDOWS, reason="abandoned unpacks are pruned on POSIX only")
+def test_an_unpack_abandoned_by_a_killed_run_is_removed(bundle: Path, tmp_path: Path) -> None:
+    """Twelfth review: a first run killed while unpacking left its temporary folder (170 MB in
+    a test), and only `bundleup cache clean` removed it, which people who run bundles don't
+    have. The next unpack of the same bundle removes it once its process is gone."""
+    cache = tmp_path / "cache"
+    env = env_for(tmp_path, BUNDLEUP_CACHE=str(cache))
+    assert run(bundle, env).returncode == 0
+    (copy,) = [p for p in cache.iterdir() if not p.name.startswith(".")]
+    gone = subprocess.Popen([sys.executable, "-c", "pass"])
+    gone.wait()
+    abandoned = cache / f".tmp-{copy.name}-{gone.pid}-0123abcd"
+    (abandoned / "pkg").mkdir(parents=True)
+    old = time.time() - 120
+    os.utime(abandoned, (old, old))
+    shutil.rmtree(copy)  # so the next run unpacks
+    assert run(bundle, env).returncode == 0
+    assert copy.is_dir() and not abandoned.exists()
+
+
+def test_a_missing_module_is_one_line_as_python_says_it(tmp_path: Path) -> None:
+    """Twelfth review: `bundle.pyz -m nonexistent` printed a 15-line traceback through the
+    loader; plain Python prints one line."""
+    script = tmp_path / "tool.py"
+    script.write_text("print('hi')\n")
+    out = tmp_path / "py.pyz"
+    assert main(["build", str(script), "--entry", "python", "-o", str(out), "-q"]) == 0
+    done = run(out, env_for(tmp_path), "-m", "no_such_module_here")
+    assert done.returncode == 1
+    assert "No module named" in done.stderr and "Traceback" not in done.stderr, done.stderr
+
+
+@pytest.mark.skipif(WINDOWS, reason="POSIX signals")
+def test_ctrl_c_exits_as_an_interrupted_python_does(tmp_path: Path) -> None:
+    """Twelfth review: with PYTHONDONTWRITEBYTECODE set, the bundle writes bytecode at exit,
+    and the imports that did it lost Ctrl-C's exit status on Python 3.9-3.12 (exit 1)."""
+    import signal
+
+    script = tmp_path / "wait.py"
+    script.write_text(
+        "# /// script\n# dependencies = []\n# ///\n"
+        "import sys, time\nprint('ready', flush=True)\ntime.sleep(30)\n"
+    )
+    out = tmp_path / "wait.pyz"
+    assert main(["build", str(script), "-o", str(out), "-q"]) == 0
+    env = env_for(tmp_path, PYTHONDONTWRITEBYTECODE="1")
+    child = subprocess.Popen(
+        [sys.executable, "-O", str(out)], env=env, stdout=subprocess.PIPE, text=True
+    )
+    assert child.stdout and child.stdout.readline().strip() == "ready"
+    child.send_signal(signal.SIGINT)
+    child.communicate(timeout=30)
+    assert child.returncode in (-signal.SIGINT, 130)
+
+
+def _apple_prefix() -> bool:
+    """Whether macOS's own Python is here and keeps bytecode under a prefix of its own."""
+    if not os.path.exists(SYSTEM_PYTHON) or sys.platform != "darwin":
+        return False
+    done = subprocess.run(
+        [SYSTEM_PYTHON, "-s", "-S", "-c", "import sys; print(sys.pycache_prefix or '')"],
+        capture_output=True,
+        text=True,
+    )
+    return done.returncode == 0 and bool(done.stdout.strip())
+
+
+@pytest.mark.skipif(not _apple_prefix(), reason="needs macOS's /usr/bin/python3 and its prefix")
+def test_a_bundle_built_with_macos_own_python_carries_its_bytecode(tmp_path: Path) -> None:
+    """Twelfth review: Apple's Python keeps bytecode under ~/Library/Caches/com.apple.python
+    unless told otherwise, so a build with it compiled everything there and bundled no .pyc."""
+    script = tmp_path / "tool.py"
+    script.write_text('# /// script\n# requires-python = ">=3.9"\n# dependencies = []\n# ///\n')
+    out = tmp_path / "tool.pyz"
+    assert main(["build", str(script), "-o", str(out), "--python", SYSTEM_PYTHON, "-q"]) == 0
+    with zipfile.ZipFile(out) as outer, zipfile.ZipFile(outer.open("payload.zip")) as payload:
+        assert any(name.endswith(".pyc") for name in payload.namelist())

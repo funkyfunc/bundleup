@@ -1,5 +1,5 @@
 error: app.py:5 doesn't compile on Python <VERSION>: <MESSAGE>
   5 | print("hi"
-    | ^
-hint: if it needs a newer Python, build for one with --python and raise requires-python so builds for Python <VERSION> are refused; otherwise fix it
+    |      ^
+hint: fix it; or, if it's syntax from a newer Python, build for one with --python and raise requires-python so builds for Python <VERSION> are refused
 error: found 1 error, so nothing was written

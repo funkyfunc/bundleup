@@ -108,3 +108,17 @@ def test_a_bundle_too_big_for_git_warns_unless_a_limit_is_set(
     assert not (tmp_path / "s.pyz").exists()
     limited = BuildOptions(path=tmp_path / "fn.py", output=tmp_path / "b.pyz", max_size=10**9)
     assert build(limited).diagnostics == []  # the user chose a limit: no second opinion
+
+
+def test_only_a_bundle_with_a_loader_carries_extensions_for_several_pythons() -> None:
+    """ADR-0052 merges each Python version's compiled extensions into a payload that picks one at
+    run time. A `dir` or `zip` is loaded by one known Python, and an executable brings its own:
+    twelfth review, a Lambda zip doubled in size for versions it never runs on."""
+    from bundleup._build import _merge_candidates
+
+    assert _merge_candidates(BuildOptions(), "pyz")
+    assert _merge_candidates(BuildOptions(), "py")
+    for fmt in ("dir", "zip", "exe"):
+        assert _merge_candidates(BuildOptions(), fmt) == ()
+    assert _merge_candidates(BuildOptions(python="3.12"), "pyz") == ()
+    assert _merge_candidates(BuildOptions(python="3.11-3.12"), "pyz") == ((3, 11), (3, 12))

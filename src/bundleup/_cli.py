@@ -389,10 +389,18 @@ def _payloads_line(payloads: list[dict[str, object]]) -> str:
     Windows x86_64, ...` (each payload's target JSON, ADR-0038)."""
     from ._python import PLATFORM_NAMES
 
-    pythons = sorted(
-        {str(p["python"]) for p in payloads}, key=lambda v: tuple(map(int, v.split(".")))
-    )
-    places = []
+    def _ver_tuple(s: str) -> tuple[int, ...]:
+        return tuple(map(int, s.split(".")))
+
+    def _fmt_range(lo: tuple[int, ...], hi: tuple[int, ...] | None) -> str:
+        lo_s = ".".join(map(str, lo))
+        if hi is None:
+            return f"{lo_s}+"
+        hi_s = ".".join(map(str, hi))
+        return lo_s if hi == lo else f"{lo_s}-{hi_s}"
+
+    places: list[str] = []
+    by_place: dict[str, list[tuple[tuple[int, ...], tuple[int, ...] | None]]] = {}
     for p in payloads:
         where = (
             "any OS" if p["any_os"] else PLATFORM_NAMES.get(str(p["platform"]), str(p["platform"]))
@@ -400,7 +408,37 @@ def _payloads_line(payloads: list[dict[str, object]]) -> str:
         place = f"{where} {p['machine']}" if p["machine"] and not p["any_os"] else where
         if place not in places:
             places.append(place)
-    return f"{len(payloads)} payloads: Python {', '.join(pythons)} on {', '.join(places)}"
+        r = p.get("python_range")
+        if isinstance(r, dict):
+            lo = _ver_tuple(str(r.get("min", p["python"])))
+            hi_raw = r.get("max")
+            hi = None if hi_raw is None else _ver_tuple(str(hi_raw))
+        else:
+            lo = hi = _ver_tuple(str(p["python"]))
+        by_place.setdefault(place, []).append((lo, hi))
+    # Places with the same versions share one phrase: "Python 3.10+ on any OS; 3.9 on macOS",
+    # not "Python 3.9, 3.10+ on any OS, macOS", which reads as both everywhere (twelfth review).
+    groups: dict[tuple[str, ...], list[str]] = {}
+    for place in places:
+        ordered = sorted(by_place[place], key=lambda item: (item[0], item[1] or (99, 99)))
+        merged: list[tuple[tuple[int, ...], tuple[int, ...] | None]] = [ordered[0]]
+        for nxt_lo, nxt_hi in ordered[1:]:
+            cur_lo, cur_hi = merged[-1]
+            if cur_hi is None:
+                continue
+            if (
+                len(nxt_lo) == 2
+                and len(cur_hi) == 2
+                and nxt_lo[0] == cur_hi[0]
+                and nxt_lo[1] <= cur_hi[1] + 1
+            ):
+                merged[-1] = (cur_lo, None if nxt_hi is None else max(cur_hi, nxt_hi))
+            else:
+                merged.append((nxt_lo, nxt_hi))
+        labels = tuple(_fmt_range(lo, hi) for lo, hi in merged)
+        groups.setdefault(labels, []).append(place)
+    phrases = [f"{', '.join(labels)} on {', '.join(where)}" for labels, where in groups.items()]
+    return f"{len(payloads)} payloads: Python {'; '.join(phrases)}"
 
 
 def _success_lines(result: BuildResult, style: Style) -> list[str]:

@@ -17,6 +17,7 @@ It also measures each package for the size report.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 from collections import defaultdict
@@ -51,7 +52,7 @@ for path in open(listing, encoding="utf-8").read().splitlines():
         else:
             compile(source, path, "exec", dont_inherit=True)
     except SyntaxError as e:
-        found.append([path, e.lineno, e.msg])
+        found.append([path, e.lineno, e.msg, e.offset])
     except Exception as e:
         found.append([path, None, repr(e)])
 print(json.dumps(found))
@@ -365,7 +366,7 @@ def _ast_errors(
             source = (site / path).read_bytes()
             ast.parse(source, path, feature_version=version)
         except SyntaxError as e:
-            found.append([path, e.lineno, e.msg])
+            found.append([path, e.lineno, e.msg, e.offset])
         except Exception as e:
             found.append([path, None, repr(e)])
     return found
@@ -475,7 +476,9 @@ def syntax_errors(
     ]
     if not candidates:
         return []
-    found = compile_errors(site, candidates, python=target.executable, run=run)
+    expected_tag = f"cpython-{target.version[0]}{target.version[1]}"
+    as_ver = target.version if target.cache_tag != expected_tag else None
+    found = compile_errors(site, candidates, python=target.executable, run=run, as_version=as_ver)
     python = f"Python {target.version[0]}.{target.version[1]}"
     diags = []
     theirs: dict[_Owner, list[str]] = defaultdict(list)
@@ -484,6 +487,7 @@ def syntax_errors(
         path, line, message = item[:3]
         assert isinstance(path, str) and isinstance(message, str)
         line = line if isinstance(line, int) and not isinstance(line, bool) and line >= 1 else None
+        col = item[3] if len(item) > 3 and isinstance(item[3], int) else None
         who = owner.get(path) or _Owner(project, None, False)
         where = f"{path.removeprefix(_verify.SCRIPT_DIR + '/')}{f':{line}' if line else ''}"
         if who.name == project:
@@ -492,9 +496,9 @@ def syntax_errors(
                     "syntax-error",
                     "error",
                     f"{where} doesn't compile on {python}: {message}",
-                    hint=f"if it needs a newer Python, build for one with --python and raise "
-                    f"requires-python so builds for {python} are refused; otherwise fix it",
-                    detail=_imports.code_frame(site / path, line),
+                    hint=f"fix it; or, if it's syntax from a newer Python, build for one with "
+                    f"--python and raise requires-python so builds for {python} are refused",
+                    detail=_imports.code_frame(site / path, line, col),
                     package=project,
                     file=path,
                     line=line,
@@ -622,6 +626,54 @@ def undeclared_imports(
                 )
             )
     return diags
+
+
+def fork_range(
+    pythons: PythonRange, *, code: Sequence[Path], imported: set[str], provided: set[str]
+) -> PythonRange | None:
+    """The part of `pythons` a payload built for other Python versions than the build's own
+    (ADR-0052) may claim: the oldest versions on which the project's own code compiles and whose
+    standard library has every module it imports for sure. Such a payload isn't compiled or
+    analyzed itself, so without this it claimed versions its code can't run on (twelfth review:
+    a `match` statement claimed 3.9). None when no version is left. Versions newer than this
+    Python can't be parsed here: their syntax is taken as compiling."""
+    import ast
+    import sys
+
+    top = pythons.max or max(_imports.NEWEST, pythons.min)
+    versions = [(3, minor) for minor in range(pythons.min[1], top[1] + 1)]
+    libraries = {v: _imports.stdlib(v) for v in versions}
+    ever = set().union(*(lib for lib in libraries.values() if lib is not None))
+    used = (imported & ever) - provided
+    sources = []
+    for path in code:
+        with contextlib.suppress(OSError):
+            sources.append((path, path.read_bytes()))
+
+    def runs_on(version: tuple[int, int]) -> bool:
+        library = libraries[version]
+        if library is not None and not used <= library:
+            return False
+        if version > sys.version_info[:2]:
+            return True
+        for path, text in sources:
+            try:
+                ast.parse(text, str(path), feature_version=version)
+            except SyntaxError:
+                return False
+            except (ValueError, TypeError):
+                continue  # not parseable as Python at all: the main payload's check says so
+        return True
+
+    fits = [runs_on(v) for v in versions]
+    if not any(fits):
+        return None
+    low = fits.index(True)
+    high = low
+    while high + 1 < len(versions) and fits[high + 1]:
+        high += 1
+    open_ended = pythons.max is None and high == len(versions) - 1
+    return PythonRange(versions[low], None if open_ended else versions[high])
 
 
 def stdlib_range(

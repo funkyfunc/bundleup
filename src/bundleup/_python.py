@@ -14,6 +14,7 @@ from pathlib import Path
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 
 from . import _platforms
+from . import _toml as tomllib
 from ._errors import (
     ProjectError,
     PythonMismatchError,
@@ -159,11 +160,18 @@ def find_python(
             if request and re.fullmatch(r"\d+\.\d+(?:\.\d+(?:(?:a|b|rc)\d+)?)?", request):
                 outside = Path(tempfile.gettempdir())  # uv answers a project's venv from inside it
                 fetched = fetch_interpreter(uv, request, cwd=outside, progress=progress)
+            # Never another interpreter in its place: one that isn't that version compiles and
+            # checks the code for the wrong Python, and the bundle claims a version nothing ran
+            # (twelfth review).
             if not fetched:
                 wanted = f"Python {request}" if request else "a Python for this project"
                 install = f"uv python install {request}" if request else "uv python install"
+                hint = f"install it with `{install}`"
+                old = re.fullmatch(r"(\d+)\.(\d+)(?:\.\d+)?", request or "")
+                if old and (int(old[1]), int(old[2])) < (3, 9):
+                    hint = "bundles run on Python 3.9 and newer: pass --python 3.9 or later"
                 raise PythonNotFoundError(
-                    f"couldn't find {wanted}", hint=f"install it with `{install}`", detail=e.detail
+                    f"couldn't find {wanted}", hint=hint, detail=e.detail
                 ) from None
             exe = fetched
     probe = [exe, "-I", "-S", "-c", PROBE]
@@ -247,8 +255,31 @@ print(json.dumps({"version": sys.version_info[:2], "abiflags": getattr(sys, "abi
 """
 
 
+def _script_lock_python(source: Source) -> str | None:
+    """For a locked script that names no requires-python: the Python its lock was made for (the
+    oldest its `requires-python` allows). uv stamps its default Python there and calls the lock
+    out of date for any other, so an active virtualenv, or a newer Python installed since, made
+    a fresh lock "stale" (twelfth review)."""
+    if not source.is_script or source.requires_python:
+        return None
+    try:
+        text = source.path.with_name(source.path.name + ".lock").read_text(encoding="utf-8")
+        spec = SpecifierSet(str(tomllib.loads(text).get("requires-python") or ""))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, InvalidSpecifier):
+        return None
+    if not str(spec):
+        return None
+    for minor in range(9, 30):
+        if any(spec.contains(f"3.{minor}.{p}", prereleases=True) for p in (0, 99)):
+            return f"3.{minor}"
+    return None
+
+
 def _find_cmd(uv: str, source: Source, *, request: str | None) -> list[str]:
     cmd = [uv, "python", "find"]
+    locked_for = None if request else _script_lock_python(source)
+    if locked_for:
+        return [*cmd, locked_for, "--no-project"]
     if request:
         cmd.append(request)
     if source.is_script and source.pep723 and not request:

@@ -100,6 +100,13 @@ def _lock_packages(pylock: str) -> tuple[tuple[str, str | None, Marker | None], 
     )
 
 
+def lock_requires_python(pylock: str) -> str:
+    """The Pythons a pylock.toml was resolved for (its top-level `requires-python`), "" if it
+    doesn't say. Outside them the lock may lack packages a marker selects there."""
+    value = tomllib.loads(pylock).get("requires-python")
+    return value if isinstance(value, str) else ""
+
+
 def locked_packages(pylock: str, environment: dict[str, str]) -> list[LockedPackage]:
     """The packages in a `uv export --format pylock.toml` that apply to this environment."""
     env: dict[str, Any] = {

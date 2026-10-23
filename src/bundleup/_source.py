@@ -6,7 +6,7 @@ from __future__ import annotations
 import contextlib
 import re
 from collections.abc import Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -39,6 +39,7 @@ class Source:
     packaged: bool = (
         True  # False when [tool.uv] package = false or [tool.poetry] package-mode = false
     )
+    scripts: dict[str, str] = field(default_factory=dict)
 
     @property
     def workdir(self) -> Path:
@@ -176,13 +177,84 @@ def _load_script(path: Path, *, external: Sequence[str] = ()) -> Source:
     undeclared = third_party_imports(path, local=path.parent, external=external)
     if undeclared:
         name = path.name
+        proj_dir = next(
+            (d for d in (path.parent, path.parent.parent) if (d / "pyproject.toml").is_file()),
+            None,
+        )
+        proj_hint = ""
+        if proj_dir is not None:
+            rel = path.relative_to(proj_dir).as_posix()
+            proj_hint = (
+                f"to bundle using pyproject.toml, run `bundleup build {proj_dir} --entry {rel}` "
+                "(or `--entry python`); or "
+            )
         raise ProjectError(
             f"{name} imports {_which(undeclared)} in the standard library, but doesn't say "
             "which packages provide them",
-            hint=f"add them: `uv add --script {name} <packages>` (a `# /// script` block), or "
-            "list them in a requirements.txt beside it",
+            hint=f"{proj_hint}add them: `uv add --script {name} <packages>` (a `# /// script` "
+            "block), or list them in a requirements.txt beside it",
         )
     return Source(path, path.stem, None, is_script=True, pep723=False)
+
+
+def _uv_lock_is_virtual(uv_lock: Path, name: str) -> bool:
+    """Whether `uv_lock` records `name` with `source = { virtual = ... }`."""
+    try:
+        data = tomllib.loads(uv_lock.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError):
+        return False
+    want = canonicalize_name(name)
+    for pkg in data.get("package", []):
+        if isinstance(pkg, dict) and canonicalize_name(str(pkg.get("name", ""))) == want:
+            src = pkg.get("source")
+            if isinstance(src, dict) and "virtual" in src:
+                return True
+    return False
+
+
+def _is_packaged(
+    path: Path,
+    *,
+    data: dict[str, Any],
+    project: dict[str, Any],
+    uv_cfg: dict[str, Any],
+    poetry: dict[str, Any],
+    uv_lock: Path | None,
+    name: str,
+) -> bool:
+    """Whether `pyproject.toml` describes a buildable wheel package (`True`) vs. a virtual
+    application or skill project (`False`, as created by `uv init --bare` or `--no-package`)."""
+    if uv_cfg.get("package") is False or poetry.get("package-mode") is False:
+        return False
+    if uv_cfg.get("package") is True or poetry.get("package-mode") is True:
+        return True
+    if uv_lock is not None and _uv_lock_is_virtual(uv_lock, name):
+        return False
+    pkg = canonicalize_name(name).replace("-", "_")
+    has_pkg_code = (
+        bool(data.get("build-system"))
+        or (path / "setup.py").is_file()
+        or (path / "setup.cfg").is_file()
+        or bool(
+            project.get("scripts")
+            or project.get("gui-scripts")
+            or project.get("entry-points")
+            or poetry.get("scripts")
+        )
+        or (path / pkg / "__init__.py").is_file()
+        or (path / "src" / pkg / "__init__.py").is_file()
+        or (path / f"{pkg}.py").is_file()
+        or (path / "src" / f"{pkg}.py").is_file()
+    )
+    if has_pkg_code:
+        return True
+    if uv_lock is None and not (path / "pylock.toml").is_file():
+        return False
+    return not (
+        any((path / m).is_file() for m in APP_MAINS)
+        or (path / "scripts").is_dir()
+        or (path / "SKILL.md").is_file()
+    )
 
 
 def _load_project(path: Path, pyproject: Path) -> Source:
@@ -213,7 +285,16 @@ def _load_project(path: Path, pyproject: Path) -> Source:
     name = name or _legacy_name(path)
     raw_version = project.get("version") or poetry.get("version")
     version = raw_version if isinstance(raw_version, str) else None
-    packaged = uv_cfg.get("package") is not False and poetry.get("package-mode") is not False
+    raw_scripts = project.get("scripts") or poetry.get("scripts")
+    scripts = (
+        {
+            str(k): str(v)
+            for k, v in raw_scripts.items()
+            if isinstance(k, str) and isinstance(v, str)
+        }
+        if isinstance(raw_scripts, dict)
+        else {}
+    )
     deps = project.get("dependencies")
     if deps is not None and (
         not isinstance(deps, list) or not all(isinstance(d, str) for d in deps)
@@ -227,6 +308,15 @@ def _load_project(path: Path, pyproject: Path) -> Source:
     # Without either, the dependencies pyproject.toml declares are resolved at build time, in
     # the stage: bundleup never writes a lock into the project (ADR-0028, ADR-0041).
     uv_lock = find_uv_lock(path)
+    packaged = _is_packaged(
+        path,
+        data=data,
+        project=project,
+        uv_cfg=uv_cfg,
+        poetry=poetry,
+        uv_lock=uv_lock,
+        name=name,
+    )
     lock = path / "pylock.toml"
     pylock = lock if lock.is_file() and uv_lock is None else None
     declared = pyproject if uv_lock is None and pylock is None else None
@@ -239,6 +329,7 @@ def _load_project(path: Path, pyproject: Path) -> Source:
         declared=declared,
         version=version,
         packaged=packaged,
+        scripts=scripts,
     )
 
 
@@ -355,6 +446,10 @@ def app_files(source: Source) -> list[tuple[str, Path]]:
             file.suffix == ".pyz"
             or file.name == "bundleup-manifest.json"
             or (file.name.startswith("requirements") and file.suffix == ".txt")
+            or (
+                file.parent == source.path
+                and file.name in ("pyproject.toml", "uv.lock", "pylock.toml")
+            )
         ):
             continue
         if tracked is None or rel in tracked:

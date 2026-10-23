@@ -49,6 +49,10 @@ PAYLOADS = []  # type: list[dict[str, Any]]
 # be unpacked under this build's name).
 PARTS = None  # type: str | None
 SHA256 = {}  # type: dict[str, str]
+# Each member's CRC-32 as built, checked before unpacking from the bundle file: replaced by
+# another build since this run started, it would be unpacked under this build's name and used
+# from then on (twelfth review).
+CRCS = {}  # type: dict[str, int]
 # `--format py` (ADR-0046): this file is a plain .py, and what a .pyz would hold (the members
 # above and the manifest) is a zip in base64 comment lines at its end.
 EMBEDDED = False
@@ -136,8 +140,9 @@ def _rerun_with_another_python(here: "tuple[int, int]") -> None:
     top = PYTHON_MAX[1] if PYTHON_MAX else NEWEST_KNOWN
     allowed = VERSIONS or [(3, minor) for minor in range(PYTHON[1], top + 1)]
     wanted = sorted({v for v in allowed if v != here}, reverse=True)
-    folders = [d for d in os.environ.get("PATH", "").split(os.pathsep) if d]
+    folders = [d.strip('"') for d in os.environ.get("PATH", "").split(os.pathsep) if d.strip('"')]
     flags = _py_flags()
+    me = os.path.normcase(os.path.realpath(sys.executable))
     for version in wanted:
         if sys.platform == "win32":
             names = ["python%d.%d.exe" % version]
@@ -147,16 +152,22 @@ def _rerun_with_another_python(here: "tuple[int, int]") -> None:
             for name in names:
                 exe = os.path.join(folder, name)
                 if os.path.isfile(exe) and os.access(exe, os.X_OK):
-                    if _is_script_shim(exe):
+                    if os.path.normcase(os.path.realpath(exe)) == me:
+                        continue
+                    if sys.platform == "win32" or _is_script_shim(exe):
                         import subprocess
 
                         probe = [exe, "-I", "-S", "-c", ""]
-                        if (
-                            subprocess.call(
-                                probe, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                        try:
+                            ok = (
+                                subprocess.call(
+                                    probe, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                                )
+                                == 0
                             )
-                            != 0
-                        ):
+                        except OSError:
+                            ok = False
+                        if not ok:
                             continue
                     _rerun([exe, *flags, sys.argv[0], *sys.argv[1:]])
     import subprocess  # only on this rare path
@@ -179,11 +190,10 @@ def _rerun_with_another_python(here: "tuple[int, int]") -> None:
         tools = ("/Library/Developer/CommandLineTools/usr/bin/python3", "/Applications/Xcode.app")
         if not any(os.path.exists(t) for t in tools):
             plain = [p for p in plain if os.path.realpath(p) != "/usr/bin/python3"]
-    me = os.path.realpath(sys.executable)
     seen = set()  # type: set[str]
     best = None  # type: tuple[tuple[int, int], str] | None
     for exe in plain:
-        real = os.path.realpath(exe)
+        real = os.path.normcase(os.path.realpath(exe))
         if real in seen or real == me or not os.path.isfile(exe):
             continue
         seen.add(real)
@@ -201,6 +211,41 @@ def _rerun_with_another_python(here: "tuple[int, int]") -> None:
             best = (version, exe)
     if best:
         _rerun([best[1], *flags, sys.argv[0], *sys.argv[1:]])
+    uv_name = "uv.exe" if sys.platform == "win32" else "uv"
+    uv_bins = [
+        os.path.join(d, uv_name)
+        for d in folders
+        if os.path.isfile(os.path.join(d, uv_name)) and os.access(os.path.join(d, uv_name), os.X_OK)
+    ]
+    if uv_bins:
+        for version in wanted:
+            try:
+                found_py = (
+                    subprocess.run(
+                        [
+                            uv_bins[0],
+                            "python",
+                            "find",
+                            "--system",
+                            "--no-project",
+                            "--no-python-downloads",
+                            "%d.%d" % version,
+                        ],
+                        stdout=subprocess.PIPE,
+                        stderr=subprocess.DEVNULL,
+                        timeout=10,
+                    )
+                    .stdout.decode("utf-8", "replace")
+                    .strip()
+                )
+            except (OSError, subprocess.TimeoutExpired):
+                continue
+            if (
+                found_py
+                and os.path.isfile(found_py)
+                and os.path.normcase(os.path.realpath(found_py)) != me
+            ):
+                _rerun([found_py, *flags, sys.argv[0], *sys.argv[1:]])
 
 
 def _rerun(command: "list[str]") -> None:
@@ -244,8 +289,12 @@ def _check() -> None:
     here = sys.version_info[:2]
     if here < PYTHON or (PYTHON_MAX is not None and here > PYTHON_MAX):
         want = "%d.%d" % PYTHON
-        if len(set(VERSIONS)) > 1 and PYTHON_MAX is not None:  # several payloads: name them all
-            wanted = "Python " + ", ".join("%d.%d" % v for v in sorted(set(VERSIONS)))
+        unique_versions = sorted(set(VERSIONS))
+        single_range = (
+            [(3, m) for m in range(PYTHON[1], PYTHON_MAX[1] + 1)] if PYTHON_MAX is not None else []
+        )
+        if len(unique_versions) > 1 and PYTHON_MAX is not None and unique_versions != single_range:
+            wanted = "Python " + ", ".join("%d.%d" % v for v in unique_versions)
         elif PYTHON_MAX is None:
             wanted = "Python %s or newer" % want
         elif PYTHON_MAX == PYTHON:
@@ -401,7 +450,12 @@ def _select() -> None:
                 _machine(),
             )
         )
-    chosen = next((p for p in fitting if _in_range(p, here)), fitting[0])
+    here_tag = getattr(sys.implementation, "cache_tag", None)
+    in_range = [p for p in fitting if _in_range(p, here)]
+    chosen = next(
+        (p for p in in_range if here_tag and p.get("tag") == here_tag),
+        in_range[0] if in_range else fitting[0],
+    )
     for p in fitting:
         top = p["python_max"][1] if p["python_max"] else NEWEST_KNOWN
         VERSIONS.extend((3, m) for m in range(p["python"][1], top + 1))
@@ -451,6 +505,7 @@ def _roots(archive: str) -> "list[tuple[str, bool]]":
     """
     explicit = (os.environ.get("BUNDLEUP_CACHE") or "").strip()
     if explicit:  # the only place, when set: a copy elsewhere must not win (ADR-0048)
+        explicit = os.path.expanduser(explicit)  # `~/x` as a shell would read it, not ./~/x
         return [(_abspath(explicit) or explicit, False)]
     roots = []
     raw_home = os.environ.get("HOME")
@@ -590,6 +645,9 @@ def _prune(root: str) -> None:
     except OSError:
         return
     for entry in entries:
+        if entry.startswith(".tmp-" + name + "-"):
+            _remove_abandoned(root, entry, now)
+            continue
         head, _, digest = entry.rpartition("-")
         if (
             head != name
@@ -624,6 +682,24 @@ def _prune(root: str) -> None:
             pass
         finally:
             lock.close()
+
+
+def _remove_abandoned(root: str, entry: str, now: float) -> None:
+    """An unpack of this bundle into `.tmp-<name>-<hash>-<pid>-<random>` whose process is gone
+    (killed during a first run): people who only run bundles never get `bundleup cache clean`
+    to remove them (twelfth review). A minute's grace for one just begun; a live process's,
+    or one being removed (`-pruned`, `-clean`), is left alone."""
+    parts = entry.split("-")
+    try:
+        pid = int(parts[-2])
+        if len(parts[-1]) != 8 or now - os.stat(os.path.join(root, entry)).st_mtime < 60:
+            return
+        os.kill(pid, 0)  # raises if no such process
+        return
+    except ProcessLookupError:
+        _rmtree(os.path.join(root, entry))
+    except (ValueError, IndexError, OSError):
+        return
 
 
 class _Window(object):
@@ -702,6 +778,10 @@ def _parts() -> "list[str]":
     return paths
 
 
+class _Replaced(Exception):
+    """The bundle file holds another build than the one running: it was replaced meanwhile."""
+
+
 def _unpack(dest: str, final: str) -> None:
     import zipfile
 
@@ -714,6 +794,8 @@ def _unpack(dest: str, final: str) -> None:
     with _embedded() if EMBEDDED else open(_ARCHIVE, "rb") as f:
         outer = zipfile.ZipFile(f)
         infos = [outer.getinfo(name) for name in MEMBERS]
+        if any(CRCS.get(info.filename, info.CRC) != info.CRC for info in infos):
+            raise _Replaced()
         made = set()  # type: set[str]
         for info in infos:
             f.seek(info.header_offset)
@@ -880,6 +962,19 @@ def _extract() -> str:
             problems.append("  %s: %s" % (root, e.strerror or e))
             if os.path.isdir(tmp):
                 _rmtree(tmp)
+        except KeyboardInterrupt:
+            # Ctrl-C during the first run: no half-unpacked folder left behind (twelfth review
+            # found 170 MB of them), and the exit status Ctrl-C gives, without a traceback.
+            if os.path.isdir(tmp):
+                _rmtree(tmp)
+            sys.exit(130)
+        except _Replaced:
+            if os.path.isdir(tmp):
+                _rmtree(tmp)
+            _fail(
+                "%s was replaced by another version while it started. Run it again."
+                % os.path.basename(_ARCHIVE)
+            )
         except Exception as e:
             if os.path.isdir(tmp):
                 _rmtree(tmp)
@@ -912,6 +1007,11 @@ def _bytecode_for_here(site: str) -> None:
     ):
         import atexit
 
+        # Imported now, not by the handler: an import in an atexit handler loses Ctrl-C's exit
+        # status on Python 3.9-3.12, so Ctrl-C exited 1 instead of 130 (twelfth review).
+        import importlib.util  # noqa: F401
+        import py_compile  # noqa: F401
+
         atexit.register(_cache_imported, site)
 
 
@@ -922,11 +1022,15 @@ def _cache_imported(site: str) -> None:
     import importlib.util
     import py_compile
 
-    prefix = os.path.join(site, "")
+    prefix = os.path.normcase(os.path.join(site, ""))
     for module in list(sys.modules.values()):
         spec = getattr(module, "__spec__", None)
         origin = getattr(spec, "origin", None) or getattr(module, "__file__", None)
-        if not (isinstance(origin, str) and origin.startswith(prefix) and origin.endswith(".py")):
+        if not (
+            isinstance(origin, str)
+            and os.path.normcase(origin).startswith(prefix)
+            and origin.endswith(".py")
+        ):
             continue
         cached = getattr(spec, "cached", None)
         if not cached:
@@ -956,16 +1060,16 @@ def _cache_imported(site: str) -> None:
 
 
 def _drop_bundle_from_sys_path() -> None:
-    here = os.path.dirname(_ARCHIVE) if EMBEDDED else _ARCHIVE
-    raw_here = os.path.dirname(_FILE)
+    here = os.path.normcase(os.path.dirname(_ARCHIVE) if EMBEDDED else _ARCHIVE)
+    raw_here = os.path.normcase(os.path.dirname(_FILE))
     cleaned = []  # type: list[str]
     for entry in sys.path:
         if entry:
             try:
-                real = os.path.realpath(entry)
+                real = os.path.normcase(os.path.realpath(entry))
             except OSError:
-                real = entry
-            abs_entry = _abspath(entry) or entry
+                real = os.path.normcase(entry)
+            abs_entry = os.path.normcase(_abspath(entry) or entry)
             if real == here or abs_entry == raw_here:
                 continue
         cleaned.append(entry)
@@ -1086,13 +1190,23 @@ def _exec_module(target: str, alter_argv0: bool = False) -> None:
         sys.modules["__main__"] = module
         exec(code, module.__dict__)
     else:
-        mod_globals = runpy.run_module(target, run_name="__main__", alter_sys=alter_argv0)
+        try:
+            mod_globals = runpy.run_module(target, run_name="__main__", alter_sys=alter_argv0)
+        except ImportError as e:
+            if spec is not None or not str(e).startswith("No module named"):
+                raise
+            # As `python -m` says it, not a traceback through the loader (twelfth review).
+            sys.stderr.write("%s: %s\n" % (sys.executable, e))
+            sys.exit(1)
         main_mod = types.ModuleType("__main__")
         main_mod.__dict__.update(mod_globals)
         sys.modules["__main__"] = main_mod
 
 
 def _run(site: str) -> None:
+    if os.environ.pop("BUNDLEUP_ENTRY", "").strip() == "python" and NAME != "bundleup":
+        _run_python()
+        return
     kind, target, attr = ENTRY
     if kind == "call":
         __import__(target)

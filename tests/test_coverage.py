@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import pytest
+
 from bundleup import _coverage as c
 from bundleup._platforms import parse
 
@@ -76,3 +78,40 @@ def test_the_matrix_covers_every_platform_and_python() -> None:
     assert by[("x86_64-unknown-linux-gnu", (3, 12))].missing == ("pillow",)  # cp311 only
     assert not by[("x86_64-pc-windows-msvc", (3, 11))].ok
     assert by[("aarch64-apple-darwin", (3, 11))].source_only == ("docopt",)
+
+
+def test_a_wheel_for_a_newer_macos_names_the_setting_that_reaches_it(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Twelfth review: uv takes macOS 13 unless MACOSX_DEPLOYMENT_TARGET says otherwise, so a
+    package with only macOS 14 wheels (onnxruntime) was "missing" even on the Mac building it,
+    and the hint said to build on the target."""
+    monkeypatch.delenv("MACOSX_DEPLOYMENT_TARGET", raising=False)
+    lock = PYLOCK.replace("macosx_11_0_arm64", "macosx_14_0_arm64")
+    mac = parse("aarch64-apple-darwin")
+    found = c.gaps(lock, mac, (3, 11))
+    assert "pillow" in [g.package for g in found]
+    assert c.macos_suggestion(found, mac, lock) == (14, 0)
+    (pillow,) = [d for d in c.diagnostics(found, mac, lock) if d.package == "pillow"]
+    assert pillow.hint and "MACOSX_DEPLOYMENT_TARGET=14.0" in pillow.hint
+    assert (
+        c.macos_suggestion(c.gaps(lock, parse("windows"), (3, 11)), parse("windows"), lock) is None
+    )
+
+
+def test_a_package_built_from_source_for_another_platform_is_named() -> None:
+    """Twelfth review: a package with only a source release, built for another platform, failed
+    as "a package has no wheel", and the hint pointed at a `check` that failed the same way."""
+    from bundleup._uv import _built_for_this_machine
+
+    detail = (
+        "error: Failed to install: netifaces-0.11.0-cp312-cp312-macosx_11_0_arm64.whl\n"
+        "  The built wheel `netifaces-0.11.0-cp312-cp312-macosx_11_0_arm64.whl` is not "
+        "compatible with the target platform"
+    )
+    error = _built_for_this_machine(detail, "x86_64-manylinux_2_28")
+    assert error.message.startswith("netifaces has no wheel for x86_64-manylinux_2_28")
+    assert error.hint and "check" not in error.hint
+    assert _built_for_this_machine("is not compatible with the target", "linux").message.startswith(
+        "a package"
+    )

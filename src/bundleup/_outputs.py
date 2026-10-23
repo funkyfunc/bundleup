@@ -24,6 +24,7 @@ import os
 import re
 import shutil
 import zipfile
+import zlib
 from collections.abc import Iterable, Iterator
 from pathlib import Path
 
@@ -60,6 +61,15 @@ import py_compile, sys
 py_compile.compile(sys.argv[1], cfile=sys.argv[2], dfile="__main__.py", doraise=True,
                    invalidation_mode=py_compile.PycInvalidationMode.UNCHECKED_HASH)
 """
+
+
+def _crc32(path: Path) -> int:
+    """A file's CRC-32, as a zip records it."""
+    crc = 0
+    with path.open("rb") as f:
+        while chunk := f.read(1 << 20):
+            crc = zlib.crc32(chunk, crc)
+    return crc
 
 
 def render_loader(config: dict[str, object]) -> str:
@@ -360,6 +370,7 @@ def write_pyz(
         "PAYLOADS": settings if len(ps) > 1 else [],
         "PARTS": parts,
         "SHA256": {layer.member: layer.digest for layer in layers} if parts else {},
+        "CRCS": {} if parts else {layer.member: _crc32(layer.path) for layer in layers},
         "EMBEDDED": fmt == "py",
         "EXTERNAL": bool(first.external),
     }

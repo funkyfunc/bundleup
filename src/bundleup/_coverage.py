@@ -9,7 +9,7 @@ compatible"), and by `bundleup check --python-platform`, which checks other targ
 from __future__ import annotations
 
 import functools
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Any
 
 from packaging.markers import InvalidMarker, Marker, UndefinedEnvironmentName
@@ -169,6 +169,28 @@ def suggestion(
     return None
 
 
+MACOS_LEVELS = [(14, 0), (15, 0), (26, 0)]  # newer deployment targets wheels commonly need
+
+
+def macos_suggestion(
+    found: list[Gap], platform: Platform, pylock: str, *, abiflags: str = ""
+) -> tuple[int, int] | None:
+    """A newer macOS deployment target under which every gap has a wheel, if one exists. uv takes
+    macOS 13 unless MACOSX_DEPLOYMENT_TARGET says otherwise, so a wheel for macOS 14 looked
+    missing even on the Mac building it, and nothing said why (twelfth review)."""
+    hard = [g for g in found if not g.source_only]
+    if not hard or platform.sys_platform != "darwin":
+        return None
+    for level in MACOS_LEVELS:
+        if platform.level and level <= platform.level:
+            continue
+        candidate = replace(platform, level=level)
+        still = {g.package for g in gaps(pylock, candidate, hard[0].python, abiflags=abiflags)}
+        if not any(g.package in still for g in hard):
+            return level
+    return None
+
+
 def describe(gap: Gap) -> str:
     """'pillow 12.3.0: wheels for manylinux_2_28_x86_64, macosx_11_0_arm64, ...'."""
     name = f"{gap.package} {gap.version}" if gap.version else gap.package
@@ -185,6 +207,7 @@ def diagnostics(
     (fine if they're pure Python, which only a build can tell)."""
     diags = []
     better = suggestion(found, platform, pylock, abiflags=abiflags)
+    newer_macos = macos_suggestion(found, platform, pylock, abiflags=abiflags)
     python = f"Python {found[0].python[0]}.{found[0].python[1]}" if found else ""
     for gap in found:
         if gap.source_only:
@@ -200,11 +223,16 @@ def diagnostics(
                 )
             )
         else:
-            hint = (
-                f"{better} would work, if the target's C library is new enough"
-                if better
-                else "pin a version that publishes a wheel for it, or build on the target"
-            )
+            if better:
+                hint = f"{better} would work, if the target's C library is new enough"
+            elif newer_macos:
+                version = f"{newer_macos[0]}.{newer_macos[1]}"
+                hint = (
+                    f"MACOSX_DEPLOYMENT_TARGET={version} would work: build with it set, and the "
+                    f"bundle needs macOS {version} or newer"
+                )
+            else:
+                hint = "pin a version that publishes a wheel for it, or build on the target"
             diags.append(
                 Diagnostic(
                     "no-wheel",

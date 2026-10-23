@@ -57,11 +57,13 @@ and git.
   dir`, `--format zip` (ADR-0049); `--max-size`; `--split SIZE` (a small `.pyz` and a parts folder,
   ADR-0045). No named targets: each
   destination is a tested recipe in docs/recipes.md (ADR-0039). Builds for this machine or another
-  platform. Pure-Python bundles run on every
-  Python version their lock allows (ADR-0030) and on any OS when the lock agrees (ADR-0034);
-  compiled ones on one version and platform, and one `.pyz` can carry a payload per platform and
-  version, each file stored once (ADR-0038). `--entry python` makes a bundle that runs the
-  scripts it's given, one for all of a skill's scripts (ADR-0040). Packages come from the lock's
+  platform. Pure-Python and native bundles run on every compatible
+  Python version their lock and wheels allow (ADR-0030, ADR-0052)—automatically merging `cp3XX`
+  extension binaries across Python 3.9–3.14 and layering `uv.lock` Python marker forks—and pure
+  bundles run on any OS when the lock agrees (ADR-0034); one `.pyz` can carry a payload per platform
+  and version (`--python-platform all`), each file stored once (ADR-0038). `--entry python` makes a
+  bundle that runs the scripts it's given, one for all of a skill's scripts (ADR-0040;
+  `BUNDLEUP_ENTRY=python` overrides a fixed entry point at runtime). Packages come from the lock's
   own files and index, hash-checked (a company index works). A stale lock is an error (ADR-0033). Every build checks the code
   and, for other platforms, wheel coverage from the lock (ADR-0024, ADR-0031). `--smoke` runs the
   finished bundle once, offline, in a fresh home (ADR-0042). Recipes tested in CI: skills, Docker, Lambda, Claude API.
@@ -82,18 +84,21 @@ and git.
   fastest configuration, builds 1.1-2.4× faster; warm start equals a venv; first runs 2.3-15×
   faster. Unchanged `.pyc` files in the persistent bytecode cache are skipped without spawning
   Python (`_bytecode.py` v3).
-- **Released:** `bundleup 0.1.0` is published on PyPI (`https://pypi.org/project/bundleup/0.1.0/`)
-  and GitHub Releases ([docs/releasing.md](docs/releasing.md)).
+- **Released:** `bundleup 0.2.1` is the latest on PyPI (`https://pypi.org/project/bundleup/`)
+  and GitHub Releases ([docs/releasing.md](docs/releasing.md)); CHANGELOG.md "Unreleased" lists
+  what's on `main` since.
 - **ADR status:** all accepted (0045-0049 on the owner's request; the owner accepted 0023-0026, 0033-0038 and 0040 on
   2026-10-08, on the agent's summary); only 0013's features are still Proposed. 0027-0032 are
   accepted fixes the owner asked for, with designs the owner hasn't reviewed.
-  Eleven independent reviews: [first](docs/findings/2026-10-07-independent-review.md),
+  Twelve independent reviews: [first](docs/findings/2026-10-07-independent-review.md),
   [second](docs/findings/2026-10-07-second-review.md), [third](docs/findings/2026-10-07-third-review.md),
   [fourth](docs/findings/2026-10-08-fourth-review.md), [fifth](docs/findings/2026-10-08-fifth-review.md),
   [sixth](docs/findings/2026-10-08-sixth-review.md), [seventh](docs/findings/2026-10-10-seventh-review.md),
   [eighth](docs/findings/2026-10-10-eighth-review.md), [ninth](docs/findings/2026-10-13-ninth-review.md),
-  [tenth](docs/findings/2026-10-13-tenth-review.md), [eleventh](docs/findings/2026-10-13-eleventh-review.md);
-  the brief is [review-brief.md](docs/findings/review-brief.md).
+  [tenth](docs/findings/2026-10-13-tenth-review.md), [eleventh](docs/findings/2026-10-13-eleventh-review.md),
+  [twelfth](docs/findings/2026-10-22-twelfth-review.md) (the first to use the released package as a
+  user would; it found main-path bugs the others missed); the brief is
+  [review-brief.md](docs/findings/review-brief.md).
 - bundleup depends on the `uv` package (bundled binary) but prefers a uv ≥ 0.9 on `PATH`
   (ADR-0011). Rust stays reserved for a future scanner (ADR-0008).
 

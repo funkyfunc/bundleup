@@ -25,7 +25,14 @@ from pathlib import Path
 from ._errors import CheckFailedError, Diagnostic
 
 TIMEOUT = 120.0  # seconds; a program that waits for input or serves forever fails, with a hint
-DROPPED = ("PYTHONPATH", "PYTHONHOME", "PYTHONSTARTUP", "VIRTUAL_ENV", "PYTHONUSERBASE")
+DROPPED = (
+    "PYTHONPATH",
+    "PYTHONHOME",
+    "PYTHONSTARTUP",
+    "VIRTUAL_ENV",
+    "PYTHONUSERBASE",
+    "BUNDLEUP_ENTRY",
+)
 # macOS: everything allowed except connections to other machines (local sockets still work).
 SANDBOX = "(version 1)(allow default)(deny network-outbound (remote ip))"
 

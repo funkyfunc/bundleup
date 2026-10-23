@@ -160,9 +160,9 @@ jobs:
           --python-platform aarch64-apple-darwin --python-platform x86_64-apple-darwin
           --python-platform x86_64-pc-windows-msvc --python-platform x86_64-manylinux_2_28
           -o skill/deps.pyz
-      - name: The same, split into files of at most 20 MB (--split, ADR-0045)
+      - name: The same across Python 3.10-3.14, split into files of at most 20 MB (--split, ADR-0045, ADR-0052)
         run: >
-          uv run bundleup build gauntlet/skill --entry python --python 3.12 --strict
+          uv run bundleup build gauntlet/skill --entry python --strict
           --python-platform aarch64-apple-darwin --python-platform x86_64-apple-darwin
           --python-platform x86_64-pc-windows-msvc --python-platform x86_64-manylinux_2_28
           --split 20MB -o skill/split/deps.pyz
@@ -196,22 +196,29 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: astral-sh/setup-uv@v10.2.0
-      - run: uv python install 3.12
+      - run: uv python install 3.11 3.12 3.13
       - uses: actions/download-artifact@v8
         with:
           name: skill
           path: skill
-      - name: Run the skill's scripts through the bundle
+      - name: Run the skill's scripts through the bundle (3.11, 3.12, 3.13 and uv re-exec)
         shell: bash
         run: |
           py=$(uv python find 3.12)
+          py11=$(uv python find 3.11)
+          py13=$(uv python find 3.13)
           out=$("$py" skill/deps.pyz gauntlet/skill/scripts/make_deck.py a); echo "$out"
           [[ "$out" == "SKILL OK ['a'] True"* ]]
           out=$("$py" skill/deps.pyz gauntlet/skill/scripts/run_sibling.py); echo "$out"
           [[ "$out" == "SKILL OK ['from-sibling'] True"* ]]
           if [ "$RUNNER_OS" = Windows ]; then [[ "$out" == *"win32api True"* ]]; fi
-          out=$("$py" skill/split/deps.pyz gauntlet/skill/scripts/make_deck.py b); echo "$out"
-          [[ "$out" == "SKILL OK ['b'] True"* ]]
+          out=$("$py11" skill/deps.pyz gauntlet/skill/scripts/make_deck.py rerun); echo "$out"
+          [[ "$out" == "SKILL OK ['rerun'] True"* ]]
+          for ver_py in "$py11" "$py" "$py13"; do
+            out=$("$ver_py" skill/split/deps.pyz gauntlet/skill/scripts/run_sibling.py); echo "$out"
+            [[ "$out" == "SKILL OK ['from-sibling'] True"* ]]
+            if [ "$RUNNER_OS" = Windows ]; then [[ "$out" == *"win32api True"* ]]; fi
+          done
       - name: Run the executable with no Python on PATH
         shell: bash
         run: |

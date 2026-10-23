@@ -99,3 +99,91 @@ def test_a_stale_uv_lock_is_an_error_and_is_never_rewritten(tmp_path: Path) -> N
     assert (path / "uv.lock").read_bytes() == lock
     build(BuildOptions(path=path, output=tmp_path / "app.pyz", lock_mode="frozen"))
     assert (path / "uv.lock").read_bytes() == lock
+
+
+def wheel(folder: Path, version: str) -> str:
+    """A hand-made `acme-fork` wheel (no network, no build backend); returns its pylock entry."""
+    import base64
+    import hashlib
+    import zipfile
+
+    folder.mkdir(exist_ok=True)
+    path = folder / f"acme_fork-{version}-py3-none-any.whl"
+    files = {
+        "acme_fork.py": f"VERSION = {version!r}\n",
+        f"acme_fork-{version}.dist-info/METADATA": "Metadata-Version: 2.1\nName: acme-fork\n"
+        f"Version: {version}\n",
+        f"acme_fork-{version}.dist-info/WHEEL": "Wheel-Version: 1.0\nGenerator: test\n"
+        "Root-Is-Purelib: true\nTag: py3-none-any\n",
+    }
+    record = []
+    with zipfile.ZipFile(path, "w") as zf:
+        for name, text in files.items():
+            digest = base64.urlsafe_b64encode(hashlib.sha256(text.encode()).digest()).rstrip(b"=")
+            record.append(f"{name},sha256={digest.decode()},{len(text)}")
+            zf.writestr(name, text)
+        record.append(f"acme_fork-{version}.dist-info/RECORD,,")
+        zf.writestr(f"acme_fork-{version}.dist-info/RECORD", "\n".join(record) + "\n")
+    sha = hashlib.sha256(path.read_bytes()).hexdigest()
+    return f'wheels = [{{ path = "wheels/{path.name}", hashes = {{ sha256 = "{sha}" }} }}]\n'
+
+
+def test_a_lock_forked_on_the_full_python_version_installs_this_versions_side(
+    tmp_path: Path,
+) -> None:
+    """Twelfth review: installs passed `--python-version 3.X`, which uv reads as 3.X.0, so a lock
+    forked at `python_full_version <= '3.X'` (cryptography in gauntlet 11) installed the 3.X.0
+    side, and the lock check refused the bundle on any later 3.X."""
+    minor = f"{sys.version_info.major}.{sys.version_info.minor}"
+    path = tmp_path / "p"
+    path.mkdir()
+    old = f"marker = \"python_full_version <= '{minor}'\"\n" + wheel(path / "wheels", "1.0")
+    new = f"marker = \"python_full_version > '{minor}'\"\n" + wheel(path / "wheels", "2.0")
+    pylock = PYLOCK + PROJECT_ENTRY.format(editable="false")
+    pylock += '\n[[packages]]\nname = "acme-fork"\nversion = "1.0"\n' + old
+    pylock += '\n[[packages]]\nname = "acme-fork"\nversion = "2.0"\n' + new
+    project(path, pylock)
+    pyproject = path / "pyproject.toml"
+    pyproject.write_text(
+        pyproject.read_text().replace(
+            "[project.scripts]", 'dependencies = ["acme-fork"]\n[project.scripts]'
+        )
+    )
+    (path / "src" / "locked_app" / "__init__.py").write_text(
+        "def main():\n    import acme_fork\n    print(acme_fork.VERSION)\n"
+    )
+    result = build(BuildOptions(path=path, output=tmp_path / "app.pyz", python=sys.executable))
+    done = subprocess.run([sys.executable, str(result.output)], capture_output=True, text=True)
+    assert done.stdout.strip() == ("1.0" if sys.version_info.micro == 0 else "2.0"), done.stderr
+
+
+@pytest.mark.parametrize("modern", [False, True], ids=["any-syntax", "match-statement"])
+def test_a_payload_for_older_pythons_is_built_only_where_the_code_runs(
+    tmp_path: Path, modern: bool
+) -> None:
+    """ADR-0052 builds an extra payload where the lock picks other packages for older Pythons
+    (here `acme-fork` 1.0 below 3.10). Twelfth review: that payload skipped every code check, so
+    code with a `match` statement claimed 3.9 and failed there with a SyntaxError."""
+    path = tmp_path / "p"
+    path.mkdir()
+    old = "marker = \"python_version < '3.10'\"\n" + wheel(path / "wheels", "1.0")
+    new = "marker = \"python_version >= '3.10'\"\n" + wheel(path / "wheels", "2.0")
+    pylock = PYLOCK + PROJECT_ENTRY.format(editable="false")
+    pylock += '\n[[packages]]\nname = "acme-fork"\nversion = "1.0"\n' + old
+    pylock += '\n[[packages]]\nname = "acme-fork"\nversion = "2.0"\n' + new
+    project(path, pylock)
+    pyproject = path / "pyproject.toml"
+    pyproject.write_text(
+        pyproject.read_text().replace(
+            "[project.scripts]", 'dependencies = ["acme-fork"]\n[project.scripts]'
+        )
+    )
+    body = "    match 1:\n        case _:\n            pass\n" if modern else ""
+    (path / "src" / "locked_app" / "__init__.py").write_text(
+        f"def main():\n{body}    import acme_fork\n    print(acme_fork.VERSION)\n"
+    )
+    result = build(BuildOptions(path=path, output=tmp_path / "app.pyz"))
+    assert result.pythons is not None
+    assert result.pythons.min == ((3, 10) if modern else (3, 9))
+    done = subprocess.run([sys.executable, str(result.output)], capture_output=True, text=True)
+    assert done.stdout.strip() == ("1.0" if sys.version_info < (3, 10) else "2.0"), done.stderr

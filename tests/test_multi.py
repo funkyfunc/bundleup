@@ -8,6 +8,8 @@ import sys
 import zipfile
 from pathlib import Path
 
+import pytest
+
 from bundleup import BuildOptions, build, verify
 
 PURE = """\
@@ -102,3 +104,77 @@ def test_unlocked_targets_resolve_from_the_lowest_python_asked_for() -> None:
     assert _lowest(asked("3.12", "3.10", "3.11")) == (3, 10)
     assert _lowest(asked("3.12", "/usr/bin/python3")) is None  # one version: nothing to share
     assert _lowest(asked("3.12")) is None and _lowest(asked(None, None)) is None
+
+
+def test_merging_another_versions_wheel_takes_only_its_own_extensions(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """ADR-0052 merges a cp3XX wheel's build for another Python into one payload. Twelfth review:
+    any file only that build had was copied in too, and reached every Python the payload serves.
+    Now only that version's own extensions may join; anything else is a conflict, and the version
+    gets a payload of its own."""
+    from bundleup import _platforms, _uv
+    from bundleup._python import Target
+    from bundleup._source import Source
+
+    mac = _platforms.parse("aarch64-apple-darwin")
+    target = Target(
+        executable=sys.executable,
+        version=(3, 13),
+        full_version="3.13.1",
+        platform="darwin",
+        machine="arm64",
+        abiflags="",
+        implementation="cpython",
+        cache_tag="cpython-313",
+        markers=mac.markers(python_full_version="3.13.1"),
+        python_platform=mac,
+    )
+
+    def install(site: Path, minor: int, extra: bool) -> None:
+        info = site / "fast-1.0.dist-info"
+        info.mkdir(parents=True)
+        (info / "METADATA").write_text("Metadata-Version: 2.1\nName: fast\nVersion: 1.0\n")
+        (info / "WHEEL").write_text(
+            f"Wheel-Version: 1.0\nTag: cp3{minor}-cp3{minor}-macosx_11_0_arm64\n"
+        )
+        (info / "RECORD").write_text("")
+        (site / "fast").mkdir()
+        (site / "fast" / "__init__.py").write_text("from ._ext import go\n")
+        (site / "fast" / f"_ext.cpython-3{minor}-darwin.so").write_bytes(b"binary %d" % minor)
+        if extra:
+            (site / "fast" / "only_312.py").write_text("")
+
+    pylock = tmp_path / "pylock.toml"
+    pylock.write_text(
+        'lock-version = "1.0"\nrequires-python = ">=3.9"\n'
+        '[[packages]]\nname = "fast"\nversion = "1.0"\n'
+        'wheels = [{ name = "fast-1.0-cp312-cp312-macosx_11_0_arm64.whl" },\n'
+        '  { name = "fast-1.0-cp313-cp313-macosx_11_0_arm64.whl" }]\n'
+    )
+    source = Source(path=tmp_path, name="app", requires_python=">=3.9", is_script=False)
+    for extra in (False, True):
+        site = tmp_path / f"site-{extra}"
+        install(site, 13, extra=False)
+
+        def fake_uv(cmd: list[str], **kwargs: object) -> str:
+            into = Path(cmd[cmd.index("--target") + 1])
+            install(into, int(cmd[cmd.index("--python-version") + 1].split(".")[1]), extra)  # noqa: B023
+            return ""
+
+        monkeypatch.setattr(_uv, "_run_with_offline_fallback", fake_uv)
+        stage = tmp_path / f"stage-{extra}"
+        stage.mkdir()
+        conflict = _uv.merge_native_wheels(
+            "uv",
+            source,
+            site=site,
+            pylock=pylock,
+            target=target,
+            candidates=[(3, 12), (3, 13)],
+            stage=stage,
+            progress=lambda event: None,
+        )
+        assert conflict is extra
+        assert (site / "fast" / "_ext.cpython-312-darwin.so").exists() is not extra
+        assert not (site / "fast" / "only_312.py").exists()

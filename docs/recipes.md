@@ -16,7 +16,7 @@ packages in one file next to the scripts and run every script through it
 ```
 my-skill/
   SKILL.md
-  pyproject.toml        # [project] dependencies = ["python-pptx", "pymupdf", ...], then `uv lock`
+  pyproject.toml        # [project] requires-python = ">=3.10", dependencies = ["python-pptx", "pymupdf", ...], then `uv lock`
   uv.lock
   scripts/
     deck_edit.py        # plain scripts the agent can read
@@ -26,9 +26,8 @@ my-skill/
 
 ```bash
 bundleup build my-skill --entry python -o my-skill/scripts/deps.pyz \
-  --python 3.12 \
-  --python-platform aarch64-apple-darwin --python-platform x86_64-apple-darwin \
-  --python-platform x86_64-pc-windows-msvc --python-platform x86_64-manylinux_2_28
+  --split 100MB \
+  --python-platform all
 ```
 
 (or keep the settings in the project, so `bundleup build my-skill -o my-skill/scripts/deps.pyz` is
@@ -37,21 +36,34 @@ enough:
 ```toml
 [tool.bundleup]
 entry = "python"
-python = "3.12"
-python-platform = ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-pc-windows-msvc",
-                   "x86_64-manylinux_2_28"]
+split = "100MB"
+python-platform = "all"   # or ["aarch64-apple-darwin", "x86_64-apple-darwin", "x86_64-pc-windows-msvc", "x86_64-manylinux_2_28", "aarch64-manylinux_2_28"]
 ```
 
 ) and in SKILL.md: `python3 scripts/deps.pyz scripts/deck_edit.py ...` (`python` on Windows). The
 scripts' own helper modules import as usual (the script's folder comes first on `sys.path`), and
 a script that starts another one from that folder with `sys.executable` shares the bundle. Every
 build reads the scripts' imports and warns (`undeclared-import`) about any the bundle doesn't
-provide, so a missing dependency shows up before your users find it.
+provide, so a missing dependency shows up before your users find it. If a bundle was built with a
+fixed entry point (`--entry pkg:main`), setting `BUNDLEUP_ENTRY=python` still lets a setup step
+run `BUNDLEUP_ENTRY=python python3 bundle.pyz -m ...` against the bundled packages.
 
-- **Which Pythons:** packages with compiled code (lxml, Pillow) have a build per Python version,
-  so list the versions your users have. A bundle started with another version re-runs itself
-  with a matching Python if one is installed (`python3.X`, or a plain `python3`/`python` of the
-  right version, such as Apple's `/usr/bin/python3`; ADR-0036); otherwise it names the versions
+- **Which Pythons:** pure-Python packages, `abi3` wheels (such as `cryptography` or `orjson`), and
+  `py3-none-<platform>` wheels (such as `playwright` or `ruff`) run on every Python version in
+  range (`requires-python` intersect wheel tags). `uv init` writes the Python it ran on into
+  `requires-python` (`>=3.13`), which keeps every older one out, Apple's 3.9 included: lower it
+  if the scripts run there, and `uv lock` again; the build says when `requires-python` is what
+  limits the bundle.
+  For packages with per-interpreter compiled
+  extensions (`cp3XX`, such as `greenlet`, `lxml`, `Pillow`, or `numpy`), `bundleup build`
+  automatically merges the `.cpython-3XX` / `.cp3XX` wheels across compatible Python 3 versions
+  (`3.9`–`3.14`) into each platform's payload—and when `uv.lock` selects different package
+  versions across Python versions (such as `pyee` in `playwright`), automatically layers the
+  uncovered lock forks so shared files are stored once and the bundle works across every
+  compatible Python 3 version out of the box. A bundle started with another version re-runs itself
+  with a matching Python if one is installed (`python3.X`, a plain `python3`/`python` of the
+  right version such as Apple's `/usr/bin/python3`, or a `uv`-managed interpreter via
+  `uv python find`; ADR-0036); otherwise it names the versions
   it needs.
   `bundleup check --matrix` shows which platforms and versions the lock's wheels cover.
 - **Size:** each file is stored once across platforms and versions, but compiled packages differ
@@ -66,7 +78,11 @@ provide, so a missing dependency shows up before your users find it.
   change. Each rebuild with new contents commits new parts, and git keeps the old ones: ten
   rebuilds of a 144 MiB bundle pass GitHub's recommended 1 GB per repository, so rebuild the
   committed bundle when dependencies change, not on every edit. A missing or mismatched part is refused by name. CI builds the skill with `--split 20MB`
-  and runs it on all three OSes.
+  and runs it on all three OSes. Measured again 2026-10-22 ([twelfth review](findings/2026-10-22-twelfth-review.md)):
+  PyMuPDF 2.0 now pulls in onnxruntime, numpy and networkx, so the same skill is 329 MiB for four
+  platforms and one Python. onnxruntime has no wheel for Intel Macs, so `--python-platform all`
+  fails on it; list the platforms that have wheels, and set `MACOSX_DEPLOYMENT_TARGET=14.0` for
+  its macOS 14 wheels (the error says so).
 - **Python must be installed** for a `.pyz`. macOS has one (Apple's 3.9, if the developer tools
   are installed); many Windows machines don't, and `python` there may be the Microsoft Store
   placeholder, which isn't Python. For those, ship executables that bring their own Python

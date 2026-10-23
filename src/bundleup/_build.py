@@ -3,6 +3,7 @@ the output. Each step lives in its own module: _source, _python, _uv, _payload, 
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import shutil
@@ -14,7 +15,7 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Callable, Literal
 
-from packaging.specifiers import SpecifierSet
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.utils import canonicalize_name
 
 from . import (
@@ -32,6 +33,7 @@ from ._errors import (
     BundleupError,
     CheckFailedError,
     Diagnostic,
+    EntryPointError,
     NoCompatibleWheelError,
     UsageError,
 )
@@ -46,6 +48,7 @@ from ._outputs import (
     write_pyz,
 )
 from ._payload import (
+    OLDEST,
     Entry,
     Prepared,
     check_wheel_platforms,
@@ -79,7 +82,7 @@ from ._source import (
 )
 from ._steps import Progress, ProgressEvent, Steps, ignore, run
 from ._text import findings, plural
-from ._uv import add_runtime, export, find_uv, install
+from ._uv import add_runtime, export, find_uv, install, merge_native_wheels
 
 
 @dataclass(frozen=True)
@@ -134,33 +137,92 @@ class BuildOptions:
                 if isinstance(self.python_platform, str)
                 else list(self.python_platform)
             )
-            plat_items = _split_items([*plat_raw, *self.more_python_platforms], dedup=True)
+            plat_items = _split_items(
+                [*plat_raw, *self.more_python_platforms], expand_platforms=True, dedup=True
+            )
             object.__setattr__(self, "python_platform", plat_items[0] if plat_items else None)
             object.__setattr__(self, "more_python_platforms", tuple(plat_items[1:]))
         elif self.more_python_platforms:
             object.__setattr__(
                 self,
                 "more_python_platforms",
-                tuple(_split_items(self.more_python_platforms, dedup=True)),
+                tuple(_split_items(self.more_python_platforms, expand_platforms=True, dedup=True)),
             )
         ext_raw = [self.external] if isinstance(self.external, str) else list(self.external)
         object.__setattr__(self, "external", tuple(_split_items(ext_raw, dedup=True)))
 
 
+def _expand_python_token(token: str) -> list[str]:
+    """Expand a Python version range (`3.10-3.14`, `3.10..3.14`, `3.10+`) or PEP 440 specifier
+    (`>=3.10`, `>=3.10,<3.14`) into individual minor versions (`["3.10", "3.11", ...]`)."""
+    m = re.fullmatch(
+        r"(?:py|cp|python)?3\.?(\d+)\s*(?:-|\.\.)\s*(?:(?:py|cp|python)?3\.?)?(\d+)",
+        token,
+        flags=re.IGNORECASE,
+    )
+    if m:
+        low, high = int(m[1]), int(m[2])
+        if 9 <= low <= high <= 20:
+            return [f"3.{v}" for v in range(low, high + 1)]
+    m_plus = re.fullmatch(r"(?:py|cp|python)?3\.?(\d+)\+", token, flags=re.IGNORECASE)
+    if m_plus:
+        low = int(m_plus[1])
+        top = _coverage.MATRIX_PYTHONS[-1][1]
+        if 9 <= low <= top:
+            return [f"3.{v}" for v in range(low, top + 1)]
+    if re.match(r"^(?:>=|<=|~=|==|>|<|!=)", token):
+        from packaging.specifiers import InvalidSpecifier
+
+        try:
+            spec = SpecifierSet(token)
+        except InvalidSpecifier:
+            return [token]
+        matched = [
+            f"{v[0]}.{v[1]}"
+            for v in _coverage.MATRIX_PYTHONS
+            if any(spec.contains(f"{v[0]}.{v[1]}.{p}", prereleases=True) for p in (0, 99))
+        ]
+        if matched:
+            return matched
+    return [re.sub(r"^(?:py|cp|python)(3)\.?(\d+)$", r"\1.\2", token, flags=re.IGNORECASE)]
+
+
 def _split_items(
-    items: Sequence[str], *, check_path: bool = False, dedup: bool = False
+    items: Sequence[str],
+    *,
+    check_path: bool = False,
+    expand_platforms: bool = False,
+    dedup: bool = False,
 ) -> list[str]:
     out: list[str] = []
     for raw in items:
+        stripped = raw.strip()
+        if (
+            check_path
+            and stripped
+            and re.match(r"^(?:>=|<=|~=|==|>|<|!=)", stripped)
+            and not Path(raw).exists()
+        ):
+            expanded_spec = _expand_python_token(stripped)
+            if expanded_spec != [stripped]:
+                for item in expanded_spec:
+                    if not dedup or item not in out:
+                        out.append(item)
+                continue
         if "," in raw and not (check_path and Path(raw).exists()):
             parts = [p.strip() for p in raw.split(",") if p.strip()]
         else:
-            parts = [raw.strip()] if raw.strip() else []
+            parts = [stripped] if stripped else []
         for p in parts:
-            if check_path and "/" not in p and "\\" not in p and not Path(p).exists():
-                p = re.sub(r"^(?:py|cp|python)(3)\.?(\d+)$", r"\1.\2", p, flags=re.IGNORECASE)
-            if not dedup or p not in out:
-                out.append(p)
+            if expand_platforms and p.lower() in ("all", "universal"):
+                expanded = list(_platforms.ALL_PLATFORMS)
+            elif check_path and "/" not in p and "\\" not in p and not Path(p).exists():
+                expanded = _expand_python_token(p)
+            else:
+                expanded = [p]
+            for item in expanded:
+                if not dedup or item not in out:
+                    out.append(item)
     return out
 
 
@@ -257,6 +319,7 @@ def build(
             hint="give one --python and one --python-platform, or build a .pyz or .py",
         )
     smoked: SmokeResult | None = None
+    merge_pythons = _merge_candidates(options, fmt)
     with tempfile.TemporaryDirectory(prefix="bundleup-") as tmp:
         stage = Path(tmp)
         prepared: list[Prepared] = []
@@ -265,16 +328,66 @@ def build(
                 continue  # an earlier pure-Python payload already runs there (ADR-0038)
             where = stage if len(combinations) == 1 else stage / f"target-{i}"
             where.mkdir(exist_ok=True)
-            prepared.append(
-                _prepare(
-                    combination,
-                    fmt=fmt,
-                    stage=where,
-                    steps=steps,
-                    progress=report,
-                    floor=_lowest(combinations),
-                )
+            first = _prepare(
+                combination,
+                fmt=fmt,
+                stage=where,
+                steps=steps,
+                progress=report,
+                floor=_lowest(combinations),
+                merge_pythons=merge_pythons,
             )
+            prepared.append(first)
+            if (
+                fmt in LOADED
+                and fmt != "exe"
+                and combination.python is None
+                and not options.more_pythons
+                and merge_pythons
+            ):
+                unmergeable = first.merge_conflict and first.pythons.min == first.pythons.max
+                fork_queue = [
+                    (py_ver, () if unmergeable else merge_pythons)
+                    for py_ver in _lock_fork_pythons(first, merge_pythons)
+                ]
+                while fork_queue:
+                    py_ver, sub_merge = fork_queue.pop(0)
+                    fork_comb = replace(combination, python=py_ver)
+                    if _served(prepared, fork_comb):
+                        continue
+                    rem_merge = tuple(
+                        v
+                        for v in sub_merge
+                        if not any(
+                            p.target.platform == first.target.platform
+                            and p.target.machine == first.target.machine
+                            and p.pythons.contains(v)
+                            for p in prepared
+                        )
+                    )
+                    fork_where = stage / f"target-{i}-py{py_ver.replace('.', '')}"
+                    fork_where.mkdir(exist_ok=True)
+                    try:
+                        fork_prep = _prepare(
+                            fork_comb,
+                            fmt=fmt,
+                            stage=fork_where,
+                            steps=steps,
+                            progress=report,
+                            floor=_lowest(combinations),
+                            merge_pythons=rem_merge,
+                            fork_of=first,
+                        )
+                    except BundleupError:
+                        continue
+                    if not any(d.level == "error" for d in fork_prep.diagnostics):
+                        prepared.append(fork_prep)
+                        if fork_prep.merge_conflict:
+                            sub_unmergeable = fork_prep.pythons.min == fork_prep.pythons.max
+                            fork_queue.extend(
+                                (v, () if sub_unmergeable else merge_pythons)
+                                for v in _lock_fork_pythons(fork_prep, merge_pythons)
+                            )
         p = prepared[0]
         p_diagnostics = _merged_diagnostics(prepared)
         if options.smoke is not None and fmt in LOADED:
@@ -305,6 +418,7 @@ def build(
         workdir = raw_path.parent if p.source.is_script else raw_path
         output = Path(os.path.abspath(options.output or workdir / "dist" / default))
         _validate_output_path(output, fmt, default, p.source, p.own)
+        _check_writable(output)
         diagnostics = list(p_diagnostics)
         if fmt in LOADED:
             # An executable carries a .pyz (ADR-0047): written here first, then wrapped.
@@ -370,6 +484,10 @@ def build(
         size += sum(x.stat().st_size for x in parts.iterdir())
     else:
         parts = None
+    if fmt in LOADED and fmt != "exe" and options.python is None:
+        note = _floor_note(p.source, min(x.pythons.min for x in prepared), p.target.version)
+        if note:
+            report(ProgressEvent("note", note))
     return BuildResult(
         output=output,
         size_bytes=size,
@@ -385,7 +503,7 @@ def build(
         diagnostics=diagnostics,
         format=fmt,
         entry=str(p.entry) if p.entry else None,
-        pythons=p.pythons,
+        pythons=_combined_pythons(prepared),
         reach=p.reach,
         smoke=smoked,
         payloads=[
@@ -395,6 +513,176 @@ def build(
         if len(prepared) > 1
         else [],
     )
+
+
+def _check_writable(output: Path) -> None:
+    """Fail with what to do, before zipping anything, if the output's folder can't be written:
+    a read-only folder was reported as "bundleup crashed ... this is a bug" (twelfth review)."""
+    folder = output.parent
+    while not folder.exists() and folder != folder.parent:
+        folder = folder.parent  # the one it would be made in: nothing is made until it's written
+    try:
+        with tempfile.NamedTemporaryFile(dir=folder, prefix=f".{output.name}.probe-"):
+            pass
+    except OSError as e:
+        raise UsageError(
+            f"can't write {output}: {e.strerror or e}",
+            hint="pass -o with a folder you can write to",
+        ) from None
+
+
+def _merge_candidates(options: BuildOptions, fmt: Format) -> tuple[tuple[int, int], ...]:
+    """The Python versions whose compiled extensions go into one payload (ADR-0052): those asked
+    for, or with no --python every version bundles run on. Only for a bundle with a loader,
+    which picks its Python at run time: a `dir` or `zip` is loaded by one known Python, and an
+    executable brings its own (twelfth review: zips doubled in size for nothing)."""
+    if fmt not in LOADED or fmt == "exe":
+        return ()
+    if options.more_pythons:
+        asked = [
+            (int(m[1]), int(m[2]))
+            for v in (options.python, *options.more_pythons)
+            if v and (m := re.fullmatch(r"(\d+)\.(\d+)(?:\.\d+)?", v))
+        ]
+        return tuple(asked) if len(asked) > 1 else ()
+    return tuple(_coverage.MATRIX_PYTHONS) if options.python is None else ()
+
+
+def _floor_note(source: Source, lowest: tuple[int, int], building: tuple[int, int]) -> str | None:
+    """Say so when requires-python is what keeps a bundle off older Pythons and looks like what
+    `uv init` writes there, the Python it ran on (`>=3.13` built with 3.13): nothing said why such
+    a bundle refused macOS's own 3.9 (twelfth review, which also removed ADR-0052's silent
+    lowering of it). A floor below the building Python was chosen: not repeated on every build."""
+    if not source.requires_python or lowest <= OLDEST or lowest != building:
+        return None
+    try:
+        spec = SpecifierSet(source.requires_python)
+    except InvalidSpecifier:
+        return None
+    below = f"{lowest[0]}.{lowest[1] - 1}"
+    if any(spec.contains(f"{below}.{patch}", prereleases=True) for patch in (0, 99)):
+        return None  # it allows older ones: something else (a package, the code) limits the bundle
+    where = "the script" if source.is_script else "pyproject.toml"
+    relock = f"uv lock --script {source.path.name}" if source.is_script else "uv lock"
+    return (
+        f'requires-python "{source.requires_python}" in {where} limits this bundle to Python '
+        f"{lowest[0]}.{lowest[1]} and newer (macOS's own is 3.9); if the code runs on older ones, "
+        f"lower it and run `{relock}`"
+    )
+
+
+def _combined_pythons(prepared: list[Prepared]) -> PythonRange:
+    """Coalesce contiguous or overlapping `PythonRange`s across `prepared` into one range when
+    possible (e.g. `3.10-3.11` + `3.12-3.14` -> `3.10-3.14`)."""
+    ranges = sorted(
+        {(p.pythons.min, p.pythons.max) for p in prepared},
+        key=lambda r: (r[0], r[1] or (99, 99)),
+    )
+    if not ranges:
+        return prepared[0].pythons
+    lo, hi = ranges[0]
+    for nxt_lo, nxt_hi in ranges[1:]:
+        if hi is None:
+            break
+        if nxt_lo[0] == hi[0] and nxt_lo[1] <= hi[1] + 1:
+            hi = None if nxt_hi is None else max(hi, nxt_hi)
+        else:
+            return prepared[0].pythons
+    return PythonRange(lo, hi)
+
+
+def _lock_fork_pythons(first: Prepared, candidates: Sequence[tuple[int, int]]) -> list[str]:
+    """Other Python versions in `candidates` where `first.pylock` selects a distinct set of
+    packages or versions (e.g. `pyee 13.0.1` for `<3.12` vs `14.0.0` for `>=3.12`), or where
+    `first` had untagged native extension conflicts (`first.merge_conflict`), with full wheel
+    coverage on `first`'s target platform."""
+    from packaging.specifiers import InvalidSpecifier, SpecifierSet
+
+    from . import _toml as tomllib
+    from . import _verify
+
+    if (
+        not candidates
+        or first.target.implementation != "cpython"
+        or all(first.pythons.contains(v) for v in candidates)
+        or any(d.code == "python-range" for d in first.diagnostics)
+    ):
+        return []
+    try:
+        eff_platform = first.target.python_platform or host_platform(first.target)
+        lock = first.pylock.read_text(encoding="utf-8")
+        parsed = tomllib.loads(lock)
+    except (OSError, ValueError, UsageError):
+        return []
+
+    dists = _verify.installed_distributions(first.site)
+    eff_req = first.source.requires_python or ""
+    # Never wider than the lock: outside its requires-python it may lack packages (twelfth review).
+    lock_req = _verify.lock_requires_python(lock)
+    specs: list[SpecifierSet] = []
+    for raw_spec in (eff_req, lock_req):
+        if raw_spec:
+            try:
+                specs.append(SpecifierSet(raw_spec))
+            except InvalidSpecifier:
+                continue
+    has_wheels = {
+        canonicalize_name(str(p.get("name", "")))
+        for p in parsed.get("packages", [])
+        if isinstance(p, dict) and p.get("name") and p.get("wheels")
+    }
+    own_tags: list[str] = []
+    if first.source.packaged:
+        own_name = canonicalize_name(first.source.name)
+        for d in dists:
+            if d.name == own_name:
+                own_tags = _platforms.wheel_tags(first.site / d.dist_info)
+                break
+        if not own_tags or not _platforms.is_native(own_tags):
+            has_wheels.add(own_name)
+    seen_locks = (
+        set()
+        if first.merge_conflict
+        else {frozenset(_verify.locked_packages(lock, first.target.markers))}
+    )
+    extra: list[str] = []
+    for major, minor in candidates:
+        if first.pythons.contains((major, minor)):
+            continue
+        if (
+            own_tags
+            and _platforms.is_native(own_tags)
+            and not _platforms.wheel_allows_python(
+                own_tags,
+                (major, minor),
+                abiflags=first.target.abiflags or "",
+                platform=first.target.python_platform,
+            )
+        ):
+            continue
+        if not all(
+            any(spec.contains(f"{major}.{minor}.{p}", prereleases=True) for p in (0, 99))
+            for spec in specs
+        ):
+            continue
+        full = f"{major}.{minor}.0"
+        env = {
+            **first.target.markers,
+            "python_version": f"{major}.{minor}",
+            "python_full_version": full,
+            "implementation_version": full,
+        }
+        env_locked = frozenset(_verify.locked_packages(lock, env))
+        if not env_locked or env_locked in seen_locks:
+            continue
+        if not ({p.name for p in env_locked} <= has_wheels):
+            continue
+        if _coverage.gaps(lock, eff_platform, (major, minor), abiflags=first.target.abiflags or ""):
+            continue
+        if not first.merge_conflict:
+            seen_locks.add(env_locked)
+        extra.append(f"{major}.{minor}")
+    return extra
 
 
 def _combinations(options: BuildOptions) -> list[BuildOptions]:
@@ -467,9 +755,10 @@ def _lowest(combinations: list[BuildOptions]) -> tuple[int, int] | None:
 
 
 def _served(prepared: list[Prepared], options: BuildOptions) -> bool:
-    """Whether an already prepared pure-Python payload runs on this combination too, so it needs
-    no payload of its own: its Python range covers the version and it runs on any OS (or on this
-    one, any CPU)."""
+    """Whether an already prepared payload runs on this combination too, so it needs no payload of
+    its own: its Python range covers the version and either it's pure-Python (on any OS, or this
+    OS/CPU) or its native wheels are Python-agnostic (`abi3` / `py3-none-<platform>`) for this
+    exact target platform."""
     import platform as host_plat
 
     if options.python is None and prepared:
@@ -484,7 +773,17 @@ def _served(prepared: list[Prepared], options: BuildOptions) -> bool:
     raw_cpu = platform.arch if platform else host_plat.machine().lower()
     wanted_cpu = CPUS.get(raw_cpu, raw_cpu)
     for p in prepared:
-        if p.native or not p.pythons.contains(wanted):
+        if not p.pythons.contains(wanted):
+            continue
+        if p.native:
+            p_plat = p.target.python_platform
+            if platform is not None and p_plat is not None:
+                if replace(platform, name="") == replace(p_plat, name=""):
+                    return True
+            elif platform is None and p_plat is None:
+                p_cpu = CPUS.get(p.target.machine.lower(), p.target.machine.lower())
+                if wanted_os == p.target.platform and wanted_cpu == p_cpu:
+                    return True
             continue
         if p.reach.any_os:
             return True
@@ -633,7 +932,11 @@ def _wheel_coverage(pylock: Path, target: Target) -> list[Diagnostic]:
     """For another platform: refuse before installing if a locked package has no wheel for it
     (ADR-0031); warn about source-only packages, which uv builds here. Nothing for this machine:
     uv builds what it needs for it."""
+    expected_tag = f"cpython-{target.version[0]}{target.version[1]}"
     platform = target.python_platform
+    if platform is None and target.cache_tag != expected_tag:
+        with contextlib.suppress(UsageError):
+            platform = host_platform(target)
     if platform is None:
         return []
     lock = pylock.read_text(encoding="utf-8")
@@ -673,6 +976,35 @@ def _also_platforms(pylock: Path, target: Target, names: Sequence[str]) -> list[
 
 # Folders whose code doesn't run in the bundle: tests and docs import pytest, sphinx and the like.
 NOT_RUN = {"tests", "test", "docs", "doc", "examples"}
+
+
+class _NoPythonLeft(BundleupError):
+    """A payload for other Python versions than the build's own that its code can't run on."""
+
+
+def _imports_of(code: list[tuple[str, Path, bool]]) -> list[tuple[str, dict[str, int], set[str]]]:
+    """For each file of `_own_code`: what it imports for sure (-> first line), and the modules
+    beside it, which a script imports from its own folder."""
+    beside_cache: dict[Path, set[str]] = {}
+    return [
+        (
+            shown,
+            _imports.imports_with_lines(path),
+            beside_cache.setdefault(path.parent, _imports.top_level_modules(path.parent))
+            if beside
+            else set(),
+        )
+        for shown, path, beside in code
+    ]
+
+
+def _own_imports(
+    code: list[tuple[str, Path, bool]],
+    imported: list[tuple[str, dict[str, int], set[str]]] | None = None,
+) -> set[str]:
+    """Every module the project's own code imports for sure, apart from its own neighbours."""
+    found = _imports_of(code) if imported is None else imported
+    return set().union(*(set(names) - local for _shown, names, local in found))
 
 
 def _own_code(
@@ -803,13 +1135,20 @@ def _prepare(
     steps: Steps,
     progress: Progress,
     floor: tuple[int, int] | None = None,
+    for_check: bool = False,
+    merge_pythons: Sequence[tuple[int, int]] = (),
+    fork_of: Prepared | None = None,
 ) -> Prepared:
     """The steps `build` and `check` share: find the Python, read the lock, install, compile,
     analyze."""
     steps.start("python")
     uv = find_uv()
-    source = load_source(options.path, external=options.external)
-    if options.external:
+    source = (
+        fork_of.source
+        if fork_of is not None
+        else load_source(options.path, external=options.external)
+    )
+    if options.external and fork_of is None:
         me = canonicalize_name(source.name)
         for ext in options.external:
             if canonicalize_name(re.split(r"[<>=!~;\[\s]", ext, maxsplit=1)[0].strip()) == me:
@@ -817,13 +1156,31 @@ def _prepare(
                     f"--external {ext}: can't exclude {source.name} itself from the bundle",
                     hint="--external is for dependencies that the host Python already provides",
                 )
-    target = find_python(
-        uv,
-        source,
-        request=options.python,
-        python_platform=options.python_platform,
-        progress=progress,
-    )
+    if fork_of is not None and options.python:
+        parts = options.python.split(".")
+        ver = (int(parts[0]), int(parts[1]))
+        full = f"{ver[0]}.{ver[1]}.0"
+        base_t = fork_of.target
+        target = replace(
+            base_t,
+            version=ver,
+            full_version=full,
+            cache_tag=f"cpython-{ver[0]}{ver[1]}",
+            markers={
+                **base_t.markers,
+                "python_version": f"{ver[0]}.{ver[1]}",
+                "python_full_version": full,
+                "implementation_version": full,
+            },
+        )
+    else:
+        target = find_python(
+            uv,
+            source,
+            request=options.python,
+            python_platform=options.python_platform,
+            progress=progress,
+        )
     check_requires_python(source, target)
     site = stage / "site"
     script = script_path(source, fmt)
@@ -837,6 +1194,7 @@ def _prepare(
         progress=progress,
         external=options.external,
         markers=target.markers,
+        interpreter=target.executable,
     )
     pylock = exported.pylock
     coverage = _wheel_coverage(pylock, target)  # before installing: a precise error, early
@@ -849,26 +1207,86 @@ def _prepare(
         site=site,
         script=script,
         progress=progress,
+        entry=options.entry,
     )
     check_wheel_platforms(site, target)
-    if fmt in LOADED or options.entry or script:
-        entry = resolve_entry(
+    merge_conflict = (
+        merge_native_wheels(
+            uv,
             source,
-            site,
-            entry=options.entry,
-            script=script,
-            target_version=target.version,
-            external=options.external,
+            site=site,
+            pylock=pylock,
+            target=target,
+            candidates=merge_pythons,
+            stage=stage,
+            progress=progress,
         )
+        if merge_pythons and not for_check
+        else False
+    )
+    if fork_of is not None:
+        entry = fork_of.entry
+    elif fmt in LOADED or options.entry or script:
+        try:
+            entry = resolve_entry(
+                source,
+                site,
+                entry=options.entry,
+                script=script,
+                target_version=target.version,
+                external=options.external,
+            )
+        except EntryPointError:
+            if not for_check or options.entry is not None:
+                raise
+            entry = (
+                Entry("python", "")
+                if (source.path / "SKILL.md").is_file()
+                or (source.path / "scripts").is_dir()
+                or not source.packaged
+                else None
+            )
     else:
         # A directory or a flat zip is imported, and its host decides what runs. A console
         # script is a CLI, not a module handler, so it's never guessed (the review found the
         # printed handler named one).
         entry = None
     packages, native = inspect_site(site)
-    version = project_version(site, source)
+    version = fork_of.version if fork_of is not None else project_version(site, source)
     if fmt in LOADED:
         add_runtime(site)
+    if fork_of is not None:
+        diagnostics = list(fork_of.diagnostics)
+        sizes = fork_of.sizes
+        pythons = python_range(site, pylock=pylock, target=target, source=source, native=native)
+        owners = _check.owners(site, project=canonicalize_name(source.name), script=script, own=own)
+        code = _own_code(source, site, script=script, own=own, entry=entry, owner=owners)
+        imported = _own_imports(code)
+        provided = _imports.provided_by(site) | _imports.external_modules(options.external)
+        paths = [path for _shown, path, _beside in code]
+        checked = _check.fork_range(pythons, code=paths, imported=imported, provided=provided)
+        if checked is None:
+            raise _NoPythonLeft(f"the code runs on none of Python {pythons}")
+        pythons = checked
+        reach = portability(pylock, target=target, pythons=pythons, native=native)
+        return Prepared(
+            source=source,
+            target=target,
+            site=site,
+            pylock=pylock,
+            script=script,
+            entry=entry,
+            packages=packages,
+            native=native,
+            version=version,
+            diagnostics=diagnostics,
+            sizes=sizes,
+            pythons=pythons,
+            reach=reach,
+            own=tuple(own),
+            external=options.external,
+            merge_conflict=merge_conflict,
+        )
     steps.start("compile")
     precompile(target, site, progress=progress, checked=fmt not in LOADED)
     steps.start("check")
@@ -902,17 +1320,7 @@ def _prepare(
         )
     code = _own_code(source, site, script=script, own=own, entry=entry, owner=site_owners)
     provided = _imports.provided_by(site) | _imports.external_modules(options.external)
-    beside_cache: dict[Path, set[str]] = {}
-    imported = [
-        (
-            shown,
-            _imports.imports_with_lines(path),
-            beside_cache.setdefault(path.parent, _imports.top_level_modules(path.parent))
-            if beside
-            else set(),
-        )
-        for shown, path, beside in code
-    ]
+    imported = _imports_of(code)
     code_paths = {shown: path for shown, path, _beside in code}
     diagnostics += _check.undeclared_imports(
         imported, provided, _imports.stdlib(target.version), paths=code_paths
@@ -932,7 +1340,7 @@ def _prepare(
         owner=site_owners,
     )
     diagnostics += narrowed
-    every_import: set[str] = set().union(*(set(names) - local for _shown, names, local in imported))
+    every_import = _own_imports(code, imported)
     pythons, by_stdlib = _check.stdlib_range(pythons, target.version, every_import, provided)
     diagnostics += by_stdlib
     reach = portability(pylock, target=target, pythons=pythons, native=native)
@@ -953,6 +1361,7 @@ def _prepare(
         reach=reach,
         own=tuple(own),
         external=options.external,
+        merge_conflict=merge_conflict,
     )
 
 
@@ -995,7 +1404,14 @@ def check(
     report = progress or ignore
     steps = Steps(report)
     with tempfile.TemporaryDirectory(prefix="bundleup-") as tmp:
-        p = _prepare(options, fmt=fmt, stage=Path(tmp), steps=steps, progress=report)
+        p = _prepare(
+            options, fmt=fmt, stage=Path(tmp), steps=steps, progress=report, for_check=True
+        )
+        check_pythons = (
+            _check_merged_pythons(p, _coverage.MATRIX_PYTHONS)
+            if options.python is None and fmt in LOADED and fmt != "exe"
+            else p.pythons
+        )
         extra = _also_platforms(p.pylock, p.target, others)
         cells = _matrix(p.pylock, p.source) if matrix else []
         steps.finish()
@@ -1007,11 +1423,107 @@ def check(
         packages=p.sizes,
         diagnostics=sorted([*p.diagnostics, *extra], key=lambda d: d.level != "error"),
         duration_s=time.perf_counter() - steps.started,
-        pythons=p.pythons,
+        pythons=check_pythons,
         reach=p.reach,
         matrix=cells,
         also_platforms=others,
     )
+
+
+def _check_merged_pythons(p: Prepared, candidates: Sequence[tuple[int, int]]) -> PythonRange:
+    """In `bundleup check` (when `--python` is not pinned), report the widened `PythonRange` that
+    `bundleup build` produces via `merge_native_wheels` and `_lock_fork_pythons`, computed from
+    `p.pylock` without downloading additional wheels."""
+    from packaging.specifiers import InvalidSpecifier
+
+    from . import _verify
+
+    if (
+        not candidates
+        or p.target.implementation != "cpython"
+        or any(d.code == "python-range" for d in p.diagnostics)
+    ):
+        return p.pythons
+    try:
+        eff_platform = p.target.python_platform or host_platform(p.target)
+        lock = p.pylock.read_text(encoding="utf-8")
+        parsed = tomllib.loads(lock)
+    except (OSError, ValueError, UsageError):
+        return p.pythons
+    dists = _verify.installed_distributions(p.site)
+    eff_req = p.source.requires_python or ""
+    # Never wider than the lock: outside its requires-python it may lack packages (twelfth review).
+    lock_req = _verify.lock_requires_python(lock)
+    specs: list[SpecifierSet] = []
+    for raw_spec in (eff_req, lock_req):
+        if raw_spec:
+            try:
+                specs.append(SpecifierSet(raw_spec))
+            except InvalidSpecifier:
+                continue
+    has_wheels = {
+        canonicalize_name(str(pkg.get("name", "")))
+        for pkg in parsed.get("packages", [])
+        if isinstance(pkg, dict) and pkg.get("name") and pkg.get("wheels")
+    }
+    own_tags: list[str] = []
+    if p.source.packaged:
+        own_name = canonicalize_name(p.source.name)
+        for d in dists:
+            if d.name == own_name:
+                own_tags = _platforms.wheel_tags(p.site / d.dist_info)
+                break
+        if not own_tags or not _platforms.is_native(own_tags):
+            has_wheels.add(own_name)
+    covered = [v for v in candidates if p.pythons.contains(v)]
+    for major, minor in candidates:
+        if (major, minor) in covered:
+            continue
+        if (
+            own_tags
+            and _platforms.is_native(own_tags)
+            and not _platforms.wheel_allows_python(
+                own_tags,
+                (major, minor),
+                abiflags=p.target.abiflags or "",
+                platform=p.target.python_platform,
+            )
+        ):
+            continue
+        if not all(
+            any(spec.contains(f"{major}.{minor}.{patch}", prereleases=True) for patch in (0, 99))
+            for spec in specs
+        ):
+            continue
+        full = f"{major}.{minor}.0"
+        env = {
+            **p.target.markers,
+            "python_version": f"{major}.{minor}",
+            "python_full_version": full,
+            "implementation_version": full,
+        }
+        env_locked = _verify.locked_packages(lock, env)
+        if not env_locked or not ({pkg.name for pkg in env_locked} <= has_wheels):
+            continue
+        if _coverage.gaps(lock, eff_platform, (major, minor), abiflags=p.target.abiflags or ""):
+            continue
+        covered.append((major, minor))
+    if not covered:
+        return p.pythons
+    covered.sort()
+    here = p.target.version
+    if here not in covered:
+        return p.pythons
+    idx = covered.index(here)
+    lo = idx
+    while lo > 0 and covered[lo - 1][1] == covered[lo][1] - 1:
+        lo -= 1
+    hi = idx
+    while hi + 1 < len(covered) and covered[hi + 1][1] == covered[hi][1] + 1:
+        hi += 1
+    min_v = min(p.pythons.min, covered[lo])
+    max_v = None if p.pythons.max is None else max(p.pythons.max, covered[hi])
+    return PythonRange(min_v, max_v)
 
 
 def _matrix(pylock: Path, source: Source) -> list[_coverage.MatrixCell]:

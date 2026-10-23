@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import re
 import sys
 import zipfile
 from collections.abc import Callable, Iterable, Sequence
@@ -60,16 +61,8 @@ def resolve_entry(
     `--entry python` runs whatever script it's given, with the bundle's packages."""
     if entry == "python":
         return Entry("python", "")
-    if source.app:  # a folder of modules (ADR-0041): its main file, or what --entry names
-        if entry is None:
-            entry = next((m for m in APP_MAINS if _exact_file(site, m) is not None), None)
-            if entry is None:
-                raise EntryPointError(
-                    f"{source.name} has no {', '.join(APP_MAINS)}, so bundleup doesn't know "
-                    "what to run",
-                    hint="pass --entry main.py, --entry module:function, or --entry python",
-                )
-        if entry.endswith(".py"):
+    if (source.app or not source.packaged) and not source.is_script:
+        if entry is not None and entry.endswith(".py"):
             norm = Path(entry.replace("\\", "/")).as_posix().removeprefix("./")
             exact = _exact_file(site, *norm.split("/"))
             if (
@@ -79,6 +72,16 @@ def resolve_entry(
             ):
                 raise EntryPointError(f"--entry {entry}: there's no such file in {source.name}")
             return Entry("script", exact.relative_to(site).as_posix())
+        if entry is None and not source.scripts:
+            main_py = next((m for m in APP_MAINS if _exact_file(site, m) is not None), None)
+            if main_py is not None:
+                return Entry("script", main_py)
+            if source.app:
+                raise EntryPointError(
+                    f"{source.name} has no {', '.join(APP_MAINS)}, so bundleup doesn't know "
+                    "what to run",
+                    hint="pass --entry main.py, --entry module:function, or --entry python",
+                )
     if script:
         if entry:
             raise UsageError(
@@ -86,7 +89,7 @@ def resolve_entry(
                 hint="drop --entry",
             )
         return Entry("script", script)
-    scripts = console_scripts(site, source.name)
+    scripts = {**source.scripts, **console_scripts(site, source.name)}
     by_canon = {canonicalize_name(k): v for k, v in scripts.items()}
     roots = _imports.search_roots(site)
     if entry is None:
@@ -98,10 +101,29 @@ def resolve_entry(
             pkg = canonicalize_name(source.name).replace("-", "_")
             if _locate_module(roots, pkg, target_version, external).has_main:
                 return Entry("module", pkg)
+            skill_scripts = (
+                sorted((source.path / "scripts").glob("*.py"))
+                if not source.is_script and (source.path / "scripts").is_dir()
+                else []
+            )
+            if not source.packaged and skill_scripts:
+                hint = (
+                    "pass --entry python to run any script with these packages, "
+                    f"or --entry scripts/{skill_scripts[0].name}"
+                )
+            elif not source.packaged:
+                hint = (
+                    "pass --entry python to run any script with these packages, "
+                    "--entry main.py, or add [project.scripts] to pyproject.toml"
+                )
+            else:
+                hint = (
+                    "add one to pyproject.toml, pass --entry module:function, or --entry "
+                    "python to run any script with these packages"
+                )
             raise EntryPointError(
                 f"{source.name} defines no [project.scripts], so bundleup doesn't know what to run",
-                hint="add one to pyproject.toml, pass --entry module:function, or --entry "
-                "python to run any script with these packages",
+                hint=hint,
             )
         else:
             raise EntryPointError(
@@ -620,6 +642,12 @@ COMPILE_ENV = compile_env()
 
 def precompile(target: Target, site: Path, *, progress: Progress, checked: bool = False) -> None:
     """Compile everything with the target's interpreter, reusing cached bytecode (_bytecode)."""
+    if (
+        target.implementation == "cpython"
+        and target.executable == sys.executable
+        and (sys.version_info.major, sys.version_info.minor) != target.version
+    ):
+        return  # fallback host interpreter differs from target minor version
 
     def compile_with(cmd: list[str]) -> None:
         run(
@@ -871,16 +899,38 @@ def portability(pylock: Path, *, target: Target, pythons: PythonRange, native: b
 def python_range(
     site: Path, *, pylock: Path, target: Target, source: Source, native: bool
 ) -> PythonRange:
-    """The minor versions this payload runs on: the target's only, if anything is compiled;
-    otherwise every neighbouring version for which the lock selects the same packages and the
+    """The minor versions this payload runs on: the target's only, if any compiled extension is
+    tied to one CPython minor version; otherwise every neighbouring version for which the lock
+    selects the same packages, every wheel tag is compatible (`py3-none-*` or `abi3`), and the
     project and every package allow that Python."""
     here = target.version
+    dists = _verify.installed_distributions(site)
+    dist_tags: list[list[str]] = []
+    ext_minors: set[int] = set()
     if native:
-        return PythonRange(here, here)
+        if target.implementation != "cpython":
+            return PythonRange(here, here)
+        ext_minors = {
+            int(m[1])
+            for rel, _path in _bytecode.walk_files(site)
+            if not rel.endswith(".pyc")
+            for m in [re.search(r"\.(?:cpython-3|cp3)(\d+)", rel)]
+            if m is not None
+        }
+        dist_tags = [_platforms.wheel_tags(site / d.dist_info) for d in dists]
+        if (
+            not dist_tags
+            or any(not t for t in dist_tags)
+            or not any(_platforms.is_native(t) for t in dist_tags)
+        ):
+            return PythonRange(here, here)
     lock = pylock.read_text(encoding="utf-8")
     selected = set(_verify.locked_packages(lock, target.markers))
-    texts = [source.requires_python or ""]
-    texts += [d.requires_python for d in _verify.installed_distributions(site)]
+    # The lock's own requires-python too: a script without one is locked for the Python uv picked
+    # (`>=3.13`), so a `tomli; python_version < '3.11'` dependency isn't in it at all, and claiming
+    # 3.10 from the packages' metadata alone crashed there (twelfth review).
+    texts = [source.requires_python or "", _verify.lock_requires_python(lock)]
+    texts += [d.requires_python for d in dists]
     specs = []
     for text in texts:
         try:
@@ -890,9 +940,21 @@ def python_range(
 
     def same(minor: int) -> bool:
         full = f"3.{minor}.0"
+        if ext_minors and minor not in ext_minors:
+            return False
         if not all(
             any(spec.contains(f"3.{minor}.{p}", prereleases=True) for p in (0, 99))
             for spec in specs
+        ):
+            return False
+        if dist_tags and not all(
+            _platforms.wheel_allows_python(
+                t,
+                (3, minor),
+                abiflags=target.abiflags or "",
+                platform=target.python_platform,
+            )
+            for t in dist_tags
         ):
             return False
         environment = {
@@ -933,3 +995,4 @@ class Prepared:
     external: tuple[
         str, ...
     ] = ()  # packages the host provides, excluded from the bundle (ADR-0051)
+    merge_conflict: bool = False  # untagged native extensions conflicted across Python versions

@@ -214,7 +214,14 @@ def apply(options: BuildOptions, *, for_check: bool = False) -> tuple[BuildOptio
                     f"for example: {key} = {_list_example(key)}",
                     key=key,
                 )
-            flat = [x.strip() for v in value for x in v.split(",") if x.strip()]
+            from ._build import _split_items
+
+            flat = _split_items(
+                value,
+                check_path=(key == "python"),
+                expand_platforms=(key == "python-platform"),
+                dedup=True,
+            )
             if not flat:
                 raise _invalid(
                     where,
@@ -275,7 +282,14 @@ def apply(options: BuildOptions, *, for_check: bool = False) -> tuple[BuildOptio
                 key=key,
             )
         if key in LISTS and isinstance(value, str):
-            parts = [x.strip() for x in value.split(",") if x.strip()]
+            from ._build import _split_items
+
+            parts = _split_items(
+                [value],
+                check_path=(key == "python"),
+                expand_platforms=(key == "python-platform"),
+                dedup=True,
+            )
             if not parts:
                 raise _invalid(
                     where,

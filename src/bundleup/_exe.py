@@ -478,7 +478,7 @@ def precompiled(archive: Path, target: Target, stage: Path) -> Path:
         ) from None
     # One process, so the same bytes every time: marshal's output depends on what the process
     # compiled before (shared objects), which parallel workers split differently on each run.
-    compile_all = [target.executable, "-s", "-S", "-m", "compileall", "-q"]
+    compile_all = [target.executable, "-s", "-S", "-X", "pycache_prefix=", "-m", "compileall", "-q"]
     # The recorded source path without this build's temporary folder (Python replaces it with
     # the real one on import): the same bytes from any build.
     compile_all += ["--invalidation-mode", "unchecked-hash", "-s", str(tree), str(tree)]

@@ -228,8 +228,24 @@ def precompile(
         listing = site.parent / "compile-list.txt"
         listing.write_text("\n".join(todo), encoding="utf-8")
         workers = 0 if len(todo) >= PARALLEL_FROM else 1
-        # -s -S instead of -I: -I implies -E, which ignores PYTHONHASHSEED=0 in COMPILE_ENV.
-        run([python, "-s", "-S", "-c", COMPILE_FILES, str(site), str(listing), str(workers), mode])
+        # -s -S instead of -I: -I implies -E, which ignores PYTHONHASHSEED=0 in COMPILE_ENV. And no
+        # pycache prefix: macOS's /usr/bin/python3 sets one, and the bytecode went there instead
+        # of into the payload (twelfth review: 0 .pyc files bundled).
+        no_prefix = ["-X", "pycache_prefix="]
+        run(
+            [
+                python,
+                "-s",
+                "-S",
+                *no_prefix,
+                "-c",
+                COMPILE_FILES,
+                str(site),
+                str(listing),
+                str(workers),
+                mode,
+            ]
+        )
     for dist in fresh:
         _store(dist, cache, site, cache_tag)
     return len(todo), sum(1 for d in restored if d.name != "__extra__")
