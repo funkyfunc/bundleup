@@ -3372,12 +3372,13 @@ def test_multi_python_abi3_py3_none_wheel_ranges_and_python_specifiers(
     bare_dir = tmp_path / "bare_skill"
     (bare_dir / "scripts").mkdir(parents=True)
     (bare_dir / "pyproject.toml").write_text(
-        '[project]\nname = "bare-skill"\nversion = "0.1.0"\nrequires-python = ">=3.13"\n'
+        '[project]\nname = "bare-skill"\nversion = "0.1.0"\nrequires-python = ">=3.9"\n'
         "dependencies = []\n"
     )
     (bare_dir / "scripts" / "tool.py").write_text("import json\nprint(json.dumps('ok'))\n")
     bare_src = _source.load_source(bare_dir)
-    assert not bare_src.packaged and bare_src.requires_python == ">=3.13"
+    # Used as written (twelfth review); any Python will do here, so CI's single one builds it
+    assert not bare_src.packaged and bare_src.requires_python == ">=3.9"
     with pytest.raises(_payload.EntryPointError) as exc_info:
         build(BuildOptions(path=bare_dir))
     assert (
