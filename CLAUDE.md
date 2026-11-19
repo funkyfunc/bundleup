@@ -90,7 +90,7 @@ and git.
   fastest configuration, builds 1.1-2.4× faster; warm start equals a venv; first runs 2.3-15×
   faster. Unchanged `.pyc` files in the persistent bytecode cache are skipped without spawning
   Python (`_bytecode.py` v3).
-- **Released:** `bundleup 0.2.1` is the latest on PyPI (`https://pypi.org/project/bundleup/`)
+- **Released:** `bundleup 0.3.0` is the latest on PyPI (`https://pypi.org/project/bundleup/`)
   and GitHub Releases ([docs/releasing.md](docs/releasing.md)); CHANGELOG.md "Unreleased" lists
   what's on `main` since.
 - **ADR status:** all accepted (0045-0049 on the owner's request; the owner accepted 0023-0026, 0033-0038 and 0040 on

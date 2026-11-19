@@ -3,7 +3,7 @@
 Versions follow uv's scheme until 1.0: a minor version may break things
 ([style guide](docs/cli-style-guide.md) rule 37).
 
-## Unreleased
+## 0.3.0 (2026-11-18)
 
 - Interpreter-free Python targets, multi-entry dispatch, network diagnostics, and provenance (ADR-0053):
   - `.pyz` and `.py` builds with explicit `--python` targets (`--python 3.10`, `--python 3.10-3.14`)
