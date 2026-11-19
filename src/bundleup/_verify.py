@@ -31,12 +31,13 @@ from collections.abc import Callable, Collection, Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import IO, Any
+from urllib.parse import urlsplit
 
 from packaging.markers import InvalidMarker, Marker, UndefinedEnvironmentName
 from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
-from . import _loader
+from . import _loader, _network
 from . import _toml as tomllib
 from ._errors import NotABundleError
 
@@ -57,6 +58,7 @@ class LockedPackage:
 
     name: str  # canonical, e.g. "charset-normalizer"
     version: str | None
+    origin: str | None = field(default=None, compare=False)  # redacted registry or VCS URL
 
 
 @dataclass(frozen=True)
@@ -82,10 +84,36 @@ def _parse_marker(raw: object) -> Marker | None:
         return None
 
 
+def _package_origin(package: dict[str, Any]) -> str | None:
+    """Deterministic, credential-redacted registry or VCS origin from a PEP 751 `[[packages]]`
+    table. Local filesystem paths (`directory`, `path`) return None so builds stay identical
+    across machines and working directories."""
+    index = package.get("index")
+    if isinstance(index, str) and index.startswith(("https://", "http://")):
+        return _network.redact_url(index).rstrip("/")
+    vcs = package.get("vcs")
+    if isinstance(vcs, dict) and isinstance(vcs.get("url"), str):
+        raw_vcs = vcs["url"]
+        if raw_vcs.startswith(("https://", "http://", "ssh://", "git@")):
+            return _network.redact_url(raw_vcs)
+    for key in ("wheels", "sdist", "archive"):
+        val = package.get(key)
+        candidates = val if isinstance(val, list) else ([val] if isinstance(val, dict) else [])
+        for item in candidates:
+            if isinstance(item, dict) and isinstance(item.get("url"), str):
+                raw_url = item["url"]
+                if raw_url.startswith(("https://", "http://")):
+                    red = _network.redact_url(raw_url)
+                    parts = urlsplit(red)
+                    if parts.scheme and parts.netloc:
+                        return f"{parts.scheme}://{parts.netloc}"
+    return None
+
+
 @functools.lru_cache(maxsize=8)
-def _lock_packages(pylock: str) -> tuple[tuple[str, str | None, Marker | None], ...]:
-    """(name, version, marker) of every package in a pylock.toml, parsed once per text: the range
-    and portability checks evaluate one lock for dozens of environments."""
+def _lock_packages(pylock: str) -> tuple[tuple[str, str | None, Marker | None, str | None], ...]:
+    """(name, version, marker, origin) of every package in a pylock.toml, parsed once per text:
+    the range and portability checks evaluate one lock for dozens of environments."""
     raw = tomllib.loads(pylock).get("packages", [])
     if not isinstance(raw, list):
         return ()
@@ -94,6 +122,7 @@ def _lock_packages(pylock: str) -> tuple[tuple[str, str | None, Marker | None], 
             canonicalize_name(package["name"]),
             package.get("version"),
             _parse_marker(package.get("marker")),
+            _package_origin(package),
         )
         for package in raw
         if isinstance(package, dict) and isinstance(package.get("name"), str)
@@ -116,7 +145,7 @@ def locked_packages(pylock: str, environment: dict[str, str]) -> list[LockedPack
         **environment,
     }
     by_name: dict[str, LockedPackage] = {}
-    for name, version, marker in _lock_packages(pylock):
+    for name, version, marker, origin in _lock_packages(pylock):
         if marker:
             try:
                 if not marker.evaluate(env):
@@ -124,8 +153,40 @@ def locked_packages(pylock: str, environment: dict[str, str]) -> list[LockedPack
             except UndefinedEnvironmentName:
                 continue
         if name not in by_name or (by_name[name].version is None and version is not None):
-            by_name[name] = LockedPackage(name, version)
+            by_name[name] = LockedPackage(name, version, origin)
     return list(by_name.values())
+
+
+def installed_licenses(site: Path) -> dict[str, str]:
+    """Each installed distribution's short license expression or identifier, from its METADATA."""
+    found: dict[str, str] = {}
+    for metadata in sorted(site.glob("*.dist-info/METADATA")):
+        text = metadata.read_text(encoding="utf-8", errors="replace")
+        fields = _metadata_fields(text)
+        name = canonicalize_name(fields.get("Name", ""))
+        if not name:
+            continue
+        expr = fields.get("License-Expression", "").strip()
+        if expr and "\n" not in expr and len(expr) <= 120:
+            found[name] = expr
+            continue
+        lic = fields.get("License", "").strip()
+        if lic and lic.upper() != "UNKNOWN" and "\n" not in lic and len(lic) <= 80:
+            found[name] = lic
+            continue
+        classifiers: list[str] = []
+        for line in text.splitlines():
+            if not line.strip():
+                break
+            if line.lower().startswith("classifier:"):
+                val = line.split(":", 1)[1].strip()
+                if val.startswith("License :: OSI Approved :: "):
+                    short = val.removeprefix("License :: OSI Approved :: ").strip()
+                    if short and short not in classifiers:
+                        classifiers.append(short)
+        if classifiers:
+            found[name] = " OR ".join(classifiers)
+    return found
 
 
 def installed_distributions(site: Path) -> list[InstalledDistribution]:

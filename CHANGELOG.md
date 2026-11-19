@@ -5,6 +5,33 @@ Versions follow uv's scheme until 1.0: a minor version may break things
 
 ## Unreleased
 
+- Interpreter-free Python targets, multi-entry dispatch, network diagnostics, and provenance (ADR-0053):
+  - `.pyz` and `.py` builds with explicit `--python` targets (`--python 3.10`, `--python 3.10-3.14`)
+    assemble compatible wheels using the builder's host CPython when the target interpreter isn't
+    installed locally, checking syntax and stdlib imports in-process and compiling `.pyc` on first
+    run (including under `PYTHONDONTWRITEBYTECODE=1`). Automatic Python interpreter downloads are now
+    explicitly opt-in via `BUNDLEUP_PYTHON_DOWNLOADS=1` (`UV_PYTHON_DOWNLOADS=automatic`).
+  - Private registry 401/403, TLS certificate, and `pip.conf` mismatch diagnostics: redacts embedded
+    URL credentials/tokens, identifies wheel HTTP 403s by package, version, wheel tag, and host
+    (advising an explicit constraint + `uv lock` rather than public-index fallback), points TLS
+    proxy errors at `UV_NATIVE_TLS=1` / `SSL_CERT_FILE`, surfaces `pip.conf` indices that `uv`
+    ignores (`UV_DEFAULT_INDEX`), and explains blocked GitHub launcher/runtime 403s
+    (`UV_PYTHON_INSTALL_MIRROR`, `BUNDLEUP_JUMP_MIRROR`, or `.pyz`).
+  - Build and `check` notes explain when locked dependencies (`Requires-Python` or missing wheels)
+    narrow the bundle's Python range above the project's `requires-python`.
+  - `undeclared-import` distinguishes excluded `[project.optional-dependencies]` extras and lazy
+    function/branch imports from broken top-level imports, and notes external `playwright install`
+    browser-binary prerequisites both when `playwright` is excluded and when bundled.
+  - Multi-entry dispatch: `.pyz` and `.py` bundles preserve validated `[project.scripts]` commands;
+    projects with multiple `[project.scripts]` default to multi-command dispatch (`<cmd> ARGS...`
+    and `run <script.py> ARGS...`), `--entry python` also dispatches named `[project.scripts]` and
+    `run <script.py>`, and fixed-entry bundles accept cross-OS `--bundleup-python` and
+    `--bundleup-entry <cmd>` flags.
+  - Provenance, size breakdowns, `--split` deliverables, and rebuild diffs: `manifest.json` records
+    each package's `license` and credential-redacted remote `origin`; `BuildResult` (`--json` and
+    `build -v`) reports `unpacked_bytes`, `shared_bytes`, per-payload `exclusive_bytes` and
+    `unpacked_bytes`, split `deliverables` (with `tar` + `bundleup verify` commands in `-v`), and
+    `changes` (size delta, added/removed/updated packages, native libraries, targets) on rebuilds.
 - Native bundles run on a range of Python versions by default (ADR-0052): each version's compiled
   extensions are merged into one payload (`.pyz` and `.py` outputs only), and where the lock picks
   other packages for older Pythons, those get a payload of their own, checked against the

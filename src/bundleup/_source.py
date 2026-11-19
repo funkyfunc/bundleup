@@ -16,7 +16,14 @@ from . import _toml as tomllib
 from . import _verify
 from ._errors import ProjectError
 from ._formats import LOADED, Format
-from ._imports import code_frame, external_modules, imports_of, stdlib_ever, top_level_modules
+from ._imports import (
+    code_frame,
+    external_modules,
+    imports_of,
+    module_names_for_package,
+    stdlib_ever,
+    top_level_modules,
+)
 
 PEP723 = re.compile(r"(?m)^# /// (?P<type>[a-zA-Z0-9-]+)$\s(?P<content>(^#(| .*)$\s)*)^# ///$")
 
@@ -40,6 +47,8 @@ class Source:
         True  # False when [tool.uv] package = false or [tool.poetry] package-mode = false
     )
     scripts: dict[str, str] = field(default_factory=dict)
+    # Import module name -> (extra_name, declared_pkg_name) from [project.optional-dependencies].
+    optional_imports: dict[str, tuple[str, str]] = field(default_factory=dict)
 
     @property
     def workdir(self) -> Path:
@@ -257,6 +266,28 @@ def _is_packaged(
     )
 
 
+def _parse_optional_imports(project: dict[str, Any]) -> dict[str, tuple[str, str]]:
+    """Map top-level import module names to `(extra_name, package_name)` for optional extras in
+    `[project.optional-dependencies]`."""
+    raw = project.get("optional-dependencies")
+    if not isinstance(raw, dict):
+        return {}
+    found: dict[str, tuple[str, str]] = {}
+    for extra, items in sorted(raw.items()):
+        if not isinstance(extra, str) or not isinstance(items, list):
+            continue
+        for item in items:
+            if not isinstance(item, str):
+                continue
+            pkg = re.split(r"[<>=!~;\[\s]", item, maxsplit=1)[0].strip()
+            if not pkg:
+                continue
+            canon_pkg = canonicalize_name(pkg)
+            for mod in module_names_for_package(pkg):
+                found.setdefault(mod, (extra, canon_pkg))
+    return found
+
+
 def _load_project(path: Path, pyproject: Path) -> Source:
     try:
         data = tomllib.loads(pyproject.read_text(encoding="utf-8-sig"))
@@ -330,6 +361,7 @@ def _load_project(path: Path, pyproject: Path) -> Source:
         version=version,
         packaged=packaged,
         scripts=scripts,
+        optional_imports=_parse_optional_imports(project),
     )
 
 

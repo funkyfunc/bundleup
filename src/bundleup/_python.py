@@ -13,7 +13,7 @@ from pathlib import Path
 
 from packaging.specifiers import InvalidSpecifier, SpecifierSet
 
-from . import _platforms
+from . import _imports, _network, _platforms
 from . import _toml as tomllib
 from ._errors import (
     ProjectError,
@@ -80,6 +80,9 @@ class Target:
     cache_tag: str  # names .pyc files, e.g. "cpython-312" (from the compiling interpreter)
     markers: dict[str, str]  # the PEP 508 environment uv.lock's markers are evaluated against
     python_platform: _platforms.Platform | None = None  # set when building for another platform
+    # False when assembled using a host CPython of another minor version (ADR-0053): wheels and
+    # AST/stdlib are checked for `version`, and payload bytecode compiles on first run.
+    has_interpreter: bool = True
 
     def describe(
         self,
@@ -117,6 +120,63 @@ class Target:
         }
 
 
+_OPT_IN_VALUES = frozenset({"1", "true", "yes", "automatic", "auto"})
+
+
+def downloads_enabled() -> bool:
+    """Interpreter downloads are explicitly opt-in (ADR-0053): `.pyz`/`.py` builds assemble wheels
+    without extra interpreters, and restricted networks often block external binary downloads."""
+    for var in ("BUNDLEUP_PYTHON_DOWNLOADS", "UV_PYTHON_DOWNLOADS"):
+        val = os.environ.get(var, "").strip().lower()
+        if val in ("0", "false", "no", "never", "manual"):
+            return False
+        if val in _OPT_IN_VALUES:
+            return True
+    return False
+
+
+def find_private_interpreter(uv: str, version: str, *, cwd: Path, progress: Progress) -> str | None:
+    """An interpreter of `version` that an earlier build cached under `private_pythons()`, without
+    touching the network."""
+    pythons_dir = private_pythons()
+    if not pythons_dir.is_dir():
+        return None
+    env = {**_clean_venv_env(), "UV_PYTHON_INSTALL_DIR": str(pythons_dir)}
+    find = [uv, "python", "find", "--no-project", version, "--managed-python"]
+    try:
+        return _real(run(find, cwd=cwd, what="uv python find", progress=progress, env=env))
+    except UvError:
+        return None
+
+
+def _find_host_cpython(uv: str, source: Source, *, progress: Progress) -> str | None:
+    """Any locally installed CPython interpreter (>=3.9) on this machine, without downloading."""
+    import sys
+
+    outside = Path(tempfile.gettempdir())
+    for req in ("cpython", None):
+        cmd = [uv, "python", "find", "--no-project", "--no-python-downloads"]
+        if req:
+            cmd.append(req)
+        try:
+            exe = _real(
+                run(
+                    cmd,
+                    cwd=outside,
+                    what="finding a host Python",
+                    progress=progress,
+                    env=_clean_venv_env(),
+                )
+            )
+            if exe:
+                return exe
+        except UvError:
+            continue
+    if sys.implementation.name == "cpython" and sys.version_info >= (3, 9):
+        return _real(sys.executable) or sys.executable
+    return None
+
+
 def find_python(
     uv: str,
     source: Source,
@@ -124,10 +184,14 @@ def find_python(
     request: str | None,
     python_platform: str | None,
     progress: Progress,
+    allow_host_assembly: bool = False,
 ) -> Target:
     """The target: --python if given, else what uv would use for the project; on another platform
-    if `python_platform` is set (then this interpreter only compiles bytecode for the version)."""
+    if `python_platform` is set. When `allow_host_assembly` is True (`.pyz`/`.py` builds) and the
+    requested CPython minor version isn't installed locally, a host CPython assembles the wheels
+    and checks syntax/stdlib in-process while deferring `.pyc` compilation to first run."""
     platform = _platforms.parse(python_platform) if python_platform else None
+    synthesized: tuple[int, int, str] | None = None
     if request and Path(request).is_file():
         exe = request  # a path: no need to ask uv (which would run the interpreter to inspect it)
     else:
@@ -154,26 +218,50 @@ def find_python(
                     env=clean_env,
                 ).strip()
         except UvError as e:
-            # A version that isn't installed: fetch it into bundleup's own directory (ADR-0035),
-            # so `--python 3.11 --python 3.13` works without setting anything up (ADR-0038).
+            eff_req = request or _script_lock_python(source)
+            outside = Path(tempfile.gettempdir())  # uv answers a project's venv from inside it
             fetched = None
-            if request and re.fullmatch(r"\d+\.\d+(?:\.\d+(?:(?:a|b|rc)\d+)?)?", request):
-                outside = Path(tempfile.gettempdir())  # uv answers a project's venv from inside it
-                fetched = fetch_interpreter(uv, request, cwd=outside, progress=progress)
-            # Never another interpreter in its place: one that isn't that version compiles and
-            # checks the code for the wrong Python, and the bundle claims a version nothing ran
-            # (twelfth review).
-            if not fetched:
+            dl_errors: list[UvError] = []
+            ver_match = re.fullmatch(r"(\d+)\.(\d+)(?:\.(\d+)(?:(?:a|b|rc)\d+)?)?", eff_req or "")
+            too_old = bool(ver_match and (int(ver_match[1]), int(ver_match[2])) < (3, 9))
+            if ver_match and not too_old and eff_req:
+                fetched = find_private_interpreter(uv, eff_req, cwd=outside, progress=progress)
+                if not fetched and downloads_enabled():
+                    fetched = fetch_interpreter(
+                        uv, eff_req, cwd=outside, progress=progress, errors=dl_errors
+                    )
+            host_exe_found: str | None = None
+            if not fetched and allow_host_assembly and ver_match and not too_old and not dl_errors:
+                req_ver = (int(ver_match[1]), int(ver_match[2]))
+                if req_ver[0] == 3 and req_ver <= _imports.NEWEST:
+                    host_exe = _find_host_cpython(uv, source, progress=progress)
+                    if host_exe:
+                        patch = ver_match[3] or "0"
+                        synthesized = (req_ver[0], req_ver[1], f"{req_ver[0]}.{req_ver[1]}.{patch}")
+                        host_exe_found = host_exe
+            if fetched:
+                exe = fetched
+            elif host_exe_found is not None:
+                exe = host_exe_found
+            else:
+                if dl_errors and eff_req:
+                    msg, dl_hint = _network.diagnose_runtime_download(
+                        eff_req, dl_errors[-1].detail or str(dl_errors[-1]), kind="interpreter"
+                    )
+                    raise PythonNotFoundError(
+                        msg, hint=dl_hint, detail=_network.redact_text(dl_errors[-1].detail or "")
+                    ) from None
                 wanted = f"Python {request}" if request else "a Python for this project"
                 install = f"uv python install {request}" if request else "uv python install"
-                hint = f"install it with `{install}`"
-                old = re.fullmatch(r"(\d+)\.(\d+)(?:\.\d+)?", request or "")
-                if old and (int(old[1]), int(old[2])) < (3, 9):
+                hint = (
+                    f"install it with `{install}` (or set BUNDLEUP_PYTHON_DOWNLOADS=1 to "
+                    "download missing interpreters automatically)"
+                )
+                if too_old:
                     hint = "bundles run on Python 3.9 and newer: pass --python 3.9 or later"
                 raise PythonNotFoundError(
                     f"couldn't find {wanted}", hint=hint, detail=e.detail
                 ) from None
-            exe = fetched
     probe = [exe, "-I", "-S", "-c", PROBE]
     raw = run(probe, what=f"inspecting {exe}", progress=progress, error=ProjectError)
     try:
@@ -184,13 +272,26 @@ def find_python(
             f"{exe} isn't a working Python 3 interpreter",
             detail=raw[-500:] if raw else None,
         ) from e
+    has_interpreter = True
+    if synthesized is not None:
+        if info["markers"]["implementation_name"] != "cpython":
+            raise PythonNotFoundError(
+                f"couldn't find Python {synthesized[0]}.{synthesized[1]}",
+                hint=f"install CPython with `uv python install {synthesized[0]}.{synthesized[1]}`",
+            )
+        has_interpreter = (major, minor) == (synthesized[0], synthesized[1])
+        major, minor, synth_full = synthesized
+        cache_tag = info["cache_tag"] if has_interpreter else f"cpython-{major}{minor}"
+        full = info["markers"]["python_full_version"] if has_interpreter else synth_full
+    else:
+        cache_tag = info["cache_tag"]
+        full = info["markers"]["python_full_version"]
     if platform is not None:
         if info["markers"]["implementation_name"] != "cpython":
             raise UsageError(
                 "building for another platform needs a CPython interpreter of the target version",
                 hint=f"pass --python {major}.{minor}",
             )
-        full = info["markers"]["python_full_version"]
         return Target(
             executable=info["executable"] or exe,
             version=(major, minor),
@@ -201,22 +302,34 @@ def find_python(
             if platform.sys_platform == "win32"
             else (info.get("abiflags") or ""),  # no sys.abiflags on Windows
             implementation="cpython",
-            cache_tag=info["cache_tag"],
+            cache_tag=cache_tag,
             markers=platform.markers(python_full_version=full),
             python_platform=platform,
+            has_interpreter=has_interpreter,
         )
+    markers = (
+        info["markers"]
+        if has_interpreter
+        else {
+            **info["markers"],
+            "python_version": f"{major}.{minor}",
+            "python_full_version": full,
+            "implementation_version": full,
+        }
+    )
     return Target(
         # Use the real interpreter from here on: uv re-inspects shims like macOS's
         # /usr/bin/python3 on every call, but caches what it learns about a real interpreter.
         executable=info["executable"] or exe,
         version=(major, minor),
-        full_version=info["markers"]["python_full_version"],
+        full_version=full,
         platform=info["markers"]["sys_platform"],
         machine=info["markers"]["platform_machine"],
         abiflags=info["abiflags"],
         implementation=info["markers"]["implementation_name"],
-        cache_tag=info["cache_tag"],
-        markers=info["markers"],
+        cache_tag=cache_tag,
+        markers=markers,
+        has_interpreter=has_interpreter,
     )
 
 
@@ -419,10 +532,17 @@ def _install_lock(folder: Path) -> Iterator[None]:
             handle.close()
 
 
-def fetch_interpreter(uv: str, version: str, *, cwd: Path, progress: Progress) -> str | None:
+def fetch_interpreter(
+    uv: str,
+    version: str,
+    *,
+    cwd: Path,
+    progress: Progress,
+    errors: list[UvError] | None = None,
+) -> str | None:
     """An interpreter of `version`: an installed one, one bundleup installed before, or one
     installed now into bundleup's private directory. None if that's impossible (offline, or
-    UV_PYTHON_DOWNLOADS=never)."""
+    UV_PYTHON_DOWNLOADS=never); appends any `uv python install` failure to `errors`."""
     found = find_interpreter(uv, version, cwd=cwd, progress=progress)
     if found:
         return found
@@ -452,8 +572,11 @@ def fetch_interpreter(uv: str, version: str, *, cwd: Path, progress: Progress) -
             )
         )
         install = [uv, "python", "install", version, "--no-bin", "--no-registry"]
-        with contextlib.suppress(UvError):
+        try:
             run(install, cwd=cwd, what="uv python install", progress=progress, env=env)
+        except UvError as err:
+            if errors is not None:
+                errors.append(err)
         try:
             return _real(run(find, cwd=cwd, what="uv python find", progress=progress, env=env))
         except UvError:

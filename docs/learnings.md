@@ -6,6 +6,31 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-11-18** · build · Multi-Python `.pyz` targets, private index diagnostics, and multi-entry
+  bundles uncovered five packaging subtleties:
+  - Explicit `--python` targets (`--python 3.10-3.14`) should assemble compatible wheels on `.pyz`
+    and `.py` outputs using the builder's single host CPython rather than requiring every target
+    interpreter locally or auto-triggering `uv python install`; when bytecode isn't precompiled
+    (`not target.has_interpreter`), setting `TAG = ""` in `_loader` ensures first-run `.pyc`
+    compilation still caches at exit even under `PYTHONDONTWRITEBYTECODE=1`.
+  - `uv` ignores `pip.conf` / `PIP_INDEX_URL` / `PIP_CERT`, and private mirrors can advertise a
+    version in `/simple/` whose `.whl` returns HTTP 403 (access policy or missing upstream cache
+    permission); diagnosing the exact `<pkg> <ver> (<wheel>)` and redacted host—and pointing to
+    `UV_DEFAULT_INDEX`, `UV_NATIVE_TLS=1` / `SSL_CERT_FILE`, and constraining + re-locking rather
+    than falling back to public PyPI—turns opaque 403/TLS errors into actionable fixes.
+  - PEP 751 `pylock.toml` `[[packages]]` entries do not repeat wheel-level `Requires-Python`, so
+    `_check_merged_pythons()` in `bundleup check` must also intersect `Requires-Python` from
+    installed `.dist-info/METADATA` before claiming older Python versions are covered.
+  - Multi-tool skills need one bundle to serve both `[project.scripts]` subcommands (`python
+    deck.pyz edit a.pptx`) and arbitrary authoring scripts (`python deck.pyz run build_deck.py`),
+    plus cross-OS `--bundleup-python` / `--bundleup-entry` flags (unlike `VAR=val cmd`, which fails
+    in Windows `cmd.exe` / PowerShell).
+  - Reproducibility requires omitting local filesystem paths from `manifest.json` package `origin`
+    fields (recording only remote registry/VCS/archive URLs with credentials redacted) so builds of
+    identical trees to different paths stay byte-for-byte identical.
+
+  Evidence: [ADR-0053](adr/0053-interpreter-free-targets-multi-entry-and-diagnostics.md),
+  `tests/test_targets_and_diagnostics.py`.
 - **2026-10-22** · review · Using the released tool as a user would found main-path bugs that
   eleven code-reading reviews missed, and none of them showed in CI:
   - `uv python install` locks `$UV_PYTHON_INSTALL_DIR/.lock` itself, so a caller holding that file

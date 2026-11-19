@@ -26,6 +26,7 @@ import shutil
 import zipfile
 import zlib
 from collections.abc import Iterable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 
 from . import __version__, _bytecode, _loader, _verify, _zipwriter
@@ -111,6 +112,16 @@ def _compile_loader(target: Target, loader: Path, loader_pyc: Path, *, progress:
             tmp.unlink(missing_ok=True)
 
 
+def _package_entry(pkg: _verify.LockedPackage, licenses: dict[str, str]) -> dict[str, object]:
+    entry: dict[str, object] = {"name": pkg.name, "version": pkg.version}
+    lic = licenses.get(pkg.name)
+    if lic:
+        entry["license"] = lic
+    if pkg.origin:
+        entry["origin"] = pkg.origin
+    return entry
+
+
 def manifest(
     *,
     source: Source,
@@ -127,9 +138,11 @@ def manifest(
     loader: dict[str, str] | None,
     pythons: PythonRange,
     reach: Portability,
+    licenses: dict[str, str] | None = None,
 ) -> bytes:
     """What's inside the bundle, with hashes: read by `bundleup verify` and by reviewers
     (`unzip -p app.pyz manifest.json`). Sorted, so the same inputs give the same bytes."""
+    lic_map = licenses or {}
     document = {
         "manifest_version": 1,
         "bundleup_version": __version__,
@@ -142,9 +155,7 @@ def manifest(
         # The inner zip and the loader exist only in a .pyz; `files` covers every format.
         "payload": {"sha256": payload_sha256, "size": payload.stat().st_size} if payload else None,
         "loader": loader,  # __main__.py and __main__.pyc: they run first, so they're checked too
-        "packages": [
-            {"name": p.name, "version": p.version} for p in sorted(locked, key=lambda p: p.name)
-        ],
+        "packages": [_package_entry(p, lic_map) for p in sorted(locked, key=lambda p: p.name)],
         "files": files,
     }
     return json.dumps(document, indent=1, sort_keys=True).encode("utf-8") + b"\n"
@@ -263,6 +274,36 @@ def _replace_parts(folder: Path, payloads: dict[str, Path] | None) -> None:
 DIR_MANIFEST = "bundleup-manifest.json"  # in a `dir` output and at the top of a `zip` output
 
 
+@dataclass(frozen=True)
+class LayerSizes:
+    """Compressed layer contributions: bytes shared across platforms vs exclusive to each."""
+
+    shared_bytes: int = 0
+    exclusive_bytes: tuple[int, ...] = ()
+
+
+def _compute_layer_sizes(ps: list[Prepared], layers: list[Layer]) -> LayerSizes:
+    if len(ps) <= 1:
+        total = sum(layer.path.stat().st_size for layer in layers)
+        return LayerSizes(shared_bytes=0, exclusive_bytes=(total,) if ps else ())
+    plat_keys = [(p.target.platform, p.target.machine) for p in ps]
+    shared = 0
+    per_payload = [0] * len(ps)
+    for layer in layers:
+        lsize = layer.path.stat().st_size
+        owner_plats = {plat_keys[i] for i in layer.owners if 0 <= i < len(ps)}
+        if len(layer.owners) == 1:
+            per_payload[layer.owners[0]] += lsize
+        elif len(owner_plats) == 1:
+            # Shared only among Python forks on the same OS/CPU: attribute to the primary payload
+            # on that OS so per-platform contributions stay accurate.
+            primary = min(layer.owners)
+            per_payload[primary] += lsize
+        else:
+            shared += lsize
+    return LayerSizes(shared_bytes=shared, exclusive_bytes=tuple(per_payload))
+
+
 def _loader_settings(p: Prepared, *, members: list[str], dirname: str) -> dict[str, object]:
     """What the loader needs to know about one payload (its config, or one PAYLOADS entry)."""
     target, native = p.target, p.native
@@ -277,7 +318,7 @@ def _loader_settings(p: Prepared, *, members: list[str], dirname: str) -> dict[s
         "abiflags": target.abiflags if native else None,
         "target": target.describe(native, p.pythons, p.reach),
         "pth": pth_files(p.site),
-        "tag": target.cache_tag,
+        "tag": target.cache_tag if target.has_interpreter else "",
         "entry": tuple(p.entry) if p.entry else None,
         "libc": needs.libc if native else None,
         "macos": needs.macos if native else None,
@@ -297,7 +338,7 @@ def write_pyz(
     fmt: Format = "pyz",
     warn_large: bool = True,
     diagnostics: list[Diagnostic] | None = None,
-) -> list[Diagnostic]:
+) -> tuple[list[Diagnostic], LayerSizes]:
     """The default: shebang + outer zip with the loader, the manifest and the payload, or one
     payload per platform and Python version when there are several (ADR-0038). Refuses, before
     writing, a bundle over `max_size` bytes (ADR-0039). With `split`, a bundle that wouldn't fit
@@ -363,6 +404,7 @@ def write_pyz(
         "TARGET": main["target"],
         "TAG": main["tag"],
         "ENTRY": tuple(first.entry),  # a plain tuple: the loader reads its repr
+        "SCRIPTS": first.scripts,
         "PTH": main["pth"],
         "LIBC": main["libc"],
         "MACOS": main["macos"],
@@ -387,6 +429,7 @@ def write_pyz(
             "__main__.py": _verify.record_hash(loader.read_bytes()),
             "__main__.pyc": _verify.record_hash(loader_pyc.read_bytes()),
         }
+    layer_sizes = _compute_layer_sizes(ps, layers)
     if len(ps) == 1 and len(layers) == 1 and not parts:
         p, (layer,) = first, layers
         manifest_json = manifest(
@@ -404,9 +447,12 @@ def write_pyz(
             loader=hashes,
             pythons=p.pythons,
             reach=p.reach,
+            licenses=_verify.installed_licenses(p.site),
         )
     else:
-        manifest_json = _multi_manifest(ps, layers, settings, locked, hashes, parts, fmt)
+        manifest_json = _multi_manifest(
+            ps, layers, settings, locked, hashes, parts, fmt, bundle_name=output.name
+        )
     payloads = {layer.member: layer.path for layer in layers}
     all_diags = [*(diagnostics or []), *diags]
     if fmt == "py":
@@ -420,7 +466,7 @@ def write_pyz(
             strict=strict,
             diagnostics=all_diags,
         )
-        return diags
+        return diags, layer_sizes
     write_bundle(
         output,
         payloads=payloads,
@@ -432,7 +478,7 @@ def write_pyz(
         split=split,
         diagnostics=all_diags,
     )
-    return diags
+    return diags, layer_sizes
 
 
 PY_CODE = "code"  # a .py bundle's manifest: the hash of everything before its data
@@ -544,24 +590,26 @@ def _multi_manifest(
     loader: dict[str, str],
     parts: str | None = None,
     fmt: Format = "pyz",
+    *,
+    bundle_name: str = "",
 ) -> bytes:
     """The manifest of a bundle for several platforms: the shared fields once, each layer with
     its hash and files, then each payload with its layers, target and packages (ADR-0038)."""
     first = ps[0]
     payloads = []
     for p, entry, packages in zip(ps, settings, locked):
+        lic_map = _verify.installed_licenses(p.site)
         payloads.append(
             {
                 "members": entry["members"],
                 "cache_dir": entry["dirname"],
                 "target": p.target.to_json_dict(native=p.native, pythons=p.pythons, reach=p.reach),
                 "packages": [
-                    {"name": x.name, "version": x.version}
-                    for x in sorted(packages, key=lambda x: x.name)
+                    _package_entry(x, lic_map) for x in sorted(packages, key=lambda x: x.name)
                 ],
             }
         )
-    document = {
+    document: dict[str, object] = {
         "manifest_version": 2,  # layers and payloads (ADR-0038); 1 is one payload
         "bundleup_version": __version__,
         "name": first.source.name,
@@ -580,6 +628,11 @@ def _multi_manifest(
         },
         "payloads": payloads,
     }
+    if parts and bundle_name:
+        document["deliverables"] = [
+            bundle_name,
+            *(f"{parts}/{m}" for m in sorted(layer.member for layer in layers)),
+        ]
     return json.dumps(document, indent=1, sort_keys=True).encode("utf-8") + b"\n"
 
 
@@ -602,6 +655,7 @@ def _plain_manifest(p: Prepared, fmt: Format, written: dict[str, str]) -> bytes:
         loader=None,
         pythons=p.pythons,
         reach=p.reach,
+        licenses=_verify.installed_licenses(p.site),
     )
 
 
@@ -711,3 +765,172 @@ def check_size(size: int, max_size: int | None, diagnostics: list[Diagnostic]) -
         f"found {findings(errors, len(diagnostics) - errors)}, so nothing was written",
         diagnostics=diagnostics,
     )
+
+
+_NATIVE_EXT = re.compile(r"\.(?:so|pyd|dylib|dll)(?:\.|$)", re.IGNORECASE)
+
+
+@dataclass(frozen=True)
+class PreviousBundle:
+    """Snapshot of an existing bundle before a rebuild replaces it."""
+
+    size_bytes: int
+    packages: dict[str, str | None]
+    targets: tuple[str, ...]
+    native_files: dict[str, str]
+
+
+def _target_label(t: dict[str, object]) -> str:
+    from ._python import PLATFORM_NAMES
+
+    r = t.get("python_range")
+    py = str(t.get("python", ""))
+    if isinstance(r, dict):
+        lo, hi = str(r.get("min", py)), r.get("max")
+        py = f"{lo}+" if hi is None else (lo if hi == lo else f"{lo}-{hi}")
+    if t.get("any_os"):
+        return f"Python {py} on any OS"
+    where = PLATFORM_NAMES.get(str(t.get("platform", "")), str(t.get("platform", "")))
+    mach = t.get("machine")
+    return f"Python {py} on {where}" + (f" {mach}" if mach else "")
+
+
+def inspect_previous_bundle(output: Path) -> PreviousBundle | None:
+    """Read an existing bundle's manifest and byte size before overwriting it; None if absent."""
+    try:
+        if output.is_dir():
+            mpath = output / DIR_MANIFEST
+            if not mpath.is_file():
+                return None
+            doc = json.loads(mpath.read_text(encoding="utf-8"))
+            size = sum(
+                os.lstat(path).st_size
+                for rel, path in _bytecode.walk_files(output)
+                if rel != DIR_MANIFEST
+            )
+        elif output.is_file():
+            size = output.stat().st_size
+            zf, _code = _verify._open(output)
+            with zf:
+                member = MANIFEST if MANIFEST in zf.namelist() else DIR_MANIFEST
+                if member not in zf.namelist():
+                    return None
+                doc = json.loads(zf.read(member))
+            parts_rel = doc.get("parts")
+            if isinstance(parts_rel, str) and parts_rel and "/" not in parts_rel:
+                parts_dir = output.with_name(parts_rel)
+                if parts_dir.is_dir():
+                    size += sum(p.stat().st_size for p in parts_dir.iterdir() if p.is_file())
+        else:
+            return None
+    except (OSError, ValueError, KeyError, zipfile.BadZipFile, BundleupError):
+        return None
+    if not isinstance(doc, dict):
+        return None
+    packages: dict[str, str | None] = {}
+    targets: list[str] = []
+    native_files: dict[str, str] = {}
+    if isinstance(doc.get("packages"), list):
+        for p in doc["packages"]:
+            if isinstance(p, dict) and isinstance(p.get("name"), str):
+                ver = p.get("version")
+                packages[p["name"]] = ver if isinstance(ver, str) else None
+    if isinstance(doc.get("target"), dict):
+        targets.append(_target_label(doc["target"]))
+    if isinstance(doc.get("files"), dict):
+        for rel, digest in doc["files"].items():
+            if isinstance(rel, str) and isinstance(digest, str) and _NATIVE_EXT.search(rel):
+                native_files[rel] = digest
+    if isinstance(doc.get("payloads"), list):
+        for pl in doc["payloads"]:
+            if not isinstance(pl, dict):
+                continue
+            if isinstance(pl.get("target"), dict):
+                lbl = _target_label(pl["target"])
+                if lbl not in targets:
+                    targets.append(lbl)
+            for p in pl.get("packages", []) if isinstance(pl.get("packages"), list) else []:
+                if isinstance(p, dict) and isinstance(p.get("name"), str):
+                    ver = p.get("version")
+                    packages.setdefault(p["name"], ver if isinstance(ver, str) else None)
+    if isinstance(doc.get("layers"), dict):
+        for layer in doc["layers"].values():
+            if isinstance(layer, dict) and isinstance(layer.get("files"), dict):
+                for rel, digest in layer["files"].items():
+                    if isinstance(rel, str) and isinstance(digest, str) and _NATIVE_EXT.search(rel):
+                        native_files[rel] = digest
+    return PreviousBundle(
+        size_bytes=size,
+        packages=packages,
+        targets=tuple(targets),
+        native_files=native_files,
+    )
+
+
+def diff_bundles(
+    prev: PreviousBundle | None,
+    *,
+    new_size: int,
+    ps: list[Prepared],
+) -> dict[str, object] | None:
+    """Compare a newly written bundle against `prev`, returning None when nothing existed or
+    nothing changed."""
+    if prev is None:
+        return None
+    new_pkgs: dict[str, str | None] = {}
+    new_targets: list[str] = []
+    new_native: dict[str, str] = {}
+    for p in ps:
+        lbl = p.target.describe(p.native, p.pythons, p.reach)
+        if lbl not in new_targets:
+            new_targets.append(lbl)
+        for pkg in _verify.locked_packages(p.pylock.read_text(encoding="utf-8"), p.target.markers):
+            new_pkgs.setdefault(pkg.name, pkg.version)
+        for rel, path in _bytecode.walk_files(p.site):
+            if _NATIVE_EXT.search(rel) and rel not in new_native:
+                new_native[rel] = _verify.record_hash(Path(path).read_bytes())
+
+    added = sorted(
+        f"{k} {new_pkgs[k]}" if new_pkgs[k] else k for k in (set(new_pkgs) - set(prev.packages))
+    )
+    removed = sorted(
+        f"{k} {prev.packages[k]}" if prev.packages[k] else k
+        for k in (set(prev.packages) - set(new_pkgs))
+    )
+    updated = sorted(
+        f"{k} {prev.packages[k] or '?'} -> {new_pkgs[k] or '?'}"
+        for k in (set(new_pkgs) & set(prev.packages))
+        if new_pkgs[k] != prev.packages[k]
+    )
+    changed_native_roots = sorted(
+        {
+            rel.split("/", 1)[0]
+            for rel in (set(new_native) ^ set(prev.native_files))
+            | {
+                r
+                for r in (set(new_native) & set(prev.native_files))
+                if new_native[r] != prev.native_files[r]
+            }
+        }
+    )
+    targets_changed = tuple(new_targets) != prev.targets
+    delta = new_size - prev.size_bytes
+    if (
+        delta == 0
+        and not added
+        and not removed
+        and not updated
+        and not changed_native_roots
+        and not targets_changed
+    ):
+        return None
+    return {
+        "previous_size_bytes": prev.size_bytes,
+        "size_delta_bytes": delta,
+        "added_packages": added,
+        "removed_packages": removed,
+        "updated_packages": updated,
+        "native_libraries_changed": changed_native_roots,
+        "targets_before": list(prev.targets),
+        "targets_after": new_targets,
+    }

@@ -28,7 +28,7 @@ import urllib.request
 import zlib
 from pathlib import Path
 
-from . import _loader
+from . import _loader, _network
 from ._bytecode import cache_dir
 from ._errors import BundleupError, CheckFailedError, Diagnostic, UsageError
 from ._formats import describe_size
@@ -304,11 +304,8 @@ def _download(url: str, path: Path, digest: str, *, stage: Path | None = None) -
         part.replace(path)
         return path
     except (OSError, http.client.HTTPException, ValueError) as e:
-        raise BundleupError(
-            f"couldn't download {url} ({e})",
-            hint="--format exe downloads its launcher once; check the network or proxy "
-            "(HTTPS_PROXY, REQUESTS_CA_BUNDLE), or set BUNDLEUP_JUMP_MIRROR to an internal mirror",
-        ) from None
+        msg, hint = _network.diagnose_runtime_download(url, str(e), kind="launcher")
+        raise BundleupError(msg, hint=hint) from None
     finally:
         part.unlink(missing_ok=True)
 
@@ -350,10 +347,15 @@ def fetch_python(
     install = [uv, "python", "install", key, "--no-bin", "--no-registry"]
     try:
         run(install, cwd=stage, what="uv python install", progress=progress, env=env)
-    except BundleupError:
+    except BundleupError as err:
         if cached:
             return cached[-1]
-        raise
+        msg, hint = _network.diagnose_runtime_download(
+            key, err.detail or str(err), kind="exe-python"
+        )
+        raise BundleupError(
+            msg, hint=hint, detail=_network.redact_text(err.detail) if err.detail else None
+        ) from None
     archives = sorted(downloads.glob("*.tar.gz"))
     if not archives:
         raise BundleupError(
@@ -455,6 +457,8 @@ def precompiled(archive: Path, target: Target, stage: Path) -> Path:
                 f"cached Python archive {archive.name} is missing or unreadable ({e})",
                 hint=_CLEAR,
             ) from None
+    if not target.has_interpreter:
+        return local_archive
     version = f"{target.version[0]}.{target.version[1]}"
     tree = stage / "python-stdlib"
     _loader._rmtree(str(tree))

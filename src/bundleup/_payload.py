@@ -8,7 +8,7 @@ import re
 import sys
 import zipfile
 from collections.abc import Callable, Iterable, Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from functools import partial
 from pathlib import Path
 from typing import Literal, NamedTuple
@@ -37,15 +37,70 @@ from ._uv import console_scripts, launchers
 class Entry(NamedTuple):
     """What a bundle runs. A plain tuple in the loader's config and the manifest."""
 
-    kind: Literal["call", "module", "script", "python"]
+    kind: Literal["call", "module", "script", "python", "scripts"]
     target: str  # the module, or the script's path inside the payload
     attr: str = ""  # the function, for "call"
 
     def __str__(self) -> str:
-        """ "module:function", "module", the script's path, or "python"."""
-        if self.kind == "python":
-            return "python"
+        """ "module:function", "module", the script's path, "python", or "scripts"."""
+        if self.kind in ("python", "scripts"):
+            return self.kind
         return f"{self.target}:{self.attr}" if self.kind == "call" else self.target
+
+
+def _parse_script_target(spec: str) -> tuple[str, str, str] | None:
+    module, sep, attr = spec.partition(":")
+    module = module.strip()
+    attr = attr.split("[")[0].strip()
+    if (
+        not module
+        or (sep and not attr)
+        or not all(p.isidentifier() for p in module.split("."))
+        or (attr and not all(p.isidentifier() for p in attr.split(".")))
+    ):
+        return None
+    return ("call", module, attr) if attr else ("module", module, "")
+
+
+def resolve_scripts(
+    source: Source,
+    site: Path,
+    *,
+    target_version: tuple[int, int] | None = None,
+    external: Sequence[str] = (),
+    strict_all: bool = False,
+) -> dict[str, tuple[str, str, str]]:
+    """All valid `[project.scripts]` entries in the bundle, sorted by command name."""
+    if source.is_script:
+        return {}
+    scripts = {**source.scripts, **console_scripts(site, source.name)}
+    resolved: dict[str, tuple[str, str, str]] = {}
+    for cmd_name, raw_spec in sorted(scripts.items()):
+        parsed = _parse_script_target(raw_spec)
+        if parsed is None:
+            if strict_all:
+                raise UsageError(
+                    f"invalid script entry {cmd_name!r} = {raw_spec!r}",
+                    hint="write module:function or module",
+                )
+            continue
+        _kind, mod, attr = parsed
+        try:
+            _validate_entry(
+                site,
+                raw=raw_spec,
+                module=mod,
+                attr=attr,
+                scripts=scripts,
+                target_version=target_version,
+                external=external,
+            )
+        except EntryPointError:
+            if strict_all:
+                raise
+            continue
+        resolved[cmd_name] = parsed
+    return resolved
 
 
 def resolve_entry(
@@ -92,6 +147,16 @@ def resolve_entry(
     scripts = {**source.scripts, **console_scripts(site, source.name)}
     by_canon = {canonicalize_name(k): v for k, v in scripts.items()}
     roots = _imports.search_roots(site)
+    if entry == "scripts" and "scripts" not in scripts:
+        if not scripts:
+            raise EntryPointError(
+                f"{source.name} defines no [project.scripts] for --entry scripts",
+                hint="add [project.scripts] to pyproject.toml, or pass --entry python",
+            )
+        resolve_scripts(
+            source, site, target_version=target_version, external=external, strict_all=True
+        )
+        return Entry("scripts", "")
     if entry is None:
         if len(scripts) == 1:
             entry = next(iter(scripts.values()))
@@ -126,10 +191,12 @@ def resolve_entry(
                 hint=hint,
             )
         else:
-            raise EntryPointError(
-                f"{source.name} defines several commands ({', '.join(sorted(scripts))})",
-                hint=f"pick one: --entry {sorted(scripts)[0]}",
+            # Preserve all [project.scripts] automatically (ADR-0053): dispatch by subcommand name
+            # (`python app.pyz <cmd> ...` or `python app.pyz run <script.py>`).
+            resolve_scripts(
+                source, site, target_version=target_version, external=external, strict_all=True
             )
+            return Entry("scripts", "")
     elif entry in scripts:
         entry = scripts[entry]
     elif (
@@ -583,9 +650,17 @@ def _has_attr(
 
 
 def check_wheel_platforms(site: Path, target: Target) -> None:
-    """For another platform, every installed wheel must be built for it. uv builds source-only
-    packages on this machine, so a compiled one would otherwise ship this machine's binaries."""
+    """For another platform (or a Python minor version assembled without its own interpreter),
+    every installed wheel must match it. uv builds source-only packages on this machine, so a
+    compiled one would otherwise ship this machine's or host Python's binaries."""
     platform = target.python_platform
+    if platform is None and not target.has_interpreter:
+        from ._exe import host_platform
+
+        try:
+            platform = host_platform(target)
+        except UsageError:
+            platform = None
     if platform is None:
         return
     wrong = []
@@ -597,8 +672,13 @@ def check_wheel_platforms(site: Path, target: Target) -> None:
         ):
             wrong.append(f"{dist_info.name.removesuffix('.dist-info')}: {', '.join(tags)}")
     if wrong:
+        where = (
+            target.python_platform.name
+            if target.python_platform is not None
+            else f"Python {target.version[0]}.{target.version[1]}"
+        )
         raise NoCompatibleWheelError(
-            f"{len(wrong)} package(s) have no build for {platform.name}",
+            f"{len(wrong)} package(s) have no build for {where}",
             detail="\n".join(wrong),
             hint="these were probably built from source on this machine; build on the target "
             "platform, or pin versions that publish wheels for it",
@@ -642,12 +722,12 @@ COMPILE_ENV = compile_env()
 
 def precompile(target: Target, site: Path, *, progress: Progress, checked: bool = False) -> None:
     """Compile everything with the target's interpreter, reusing cached bytecode (_bytecode)."""
-    if (
+    if not target.has_interpreter or (
         target.implementation == "cpython"
         and target.executable == sys.executable
         and (sys.version_info.major, sys.version_info.minor) != target.version
     ):
-        return  # fallback host interpreter differs from target minor version
+        return  # assembled without an interpreter of target.version: bytecode compiles on first run
 
     def compile_with(cmd: list[str]) -> None:
         run(
@@ -996,3 +1076,4 @@ class Prepared:
         str, ...
     ] = ()  # packages the host provides, excluded from the bundle (ADR-0051)
     merge_conflict: bool = False  # untagged native extensions conflicted across Python versions
+    scripts: dict[str, tuple[str, str, str]] = field(default_factory=dict)

@@ -17,7 +17,7 @@ from typing import Any
 
 from packaging.utils import canonicalize_name
 
-from . import _bytecode, _loader, _verify
+from . import _bytecode, _loader, _network, _verify
 from . import _toml as tomllib
 from ._errors import (
     BundleupError,
@@ -239,6 +239,8 @@ _NETWORK_ERROR_PATTERNS = (
     "temporary failure in name resolution",
     "operation timed out",
     "connection timed out",
+    "unknownissuer",
+    "certificate verify failed",
 )
 
 
@@ -254,14 +256,14 @@ def _run_with_offline_fallback(cmd: list[str], *, cwd: Path, what: str, progress
         return run(cmd, cwd=cwd, what=what, progress=progress)
     except UvError as first_err:
         if "--offline" in cmd or not _is_network_error(first_err.detail):
-            raise
+            raise _network.diagnose_uv_error(first_err, workdir=cwd) from None
         offline_cmd = [cmd[0], *cmd[1:2], "--offline", *cmd[2:]]
         if cmd[1:3] in (["pip", "compile"], ["pip", "install"]):
             offline_cmd = [cmd[0], "pip", cmd[2], "--offline", *cmd[3:]]
         try:
             return run(offline_cmd, cwd=cwd, what=what, progress=progress)
         except UvError:
-            raise first_err from None
+            raise _network.diagnose_uv_error(first_err, workdir=cwd) from None
 
 
 def from_pylock(
@@ -496,6 +498,40 @@ class Exported:
     pinned: bool = True
 
 
+def _script_with_lock_requires(script: Path, stage: Path) -> Path | None:
+    """When a locked PEP 723 script omits `requires-python` and the Python its lock was stamped
+    with isn't installed locally, stage the script and its `.lock` with the lock's own
+    `requires-python` so `uv export --locked` validates the lock with any host CPython."""
+    from ._source import PEP723, read_python_text, script_metadata
+
+    lock_path = script.with_name(script.name + ".lock")
+    try:
+        lock_req = tomllib.loads(lock_path.read_text(encoding="utf-8")).get("requires-python")
+        text = read_python_text(script)
+        meta = script_metadata(text)
+    except (OSError, UnicodeDecodeError, tomllib.TOMLDecodeError, ProjectError):
+        return None
+    match = next((m for m in PEP723.finditer(text) if m.group("type") == "script"), None)
+    if (
+        not isinstance(lock_req, str)
+        or not lock_req
+        or match is None
+        or meta.get("requires-python")
+        or "path" in str(meta.get("tool") or "")
+    ):
+        return None
+    staged_dir = stage.resolve() / "locked_script"
+    staged_dir.mkdir(parents=True, exist_ok=True)
+    staged_script = staged_dir / script.name
+    start = match.start("content")
+    staged_script.write_text(
+        text[:start] + f"# requires-python = {json.dumps(lock_req)}\n" + text[start:],
+        encoding="utf-8",
+    )
+    shutil.copyfile(lock_path, staged_dir / lock_path.name)
+    return staged_script
+
+
 def export(
     uv: str,
     source: Source,
@@ -507,6 +543,7 @@ def export(
     external: Sequence[str] = (),
     markers: dict[str, str] | None = None,
     interpreter: str | None = None,
+    has_interpreter: bool = True,
 ) -> Exported:
     """What to install, as `uv pip install` arguments, and the pylock.toml (PEP 751) the
     lock-vs-bundle check reads. From uv.lock: exported as a pylock.toml, which names each
@@ -548,7 +585,14 @@ def export(
     script_arg = (
         _strip_script_external(source.path, excluded, stage)
         if source.is_script and not locked_file
-        else source.path
+        else (
+            _script_with_lock_requires(source.path, stage) or source.path
+            if source.is_script
+            and locked_file
+            and not has_interpreter
+            and not source.requires_python
+            else source.path
+        )
     )
     oldest_script = (
         _script_from_oldest(script_arg, stage) if source.is_script and not locked_file else None

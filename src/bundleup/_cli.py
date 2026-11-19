@@ -458,6 +458,8 @@ def _success_lines(result: BuildResult, style: Style) -> list[str]:
     details = [_payloads_line(result.payloads) if result.payloads else target, packages]
     if result.format == "zip" and result.handler:
         details.append(f"handler {result.handler}")
+    elif result.entry == "scripts":
+        details.append("all [project.scripts] commands + `run <script.py>`")
     if result.parts:
         count = plural(sum(1 for _ in result.parts.iterdir()), "part")
         details.append(f"{count} in {_shown(result.parts)}/, ship it alongside")
@@ -573,6 +575,77 @@ def _failed(e: BundleupError, command: str, opts: argparse.Namespace, style: Sty
     return e.exit_code
 
 
+def _verbose_build_lines(result: BuildResult, style: Style) -> list[str]:
+    """Extra breakdown lines on `bundleup build -v`: compressed vs unpacked cache sizes, per-target
+    payload contributions, split packaging command, and artifact diff from any overwritten build."""
+    from ._python import PLATFORM_NAMES
+
+    dot = f" {style.dot} "
+    lines: list[str] = []
+    if result.format != "dir" and result.unpacked_bytes > 0:
+        parts_list = [f"{_size(result.size_bytes)} compressed"]
+        parts_list.append(
+            f"up to {_size(result.unpacked_bytes)} unpacked"
+            if result.payloads
+            else f"{_size(result.unpacked_bytes)} unpacked in cache"
+        )
+        if result.payloads:
+            if result.shared_bytes > 0:
+                parts_list.append(f"shared {_size(result.shared_bytes)}")
+            by_plat: dict[str, int] = {}
+            for pl in result.payloads:
+                where = (
+                    "any OS"
+                    if pl.get("any_os")
+                    else PLATFORM_NAMES.get(str(pl.get("platform")), str(pl.get("platform")))
+                )
+                label = (
+                    f"{where} {pl['machine']}"
+                    if pl.get("machine") and not pl.get("any_os")
+                    else where
+                )
+                excl = pl.get("exclusive_bytes")
+                if isinstance(excl, int):
+                    by_plat[label] = by_plat.get(label, 0) + excl
+            for label, excl_bytes in by_plat.items():
+                parts_list.append(f"{label} +{_size(excl_bytes)}")
+        lines.append(style.dim(f"  sizes: {dot.join(parts_list)}"))
+    if result.parts is not None:
+        parent = _shown(result.output.parent)
+        archive = f"{result.output.stem}.tar.gz"
+        lines.append(
+            style.dim(
+                f"  ship: tar -czf {archive} -C {parent} {result.output.name} {result.parts.name}"
+                f"{dot}verify: bundleup verify {_shown(result.output)}"
+            )
+        )
+    if isinstance(result.changes, dict):
+        chg = result.changes
+        delta = chg.get("size_delta_bytes", 0)
+        delta_int = delta if isinstance(delta, int) else 0
+        sign = "+" if delta_int >= 0 else "-"
+        summary = [f"{sign}{_size(abs(delta_int))}"]
+        for key, verb in (
+            ("added_packages", "added"),
+            ("removed_packages", "removed"),
+            ("updated_packages", "updated"),
+        ):
+            items = chg.get(key)
+            if isinstance(items, list) and items:
+                shown_items = ", ".join(str(x).replace("->", style.arrow) for x in items[:3])
+                more = f" (+{len(items) - 3} more)" if len(items) > 3 else ""
+                summary.append(f"{verb} {shown_items}{more}")
+        nat = chg.get("native_libraries_changed")
+        if isinstance(nat, list) and nat:
+            summary.append(f"native libs changed in {', '.join(str(x) for x in nat[:3])}")
+        if chg.get("targets_before") != chg.get("targets_after"):
+            after = chg.get("targets_after")
+            if isinstance(after, list) and after:
+                summary.append(f"targets now {'; '.join(str(x) for x in after)}")
+        lines.append(style.dim(f"  changed: {dot.join(summary)}"))
+    return lines
+
+
 def _run_build(opts: argparse.Namespace) -> ExitCode:
     from ._build import build  # deferred: --help and --version stay instant
 
@@ -594,6 +667,8 @@ def _run_build(opts: argparse.Namespace) -> ExitCode:
         for line in _success_lines(result, style):
             print(line, file=err)
         if opts.verbose >= 1:
+            for extra in _verbose_build_lines(result, style):
+                print(extra, file=err)
             dot = f" {style.dot} "
             steps = dot.join(
                 f"{step} {seconds * 1000:.0f}ms" for step, seconds in result.timings.items()

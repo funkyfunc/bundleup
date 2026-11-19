@@ -42,11 +42,17 @@ python-platform = "all"   # or ["aarch64-apple-darwin", "x86_64-apple-darwin", "
 
 ) and in SKILL.md: `python3 scripts/deps.pyz scripts/deck_edit.py ...` (`python` on Windows). The
 scripts' own helper modules import as usual (the script's folder comes first on `sys.path`), and
-a script that starts another one from that folder with `sys.executable` shares the bundle. Every
-build reads the scripts' imports and warns (`undeclared-import`) about any the bundle doesn't
-provide, so a missing dependency shows up before your users find it. If a bundle was built with a
-fixed entry point (`--entry pkg:main`), setting `BUNDLEUP_ENTRY=python` still lets a setup step
-run `BUNDLEUP_ENTRY=python python3 bundle.pyz -m ...` against the bundled packages.
+a script that starts another one from that folder with `sys.executable` shares the bundle. If the
+project also declares `[project.scripts]` commands (e.g. `edit` and `inspect`), `--entry python`
+dispatches those by name (`python3 scripts/deps.pyz edit deck.pptx`) alongside `python3
+scripts/deps.pyz run scripts/deck_edit.py`—and projects with multiple `[project.scripts]` default to
+that multi-command mode automatically ([ADR-0053](adr/0053-interpreter-free-targets-multi-entry-and-diagnostics.md)).
+Every build reads the scripts' imports and warns (`undeclared-import`) about any the bundle doesn't
+provide—distinguishing excluded `[project.optional-dependencies]` extras and lazy function imports
+from broken top-level imports, and noting external runtime prerequisites like `playwright install`
+browser binaries. If a bundle was built with a fixed entry point (`--entry pkg:main`), passing
+`--bundleup-python script.py ...` or `--bundleup-entry other_cmd ...` (or setting
+`BUNDLEUP_ENTRY=python`) runs scripts or alternate entry points across macOS, Linux, and Windows.
 
 - **Which Pythons:** pure-Python packages, `abi3` wheels (such as `cryptography` or `orjson`), and
   `py3-none-<platform>` wheels (such as `playwright` or `ruff`) run on every Python version in
@@ -249,10 +255,22 @@ work too:
   are also read for `--format exe`).
 - **Credentials:** `~/.netrc`, keyring, or `UV_INDEX_<NAME>_USERNAME` / `_PASSWORD` for a named
   index. A lock never stores them. (Not yet tested against an index that needs a login.)
-- **Python and launcher downloads:** to pack an interpreter into `--format exe`, bundleup downloads
-  that Python (into its own cache, through uv) and the `scie-jump` launcher; `UV_PYTHON_INSTALL_MIRROR`
-  points the Python download at a mirror, and `BUNDLEUP_JUMP_MIRROR` points the launcher download at
-  a mirror or `file://` folder (still checked against its pinned SHA-256 hash).
+- **Python and launcher downloads:** `.pyz` and `.py` builds never download Python interpreters by
+  default—explicit `--python 3.10-3.14` targets assemble compatible wheels using the builder's host
+  CPython and compile `.pyc` on first run (opt into automatic interpreter downloads with
+  `BUNDLEUP_PYTHON_DOWNLOADS=1` or `UV_PYTHON_DOWNLOADS=automatic`). To pack an interpreter into
+  `--format exe`, bundleup downloads that Python (into its own cache, through uv) and the
+  `scie-jump` launcher; `UV_PYTHON_INSTALL_MIRROR` points the Python download at a mirror, and
+  `BUNDLEUP_JUMP_MIRROR` points the launcher download at a mirror or `file://` folder (still checked
+  against its pinned SHA-256 hash).
+- **Diagnostics and provenance:** if `uv` fails against a proxy, TLS-inspecting firewall, or
+  private index access policy (such as an advertised version whose `.whl` returns HTTP 403),
+  bundleup redacts credentials, checks whether `pip.conf` already configures a custom index or CA
+  bundle, and names the exact package/version/wheel and mirror host (advising a version constraint
+  + `uv lock`, never a public-index fallback). `manifest.json` records each bundled package's SPDX
+  `license` and credential-redacted registry `origin`, while `bundleup build -v` prints compressed
+  vs unpacked sizes, per-target payload contributions, `--split` `tar` + `verify` commands, and
+  package/library diffs when overwriting a previous bundle ([ADR-0053](adr/0053-interpreter-free-targets-multi-entry-and-diagnostics.md)).
 
 Tested: a script locked against a private index (a flat folder) builds and runs from it
 (`tests/test_index.py`).

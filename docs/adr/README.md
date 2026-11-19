@@ -61,3 +61,4 @@ and change only the old one's status line.
 | [0050](0050-consolidate-cli-and-in-process-range-checks.md) | Consolidate CLI flags and check older Pythons' syntax in-process | Accepted |
 | [0051](0051-learnings-from-js-bundlers.md) | Learnings from JavaScript bundlers: `--external`, code frames, dependency chains, and CLI ergonomics | Accepted |
 | [0052](0052-native-bundles-run-on-a-python-range.md) | Native bundles run on every compatible Python version by default | Accepted |
+| [0053](0053-interpreter-free-targets-multi-entry-and-diagnostics.md) | Interpreter-free Python targets, opt-in downloads, multi-entry dispatch, and network diagnostics | Accepted |

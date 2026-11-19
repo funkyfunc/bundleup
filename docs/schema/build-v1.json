@@ -65,6 +65,30 @@
               "type": "integer",
               "minimum": 0
             },
+            "unpacked_bytes": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Extracted cache size of the largest payload in bytes (added within version 1, ADR-0053)"
+            },
+            "shared_bytes": {
+              "type": "integer",
+              "minimum": 0,
+              "description": "Compressed bytes shared across platforms in multi-payload bundles (added within version 1, ADR-0053)"
+            },
+            "deliverables": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              },
+              "description": "With --split, every file path (the .pyz and each part) that must be shipped together (added within version 1, ADR-0053)"
+            },
+            "changes": {
+              "type": [
+                "object",
+                "null"
+              ],
+              "description": "Diff from the previous bundle at the same output path when overwritten and changed; null otherwise (added within version 1, ADR-0053)"
+            },
             "name": {
               "type": "string"
             },
@@ -194,9 +218,56 @@
             },
             "payloads": {
               "type": "array",
-              "description": "A bundle for several platforms (added within version 1, ADR-0038): each payload's target, shaped like `target`; empty for a single payload",
+              "description": "A bundle for several platforms (added within version 1, ADR-0038): each payload's target, shaped like `target`, plus per-payload size metrics; empty for a single payload",
               "items": {
-                "type": "object"
+                "type": "object",
+                "required": [
+                  "python",
+                  "python_full_version",
+                  "implementation",
+                  "platform",
+                  "machine"
+                ],
+                "properties": {
+                  "python": {
+                    "type": "string"
+                  },
+                  "python_full_version": {
+                    "type": "string"
+                  },
+                  "implementation": {
+                    "type": "string"
+                  },
+                  "platform": {
+                    "type": "string"
+                  },
+                  "machine": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "python_platform": {
+                    "type": [
+                      "string",
+                      "null"
+                    ]
+                  },
+                  "python_range": {
+                    "type": "object"
+                  },
+                  "any_os": {
+                    "type": "boolean"
+                  },
+                  "unpacked_bytes": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "exclusive_bytes": {
+                    "type": "integer",
+                    "minimum": 0
+                  }
+                }
               }
             },
             "smoke": {

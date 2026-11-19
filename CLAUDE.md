@@ -48,24 +48,30 @@ Do these **as you go**, not only at the end:
 A snapshot, not a changelog: history is in [docs/roadmap.md](docs/roadmap.md) "Done", the ADRs
 and git.
 
-- **What works (2026-10-08):** `bundleup build|check|verify|cache` from a project (`uv.lock`,
+- **What works (2026-11-18):** `bundleup build|check|verify|cache` from a project (`uv.lock`,
   `pylock.toml`, or no lock: resolved at build time with a warning, ADR-0041), a folder of
   modules with `requirements.txt`, or a script (PEP 723, `requirements.txt` beside it, or
   standard library only). Outputs: a
   `.pyz` (default), `--format py` (one plain-text `.py`, ADR-0046), `--format exe` (an
   unsigned executable with its own Python, any platform from any machine, ADR-0047), `--format
   dir`, `--format zip` (ADR-0049); `--max-size`; `--split SIZE` (a small `.pyz` and a parts folder,
-  ADR-0045). No named targets: each
+  with `deliverables` in `manifest.json` / `--json`, ADR-0045, ADR-0053). No named targets: each
   destination is a tested recipe in docs/recipes.md (ADR-0039). Builds for this machine or another
-  platform. Pure-Python and native bundles run on every compatible
+  platform, and `.pyz`/`.py` builds for uninstalled `--python` versions assemble wheels with the
+  host CPython without downloading interpreters (`BUNDLEUP_PYTHON_DOWNLOADS=1` opts in, ADR-0053).
+  Pure-Python and native bundles run on every compatible
   Python version their lock and wheels allow (ADR-0030, ADR-0052)—automatically merging `cp3XX`
   extension binaries across Python 3.9–3.14 and layering `uv.lock` Python marker forks—and pure
   bundles run on any OS when the lock agrees (ADR-0034); one `.pyz` can carry a payload per platform
   and version (`--python-platform all`), each file stored once (ADR-0038). `--entry python` makes a
-  bundle that runs the scripts it's given, one for all of a skill's scripts (ADR-0040;
-  `BUNDLEUP_ENTRY=python` overrides a fixed entry point at runtime). Packages come from the lock's
-  own files and index, hash-checked (a company index works). A stale lock is an error (ADR-0033). Every build checks the code
-  and, for other platforms, wheel coverage from the lock (ADR-0024, ADR-0031). `--smoke` runs the
+  bundle that runs the scripts it's given and any `[project.scripts]` commands (`run <script.py>`,
+  `<cmd>`), multi-script projects preserve all commands automatically, and `--bundleup-python` /
+  `--bundleup-entry` override fixed entry points across OSes (ADR-0040, ADR-0053). Packages come
+  from the lock's own files and index, hash-checked, with SPDX `license` and credential-redacted
+  remote `origin` recorded in `manifest.json` and registry 401/403 / TLS / `pip.conf` diagnostics on
+  network errors (ADR-0053). A stale lock is an error (ADR-0033). Every build checks the code
+  (distinguishing optional extras and lazy imports from broken top-level imports) and, for other
+  platforms, wheel coverage from the lock (ADR-0024, ADR-0031, ADR-0053). `--smoke` runs the
   finished bundle once, offline, in a fresh home (ADR-0042). Recipes tested in CI: skills, Docker, Lambda, Claude API.
 - **Focus (the owner, 2026-10-09):** more kinds of projects in, more kinds of outputs out; no
   recipes for niche hosts (an MCP server recipe was dropped).
@@ -116,7 +122,7 @@ pyproject.toml, src/bundleup/  the package (ADR-0018): __init__.py (public API),
                         (copied into each payload, ADR-0027), _platforms.py, _formats.py
                         (Format, sizes), _imports.py (imports, stdlib by version), _smoke.py
                         (--smoke), _exe.py (--format exe),
-                        _zipwriter.py, _bytecode.py, _cache.py, _errors.py,
+                        _zipwriter.py, _bytecode.py, _cache.py, _network.py, _errors.py,
                         _term.py, _text.py
 tests/snapshots/        CLI output and API snapshots; docs/cli-reference.md is generated too
 docs/schema/            JSON Schemas of each command's `--json` (build, check, verify, cache)

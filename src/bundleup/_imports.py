@@ -51,6 +51,7 @@ EXTERNAL_ALIASES: dict[str, set[str]] = {
     "pycryptodome": {"Crypto"},
     "pycryptodomex": {"Cryptodome"},
     "pyjwt": {"jwt"},
+    "pymupdf": {"fitz", "pymupdf"},
     "pymysql": {"pymysql"},
     "pynacl": {"nacl"},
     "pyopenssl": {"OpenSSL"},
@@ -272,19 +273,40 @@ def _terminates(stmts: list[ast.stmt]) -> bool:
     return False
 
 
-def imports_in_with_lines(tree: ast.AST) -> dict[str, int]:
-    """The top-level modules a module's code imports for sure -> the first 1-based line number of
-    each: not relative imports, and not those guarded by `try/except ImportError` or an `if` on
-    TYPE_CHECKING, the platform or the Python version."""
+def module_names_for_package(pkg_name: str) -> set[str]:
+    """Likely top-level import names provided by a declared PyPI package name."""
+    canon = re.sub(r"[-_.]+", "-", pkg_name.strip()).lower()
+    if not canon:
+        return set()
+    names = {canon.replace("-", "_"), pkg_name.strip().split(".", 1)[0].replace("-", "_")}
+    for ns in NAMESPACE_PREFIXES:
+        if canon.startswith(f"{ns}-"):
+            names.add(ns.replace("-", "_"))
+    names |= EXTERNAL_ALIASES.get(canon, set())
+    names |= EXTERNAL_ALIASES.get(pkg_name.strip(), set())
+    return {n for n in names if n}
+
+
+def imports_in_with_scopes(tree: ast.AST) -> tuple[dict[str, int], set[str]]:
+    """`(lines, deferred)`: `lines` maps every non-`ImportError`-guarded top-level import to its
+    first 1-based line number; `deferred` is the subset of `lines` imported only inside functions
+    (`def` / `async def`) or conditional branches (`if` / `match`), never at module top level."""
     lines: dict[str, int] = {}
     branch_lines: dict[str, int] = {}
     optional_mods: set[str] = set()
+    top_level_mods: set[str] = set()
 
-    def visit_stmts(stmts: Sequence[ast.stmt], optional: bool, in_branch: bool = False) -> None:
+    def visit_stmts(
+        stmts: Sequence[ast.stmt],
+        optional: bool,
+        in_branch: bool = False,
+        in_deferred: bool = False,
+    ) -> None:
         cur_opt = optional
         cur_branch = in_branch
+        cur_def = in_deferred
         for stmt in stmts:
-            visit(stmt, cur_opt, cur_branch)
+            visit(stmt, cur_opt, cur_branch, cur_def)
             if (
                 not cur_opt
                 and isinstance(stmt, ast.If)
@@ -292,6 +314,7 @@ def imports_in_with_lines(tree: ast.AST) -> dict[str, int]:
                 and _terminates(stmt.body)
             ):
                 cur_branch = True
+                cur_def = True
                 unparsed = ast.unparse(stmt.test)
                 if any(c in unparsed for c in CONDITIONAL):
                     cur_opt = True
@@ -301,80 +324,92 @@ def imports_in_with_lines(tree: ast.AST) -> dict[str, int]:
                     _caught(h.type) in OPTIONAL_ERRORS and _terminates(h.body) for h in handlers
                 ):
                     cur_branch = True
+                    cur_def = True
 
-    def record(top: str, lineno: int, optional: bool, in_branch: bool) -> None:
+    def record(top: str, lineno: int, optional: bool, in_branch: bool, in_deferred: bool) -> None:
         if optional:
             optional_mods.add(top)
-        elif in_branch:
-            branch_lines[top] = min(branch_lines.get(top, lineno), lineno)
         else:
-            lines[top] = min(lines.get(top, lineno), lineno)
+            if not in_deferred:
+                top_level_mods.add(top)
+            if in_branch:
+                branch_lines[top] = min(branch_lines.get(top, lineno), lineno)
+            else:
+                lines[top] = min(lines.get(top, lineno), lineno)
 
-    def visit(node: ast.AST, optional: bool, in_branch: bool = False) -> None:
+    def visit(
+        node: ast.AST, optional: bool, in_branch: bool = False, in_deferred: bool = False
+    ) -> None:
         if isinstance(node, ast.Try) or type(node).__name__ == "TryStar":
             handlers = getattr(node, "handlers", ())
             guarded = bool({_caught(h.type) for h in handlers} & OPTIONAL_ERRORS)
-            visit_stmts(getattr(node, "body", ()), optional or guarded, in_branch)
-            visit_stmts(getattr(node, "orelse", ()), optional or guarded, in_branch)
+            visit_stmts(getattr(node, "body", ()), optional or guarded, in_branch, in_deferred)
+            visit_stmts(getattr(node, "orelse", ()), optional or guarded, in_branch, in_deferred)
             for handler in handlers:
-                visit(handler, optional or (_caught(handler.type) in OPTIONAL_ERRORS), in_branch)
-            visit_stmts(getattr(node, "finalbody", ()), optional, in_branch)
+                visit(
+                    handler,
+                    optional or (_caught(handler.type) in OPTIONAL_ERRORS),
+                    in_branch,
+                    True,
+                )
+            visit_stmts(getattr(node, "finalbody", ()), optional, in_branch, in_deferred)
             return
         if isinstance(node, (ast.With, ast.AsyncWith)):
             suppressed = _suppresses_import_error(node)
             for item in node.items:
-                visit(item, optional, in_branch)
-            visit_stmts(node.body, optional or suppressed, in_branch)
+                visit(item, optional, in_branch, in_deferred)
+            visit_stmts(node.body, optional or suppressed, in_branch, in_deferred)
             return
         if isinstance(node, ast.If):
             test = node.test
             if isinstance(test, ast.Constant):
-                visit_stmts(node.body, optional or not bool(test.value), in_branch)
-                visit_stmts(node.orelse, optional or bool(test.value), in_branch)
+                visit_stmts(node.body, optional or not bool(test.value), in_branch, in_deferred)
+                visit_stmts(node.orelse, optional or bool(test.value), in_branch, in_deferred)
                 return
             if _is_type_checking(test):
-                visit_stmts(node.body, True, True)
-                visit_stmts(node.orelse, optional, in_branch)
+                visit_stmts(node.body, True, True, True)
+                visit_stmts(node.orelse, optional, in_branch, in_deferred)
                 return
             if (
                 isinstance(test, ast.UnaryOp)
                 and isinstance(test.op, ast.Not)
                 and _is_type_checking(test.operand)
             ):
-                visit_stmts(node.body, optional, in_branch)
-                visit_stmts(node.orelse, True, True)
+                visit_stmts(node.body, optional, in_branch, in_deferred)
+                visit_stmts(node.orelse, True, True, True)
                 return
             unparsed = ast.unparse(test)
             if any(c in unparsed for c in CONDITIONAL):
-                visit_stmts(node.body, True, True)
-                visit_stmts(node.orelse, True, True)
+                visit_stmts(node.body, True, True, True)
+                visit_stmts(node.orelse, True, True, True)
                 return
-            visit(test, optional, in_branch)
-            visit_stmts(node.body, optional, True)
-            visit_stmts(node.orelse, optional, True)
+            visit(test, optional, in_branch, in_deferred)
+            visit_stmts(node.body, optional, True, True)
+            visit_stmts(node.orelse, optional, True, True)
             return
         if type(node).__name__ == "Match":
             subject = getattr(node, "subject", None)
             cond_match = subject is not None and any(c in ast.unparse(subject) for c in CONDITIONAL)
             if subject is not None:
-                visit(subject, optional, in_branch)
+                visit(subject, optional, in_branch, in_deferred)
             for case in getattr(node, "cases", ()):
                 guard = getattr(case, "guard", None)
                 cond_guard = guard is not None and any(c in ast.unparse(guard) for c in CONDITIONAL)
                 if guard is not None:
-                    visit(guard, optional or cond_match, True)
+                    visit(guard, optional or cond_match, True, True)
                 visit_stmts(
                     getattr(case, "body", ()),
                     optional or cond_match or cond_guard,
+                    True,
                     True,
                 )
             return
         if isinstance(node, (ast.For, ast.AsyncFor, ast.While)):
             for child in ast.iter_child_nodes(node):
                 if child not in node.body and child not in node.orelse:
-                    visit(child, optional, in_branch)
-            visit_stmts(node.body, optional, in_branch)
-            visit_stmts(node.orelse, optional, in_branch)
+                    visit(child, optional, in_branch, in_deferred)
+            visit_stmts(node.body, optional, in_branch, in_deferred)
+            visit_stmts(node.orelse, optional, in_branch, in_deferred)
             return
         if (
             isinstance(
@@ -389,25 +424,35 @@ def imports_in_with_lines(tree: ast.AST) -> dict[str, int]:
             )
             or type(node).__name__ == "match_case"
         ):
+            is_fn = isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)) or (
+                type(node).__name__ == "match_case"
+            )
             body = getattr(node, "body", ())
             for child in ast.iter_child_nodes(node):
                 if child not in body:
-                    visit(child, optional, in_branch)
-            visit_stmts(body, optional, in_branch)
+                    visit(child, optional, in_branch, in_deferred)
+            visit_stmts(body, optional, in_branch, in_deferred or is_fn)
             return
         if isinstance(node, ast.Import):
             for alias in node.names:
-                record(alias.name.split(".")[0], node.lineno, optional, in_branch)
+                record(alias.name.split(".")[0], node.lineno, optional, in_branch, in_deferred)
         elif isinstance(node, ast.ImportFrom) and node.level == 0 and node.module:
-            record(node.module.split(".")[0], node.lineno, optional, in_branch)
+            record(node.module.split(".")[0], node.lineno, optional, in_branch, in_deferred)
         for child in ast.iter_child_nodes(node):
-            visit(child, optional, in_branch)
+            visit(child, optional, in_branch, in_deferred)
 
     visit(tree, False)
     for top, lineno in branch_lines.items():
         if top not in optional_mods:
             lines[top] = min(lines.get(top, lineno), lineno)
-    return lines
+    return lines, set(lines) - top_level_mods
+
+
+def imports_in_with_lines(tree: ast.AST) -> dict[str, int]:
+    """The top-level modules a module's code imports for sure -> the first 1-based line number of
+    each: not relative imports, and not those guarded by `try/except ImportError` or an `if` on
+    TYPE_CHECKING, the platform or the Python version."""
+    return imports_in_with_scopes(tree)[0]
 
 
 def imports_in(tree: ast.AST) -> set[str]:
@@ -415,12 +460,17 @@ def imports_in(tree: ast.AST) -> set[str]:
     return set(imports_in_with_lines(tree))
 
 
+def imports_with_scopes(path: Path) -> tuple[dict[str, int], set[str]]:
+    """What a file imports -> `(lines, deferred)`; empty if it doesn't parse."""
+    try:
+        return imports_in_with_scopes(ast.parse(path.read_bytes()))
+    except (OSError, SyntaxError, UnicodeDecodeError, ValueError):
+        return {}, set()
+
+
 def imports_with_lines(path: Path) -> dict[str, int]:
     """What a file imports for sure -> first line number; empty if it doesn't parse."""
-    try:
-        return imports_in_with_lines(ast.parse(path.read_bytes()))
-    except (OSError, SyntaxError, UnicodeDecodeError, ValueError):
-        return {}
+    return imports_with_scopes(path)[0]
 
 
 def imports_of(path: Path) -> set[str]:

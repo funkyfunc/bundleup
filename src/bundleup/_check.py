@@ -21,7 +21,7 @@ import contextlib
 import json
 import os
 from collections import defaultdict
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -383,6 +383,7 @@ def oldest_python(
     run: Callable[[list[str]], str],
     own: Sequence[str] = (),
     owner: dict[str, _Owner] | None = None,
+    skip_files: Collection[str] = (),
 ) -> tuple[PythonRange, list[Diagnostic]]:
     """A pure-Python bundle claims every version its requires-python allows (ADR-0030). Check
     that the project's own code compiles on the versions below the target: in-process with
@@ -404,8 +405,13 @@ def oldest_python(
         for path, who in mine.items()
         if who.name == project
         and path.endswith(".py")
-        # Only what compiled for the target: anything else is already a syntax-error.
-        and (site / _bytecode.pyc_path(path, target.cache_tag)).exists()
+        and path not in skip_files
+        # Only what compiled for the target (or all non-failing files when assembled without an
+        # interpreter of `target.version`): anything else is already a syntax-error.
+        and (
+            not target.has_interpreter
+            or (site / _bytecode.pyc_path(path, target.cache_tag)).exists()
+        )
     )
     if not files:
         return pythons, []
@@ -477,8 +483,16 @@ def syntax_errors(
     if not candidates:
         return []
     expected_tag = f"cpython-{target.version[0]}{target.version[1]}"
-    as_ver = target.version if target.cache_tag != expected_tag else None
-    found = compile_errors(site, candidates, python=target.executable, run=run, as_version=as_ver)
+    if not target.has_interpreter:
+        import sys
+
+        check_ver = min(target.version, sys.version_info[:2])
+        found = _ast_errors(site, candidates, check_ver)
+    else:
+        as_ver = target.version if target.cache_tag != expected_tag else None
+        found = compile_errors(
+            site, candidates, python=target.executable, run=run, as_version=as_ver
+        )
     python = f"Python {target.version[0]}.{target.version[1]}"
     diags = []
     theirs: dict[_Owner, list[str]] = defaultdict(list)
@@ -575,54 +589,162 @@ def analyze(
     return diags, package_sizes(site, owner, project=project, markers=target.markers, files=walked)
 
 
+EXTERNAL_RUNTIME_NOTES: dict[str, str] = {
+    "playwright": (
+        "note: playwright wheels ship the driver only—browser binaries (`playwright install`) "
+        "are not included in Python bundles"
+    ),
+}
+
+
+def runtime_binary_notes(site: Path) -> list[str]:
+    """Notes about bundled packages whose external runtime binaries live outside wheels."""
+    notes: list[str] = []
+    pw_driver = site / "playwright" / "driver"
+    pw_browsers = pw_driver / "package" / ".local-browsers"
+    if pw_driver.is_dir() and not pw_browsers.is_dir():
+        notes.append(
+            "playwright is bundled with its driver only; browser binaries (`playwright install`) "
+            "are not included and remain a separate host prerequisite"
+        )
+    return notes
+
+
+def _make_undeclared_diag(
+    mods: list[str],
+    *,
+    shown: str,
+    lines: dict[str, int],
+    source_path: Path | None,
+    message: str,
+    hint: str,
+) -> Diagnostic:
+    line = min((lines[m] for m in mods if m in lines), default=None)
+    frame = _imports.code_frame(source_path, line) if source_path else None
+    extra_notes = [EXTERNAL_RUNTIME_NOTES[m] for m in mods if m in EXTERNAL_RUNTIME_NOTES]
+    full_hint = "; ".join([hint, *extra_notes])
+    return Diagnostic(
+        "undeclared-import",
+        "warning",
+        message,
+        hint=full_hint,
+        detail=frame,
+        file=shown,
+        line=line,
+    )
+
+
 def undeclared_imports(
     code: Sequence[tuple[str, set[str] | dict[str, int], set[str]]],
     provided: set[str],
     stdlib: set[str] | None,
     *,
     paths: dict[str, Path] | None = None,
+    deferred: dict[str, set[str]] | None = None,
+    optional_imports: dict[str, tuple[str, str]] | None = None,
 ) -> list[Diagnostic]:
     """Modules the bundled code imports that neither the payload (`provided`) nor the target's
     standard library has: the most common way a bundle fails at run time, since it can't see
-    the machine's packages (fourth review). `code`: (name shown, what it imports, the modules
-    beside it that count too). A warning: it reads imports, it doesn't run code. Skipped where
-    the standard library is unknown (bundleup on 3.9)."""
+    the machine's packages (fourth review). Distinguishes unconditional top-level imports from
+    deferred function/branch imports and excluded `[project.optional-dependencies]` extras."""
     if stdlib is None:
         return []
     have = provided | stdlib | {"__future__", "__main__"}
+    opt_map = optional_imports or {}
+    def_map = deferred or {}
     diags = []
     for shown, imported, local in code:
         missing = sorted(set(imported) - have - local)
-        if missing:
-            lines = imported if isinstance(imported, dict) else {}
-            line = min((lines[m] for m in missing if m in lines), default=None)
-            source_path = (paths or {}).get(shown)
-            frame = _imports.code_frame(source_path, line) if source_path else None
-            siblings = (
-                set(missing) & _imports.top_level_modules(source_path.parent)
-                if source_path is not None and not local
-                else set()
-            )
-            hint = (
+        if not missing:
+            continue
+        lines = imported if isinstance(imported, dict) else {}
+        source_path = (paths or {}).get(shown)
+        siblings = (
+            set(missing) & _imports.top_level_modules(source_path.parent)
+            if source_path is not None and not local
+            else set()
+        )
+        file_deferred = def_map.get(shown, set())
+        opt_missing = [m for m in missing if m in opt_map]
+        lazy_missing = [m for m in missing if m not in opt_map and m in file_deferred]
+        hard_missing = [m for m in missing if m not in opt_map and m not in file_deferred]
+
+        if hard_missing:
+            sib_hint = (
                 f"to include {source_path.parent.name}/'s other modules, bundle the folder "
                 f"(`bundleup build {source_path.parent.name} --entry {shown}`); otherwise "
-                if siblings and source_path is not None
+                if (siblings & set(hard_missing)) and source_path is not None
                 else ""
-            ) + (
-                f"add the packages that provide them to the dependencies, pass --external "
-                f"{missing[0]} if the host Python provides it, or guard optional imports with "
-                "`try: ... except ImportError`"
             )
             diags.append(
-                Diagnostic(
-                    "undeclared-import",
-                    "warning",
-                    f"{shown} imports {', '.join(missing)}: neither the bundle nor the standard "
-                    f"library has {'it' if len(missing) == 1 else 'them'}",
-                    hint=hint,
-                    detail=frame,
-                    file=shown,
-                    line=line,
+                _make_undeclared_diag(
+                    hard_missing,
+                    shown=shown,
+                    lines=lines,
+                    source_path=source_path,
+                    message=(
+                        f"{shown} imports {', '.join(hard_missing)}: neither the bundle nor the "
+                        f"standard library has {'it' if len(hard_missing) == 1 else 'them'}"
+                    ),
+                    hint=(
+                        sib_hint + f"add the packages that provide them to the dependencies, pass "
+                        f"--external {hard_missing[0]} if the host Python provides it, or guard "
+                        "optional imports with `try: ... except ImportError`"
+                    ),
+                )
+            )
+        if opt_missing:
+            extras = sorted({opt_map[m][0] for m in opt_missing})
+            pkgs = sorted({opt_map[m][1] for m in opt_missing})
+            ext_label = (
+                f"optional extra [{extras[0]}]"
+                if len(extras) == 1
+                else f"optional extras [{', '.join(extras)}]"
+            )
+            all_lazy = all(m in file_deferred for m in opt_missing)
+            where_phrase = "optionally imports" if all_lazy else "imports"
+            scope_note = (
+                f"excluded {ext_label}, not in this bundle"
+                if all_lazy
+                else f"from excluded {ext_label} at top level (not in this bundle)"
+            )
+            guard_advice = (
+                f"if {ext_label} is excluded on purpose, guard the import with "
+                f"`try: ... except ImportError` (or pass --external {pkgs[0]} if the host "
+                f"provides it); to include it, add {', '.join(pkgs)} to [project] dependencies"
+            )
+            diags.append(
+                _make_undeclared_diag(
+                    opt_missing,
+                    shown=shown,
+                    lines=lines,
+                    source_path=source_path,
+                    message=f"{shown} {where_phrase} {', '.join(opt_missing)} ({scope_note})",
+                    hint=guard_advice,
+                )
+            )
+        if lazy_missing:
+            what_opt = (
+                "this is an optional feature"
+                if len(lazy_missing) == 1
+                else "these are optional features"
+            )
+            diags.append(
+                _make_undeclared_diag(
+                    lazy_missing,
+                    shown=shown,
+                    lines=lines,
+                    source_path=source_path,
+                    message=(
+                        f"{shown} imports {', '.join(lazy_missing)} inside a function or branch: "
+                        "neither the bundle nor the standard library has "
+                        f"{'it' if len(lazy_missing) == 1 else 'them'}"
+                    ),
+                    hint=(
+                        f"if {what_opt} excluded on purpose, guard the import with "
+                        f"`try: ... except ImportError` (or pass --external {lazy_missing[0]} "
+                        "if the host provides it); if required, add the package to dependencies"
+                    ),
                 )
             )
     return diags

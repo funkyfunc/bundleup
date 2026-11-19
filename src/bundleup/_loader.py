@@ -32,7 +32,9 @@ TARGET = "Python 3.12 on macOS"
 TAG = "cpython-312"  # the cache tag of the interpreter the payload's bytecode was compiled for
 # ("call", module, attr) | ("module", module, "") | ("script", path inside the payload, "")
 # | ("python", "", ""): the bundle runs whatever it's given, as python does (`--entry python`)
+# | ("scripts", "", ""): dispatches among `SCRIPTS` or `run <script.py>` (ADR-0053)
 ENTRY = ("call", "app", "main")
+SCRIPTS = {}  # type: dict[str, tuple[str, str, str]]
 PTH = []  # type: list[str]  # .pth files at the payload's top level, in the order site.py reads them
 # What the native wheels need (ADR-0029): ("glibc", (2, 28)) or ("musl", (1, 2)); macOS (11, 0).
 LIBC = None  # type: tuple[str, tuple[int, int]] | None
@@ -1203,11 +1205,8 @@ def _exec_module(target: str, alter_argv0: bool = False) -> None:
         sys.modules["__main__"] = main_mod
 
 
-def _run(site: str) -> None:
-    if os.environ.pop("BUNDLEUP_ENTRY", "").strip() == "python" and NAME != "bundleup":
-        _run_python()
-        return
-    kind, target, attr = ENTRY
+def _dispatch_entry(entry: "tuple[str, str, str]", site: str) -> None:
+    kind, target, attr = entry
     if kind == "call":
         __import__(target)
         # An attribute walk: the type is only known at run time.
@@ -1217,6 +1216,9 @@ def _run(site: str) -> None:
         sys.exit(obj())
     if kind == "python":
         _run_python()
+        return
+    if kind == "scripts":
+        _run_scripts(site)
         return
     if kind == "module":
         _exec_module(target)
@@ -1228,6 +1230,79 @@ def _run(site: str) -> None:
             _add_env_path("BUNDLEUP_RUNTIME_SCRIPTS", script_dir)
         argv0 = sys.argv[0] if sys.argv and sys.argv[0] else script_path
         _exec_file(script_path, argv0)
+
+
+def _run(site: str) -> None:
+    override = os.environ.pop("BUNDLEUP_ENTRY", "").strip()
+    if NAME != "bundleup":
+        raw_args = sys.argv[1:]
+        if raw_args and raw_args[0] == "--bundleup-python":
+            sys.argv = [sys.argv[0], *raw_args[1:]]
+            _run_python()
+            return
+        if raw_args and (
+            raw_args[0] == "--bundleup-entry" or raw_args[0].startswith("--bundleup-entry=")
+        ):
+            if raw_args[0] == "--bundleup-entry":
+                if len(raw_args) < 2:
+                    _fail("--bundleup-entry requires a command name or 'python'")
+                chosen, rest = raw_args[1], raw_args[2:]
+            else:
+                chosen, rest = raw_args[0].split("=", 1)[1], raw_args[1:]
+            if chosen == "python":
+                sys.argv = [sys.argv[0], *rest]
+                _run_python()
+                return
+            if chosen in SCRIPTS:
+                sys.argv = [chosen, *rest]
+                _dispatch_entry(SCRIPTS[chosen], site)
+                return
+            avail = ", ".join([*sorted(SCRIPTS), "python"])
+            _fail("unknown entry %r (available: %s)" % (chosen, avail))
+        if override == "python":
+            _run_python()
+            return
+        if override and override in SCRIPTS:
+            _dispatch_entry(SCRIPTS[override], site)
+            return
+    _dispatch_entry(ENTRY, site)
+
+
+def _run_scripts(site: str) -> None:
+    """Multi-command dispatcher when `[project.scripts]` defines several commands (ADR-0053):
+    supports `<cmd> ARGS...`, `run SCRIPT.py ARGS...`, `.py` scripts, and `-m`/`-c`."""
+    me = _me()
+    names = ", ".join(sorted(SCRIPTS))
+    prefix = me if _SCIE else ("python %s" % me)
+    usage = "usage: %s <command | run SCRIPT.py | -m MODULE | -c CODE> [ARGS...]\ncommands: %s" % (
+        prefix,
+        names,
+    )
+    args = sys.argv[1:]
+    if not args or args[0] in ("-h", "--help"):
+        stream = sys.stdout if args else sys.stderr
+        stream.write(usage + "\n")
+        sys.exit(0 if args else 2)
+    first = args[0]
+    if first in SCRIPTS:
+        sys.argv = [first, *args[1:]]
+        _dispatch_entry(SCRIPTS[first], site)
+        return
+    if first == "run":
+        if len(args) < 2:
+            _fail("run needs a script path\n%s" % usage)
+        sys.argv = [sys.argv[0], *args[1:]]
+        _run_python()
+        return
+    if (
+        first in ("-", "-m", "-c")
+        or first.startswith(("-m", "-c"))
+        or first.endswith(".py")
+        or os.path.isfile(first)
+    ):
+        _run_python()
+        return
+    _fail("unknown command %r\n%s" % (first, usage))
 
 
 PYTHON_USAGE = "usage: python %s [SCRIPT.py | -m MODULE | -c CODE | -] [ARGS...]"
@@ -1311,6 +1386,14 @@ def _run_python() -> None:
             "\n%s" % (first, first, me, usage)
         )
     else:
+        if not after_dd and first == "run" and len(args) >= 2 and not os.path.exists(first):
+            sys.argv = [sys.argv[0], *args[1:]]
+            _run_python()
+            return
+        if not after_dd and first in SCRIPTS and not os.path.exists(first):
+            sys.argv = [first, *args[1:]]
+            _dispatch_entry(SCRIPTS[first], "")
+            return
         sys.argv = args
         # As python does for a script: its real folder comes first, so its own modules import; and
         # scripts under it that it starts with sys.executable see the bundle too (ADR-0040).
