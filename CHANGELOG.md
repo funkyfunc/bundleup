@@ -3,7 +3,7 @@
 Versions follow uv's scheme until 1.0: a minor version may break things
 ([style guide](docs/cli-style-guide.md) rule 37).
 
-## Unreleased
+## 0.3.1 (2026-11-22)
 
 - Windows runtime and build hardening:
   - Retry transient `PermissionError` (`WinError 5` / `WinError 32`) locks during cold-start cache
