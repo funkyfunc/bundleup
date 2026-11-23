@@ -3,6 +3,25 @@
 Versions follow uv's scheme until 1.0: a minor version may break things
 ([style guide](docs/cli-style-guide.md) rule 37).
 
+## Unreleased
+
+- Windows runtime and build hardening:
+  - Retry transient `PermissionError` (`WinError 5` / `WinError 32`) locks during cold-start cache
+    `os.rename` and atomic build output / `--format dir` replacements when real-time file scanners
+    briefly hold newly written `.pyd` / `.dll` files.
+  - Keep Windows temporary unpack directory names short (`.tmp-<pid>-<hex>`) and use `\\?\`
+    extended-length paths for deep paths (`>= 240` characters) during extraction and cleanup so
+    packages with deep directory trees unpack cleanly when `LongPathsEnabled` is disabled.
+- Offline wheelhouse, proxy, and CLI flag guidance:
+  - Diagnose missing PEP 517 `[build-system]` packages (`hatchling`, `setuptools`, ...) during
+    offline / `UV_FIND_LINKS` wheelhouse builds, showing the exact `pip download` command and
+    `[tool.uv] package = false` alternative.
+  - Diagnose proxy `HTTP 407` authentication errors and `HTTP 502/503/504` failures caused by
+    `HTTPS_PROXY` routing internal mirror domains that aren't listed in `NO_PROXY`.
+  - Print `UV_DEFAULT_INDEX`, `UV_FIND_LINKS`, `UV_OFFLINE`, and `SSL_CERT_FILE` guidance when
+    `pip`/`npm`-style flags (`--index-url`, `--registry`, `--find-links`, `--no-index`, `--cert`)
+    are passed on the CLI.
+
 ## 0.3.0 (2026-11-18)
 
 - Interpreter-free Python targets, multi-entry dispatch, network diagnostics, and provenance (ADR-0053):

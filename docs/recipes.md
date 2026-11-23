@@ -249,10 +249,16 @@ default = true
 or `UV_DEFAULT_INDEX=<url>` in the environment. bundleup passes its environment to uv, so these
 work too:
 
-- **Proxy:** `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY`.
+- **Proxy:** `HTTPS_PROXY`, `HTTP_PROXY`, `NO_PROXY` (include internal registry domains in
+  `NO_PROXY` so requests to a private mirror don't route through an external proxy).
 - **A proxy that inspects TLS** (a company certificate): `UV_NATIVE_TLS=1` uses the system's
   certificate store, or `SSL_CERT_FILE=<bundle.pem>` (`REQUESTS_CA_BUNDLE` and `CURL_CA_BUNDLE`
   are also read for `--format exe`).
+- **Offline wheelhouse (air-gapped builds):** pre-download wheels on a connected machine (`uv export
+  --no-hashes -o requirements.txt && pip download --only-binary=:all: -d wheelhouse -r
+  requirements.txt hatchling setuptools`), then build offline with `UV_FIND_LINKS=wheelhouse
+  UV_NO_INDEX=1 bundleup build` (include `[build-system]` wheels like `hatchling` unless `[tool.uv]
+  package = false` is set).
 - **Credentials:** `~/.netrc`, keyring, or `UV_INDEX_<NAME>_USERNAME` / `_PASSWORD` for a named
   index. A lock never stores them. (Not yet tested against an index that needs a login.)
 - **Python and launcher downloads:** `.pyz` and `.py` builds never download Python interpreters by
@@ -336,7 +342,10 @@ bundleup build --format dir --python 3.9 --python-platform x86_64-manylinux_2_17
 ```
 
 Running `bundleup build` again replaces a directory it wrote before; it refuses to replace
-anything else. Tested on every push: each gauntlet project runs with only that directory on
+anything else. `--format dir` also fits locked-down hosts where OS policy (`AppLocker` / `WDAC` on
+Windows, `fapolicyd` on Linux) blocks loading native `.pyd` / `.so` extensions from user-writable
+cache folders: deploy the directory to an administrator-owned path (`/opt/my_app`, `C:\Program
+Files\MyApp`) instead. Tested on every push: each gauntlet project runs with only that directory on
 `PYTHONPATH`, on Linux, macOS and Windows.
 
 ## CI: fail on anything that won't survive bundling

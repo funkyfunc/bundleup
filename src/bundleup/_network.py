@@ -24,8 +24,10 @@ from pathlib import Path
 from typing import Literal
 from urllib.parse import parse_qsl, urlencode, urlsplit, urlunsplit
 
+from packaging.requirements import InvalidRequirement, Requirement
 from packaging.utils import InvalidWheelFilename, canonicalize_name, parse_wheel_filename
 
+from . import _toml as tomllib
 from ._errors import UvError
 
 _SECRET_QUERY_KEYS = frozenset(
@@ -33,7 +35,7 @@ _SECRET_QUERY_KEYS = frozenset(
 )
 _CRED_URL = re.compile(r"https?://[^\s'\"<>()]+")
 _HTTP_STATUS = re.compile(
-    r"(?:HTTP status client error \((\d{3})\b[^)]*\)\s+for url \(([^)]+)\)"
+    r"(?:HTTP status (?:client|server) error \((\d{3})\b[^)]*\)\s+for url \(([^)]+)\)"
     r"|HTTP Error (\d{3})\b"
     r"|status code (\d{3})\b)",
     re.IGNORECASE,
@@ -311,6 +313,97 @@ def is_tls_error(text: str) -> bool:
     return any(p in low for p in _TLS_PATTERNS)
 
 
+def _missing_no_proxy_hint(host: str, env: Mapping[str, str] | None = None) -> str | None:
+    """When `HTTPS_PROXY` / `HTTP_PROXY` is set and an internal `host` isn't in `NO_PROXY`."""
+    eff_env = os.environ if env is None else env
+    clean_host = host.strip().lower().strip("[]")
+    if not clean_host or clean_host in _PUBLIC_HOSTS:
+        return None
+    proxy_vars = (
+        "HTTPS_PROXY",
+        "https_proxy",
+        "HTTP_PROXY",
+        "http_proxy",
+        "ALL_PROXY",
+        "all_proxy",
+    )
+    if not any(eff_env.get(k, "").strip() for k in proxy_vars):
+        return None
+    raw_no_proxy = eff_env.get("NO_PROXY") or eff_env.get("no_proxy") or ""
+    for item in raw_no_proxy.split(","):
+        pat = item.strip().lower()
+        if not pat:
+            continue
+        if pat == "*":
+            return None
+        pat_host = pat.rsplit(":", 1)[0] if ":" in pat and not pat.startswith("[") else pat
+        suffix = pat_host.lstrip(".")
+        if clean_host == suffix or clean_host.endswith(f".{suffix}"):
+            return None
+    return (
+        f"HTTPS_PROXY is set while {clean_host} isn't in NO_PROXY—if {clean_host} is an internal "
+        f"host, add it to NO_PROXY so requests bypass the external proxy"
+    )
+
+
+def _project_build_backends(workdir: Path | None) -> list[str]:
+    if workdir is None:
+        return []
+    pyproject = workdir / "pyproject.toml"
+    try:
+        if not pyproject.is_file():
+            return []
+        data = tomllib.loads(pyproject.read_text(encoding="utf-8-sig"))
+    except (OSError, UnicodeDecodeError, ValueError):
+        return []
+    build_sys = data.get("build-system")
+    reqs = build_sys.get("requires") if isinstance(build_sys, dict) else None
+    if not isinstance(reqs, list):
+        return []
+    names: list[str] = []
+    for raw in reqs:
+        if not isinstance(raw, str):
+            continue
+        try:
+            pkg = canonicalize_name(Requirement(raw).name)
+        except InvalidRequirement:
+            pkg = re.split(r"[<>=!~;\[\s]", raw, maxsplit=1)[0].strip()
+        if pkg and pkg not in names:
+            names.append(pkg)
+    return names
+
+
+def _build_backend_diagnostic(detail: str, workdir: Path | None) -> tuple[str, str] | None:
+    """Detect isolated PEP 517 `[build-system]` failures in offline / wheelhouse builds."""
+    low = detail.lower()
+    is_build_dep_err = (
+        "resolving build dependencies" in low
+        or "build-system.requires" in low
+        or (
+            "failed to build" in low
+            and (
+                "was not found in the cache" in low
+                or "was not found in the package registry" in low
+                or "offline" in low
+            )
+        )
+    )
+    if not is_build_dep_err:
+        return None
+    backends = _project_build_backends(workdir)
+    shown = (
+        ", ".join(backends) if backends else "build-system packages (e.g. hatchling, setuptools)"
+    )
+    dl_args = " ".join(backends) if backends else "hatchling setuptools wheel"
+    return (
+        f"missing [build-system] package(s) ({shown}) while building the project wheel",
+        "`pip download` and `uv export` only fetch runtime dependencies, not `[build-system]` "
+        f"packages; add them to your wheelhouse (`pip download --only-binary=:all: -d <wheelhouse> "
+        f"{dl_args}`), or set `[tool.uv] package = false` in pyproject.toml for a dependency-only "
+        "bundle",
+    )
+
+
 def diagnose_uv_error(
     error: UvError,
     *,
@@ -318,38 +411,65 @@ def diagnose_uv_error(
     env: Mapping[str, str] | None = None,
     home: Path | None = None,
 ) -> UvError:
-    """Enrich a `UvError` with private registry (401/403), TLS, or `pip.conf` guidance."""
+    """Enrich a `UvError` with registry, proxy, wheelhouse, TLS, or `pip.conf` guidance."""
     raw_detail = error.detail or ""
     if not raw_detail or error.hint:
         return error
     detail = redact_text(raw_detail)
     status, url = _extract_status_and_url(detail)
     pip_hint = _pip_mismatch_hint(workdir, env=env, home=home)
+    host = (urlsplit(url).hostname or url) if url else ""
+    no_proxy_hint = _missing_no_proxy_hint(host, env=env) if host else None
+
+    if status == 407:
+        where = f" while reaching {host}" if host else ""
+        proxy_hint = (
+            "check HTTPS_PROXY / HTTP_PROXY credentials (or use a local proxy forwarder if your "
+            "proxy requires NTLM/Kerberos authentication)"
+        )
+        if no_proxy_hint:
+            proxy_hint = f"{proxy_hint}; {no_proxy_hint}"
+        return UvError(
+            f"proxy authentication required (HTTP 407){where}",
+            hint=proxy_hint,
+            detail=detail,
+        )
+
+    if status in (502, 503, 504) and host and no_proxy_hint:
+        return UvError(
+            f"proxy error (HTTP {status}) reaching {host}",
+            hint=no_proxy_hint,
+            detail=detail,
+        )
 
     if status in (401, 403) and url:
-        pkg, artifact, host = _describe_artifact(url)
+        pkg, artifact, art_host = _describe_artifact(url)
         if status == 403 and artifact and pkg:
             hint = (
                 f"the index advertised this version, but denied downloading its file "
                 f"(access policy or upstream cache permission); constrain `{pkg}` to an "
                 "allowed version and re-lock—do not fall back to a public index unless intended"
             )
-            if host.lower() in _PUBLIC_HOSTS and pip_hint:
+            if art_host.lower() in _PUBLIC_HOSTS and pip_hint:
                 hint = f"{pip_hint}; otherwise {hint}"
+            elif no_proxy_hint:
+                hint = f"{hint}; {no_proxy_hint}"
             return UvError(
-                f"registry denied access (HTTP 403) to {artifact} on {host}",
+                f"registry denied access (HTTP 403) to {artifact} on {art_host}",
                 hint=hint,
                 detail=detail,
             )
         auth_hint = (
             "check index credentials (~/.netrc, keyring, or UV_INDEX_<NAME>_USERNAME / _PASSWORD)"
         )
-        if host.lower() in _PUBLIC_HOSTS and pip_hint:
+        if art_host.lower() in _PUBLIC_HOSTS and pip_hint:
             auth_hint = pip_hint
         elif pip_hint:
             auth_hint = f"{auth_hint}; {pip_hint}"
+        if no_proxy_hint:
+            auth_hint = f"{auth_hint}; {no_proxy_hint}"
         return UvError(
-            f"registry denied access (HTTP {status}) to {host}",
+            f"registry denied access (HTTP {status}) to {art_host}",
             hint=auth_hint,
             detail=detail,
         )
@@ -362,6 +482,13 @@ def diagnose_uv_error(
             hint=hint,
             detail=detail,
         )
+
+    backend_diag = _build_backend_diagnostic(detail, workdir)
+    if backend_diag is not None:
+        b_msg, b_hint = backend_diag
+        if pip_hint:
+            b_hint = f"{b_hint}; {pip_hint}"
+        return UvError(f"{error.message}: {b_msg}", hint=b_hint, detail=detail)
 
     if pip_hint and any(
         w in detail.lower()

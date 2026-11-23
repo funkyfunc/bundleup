@@ -605,13 +605,26 @@ def _mark_used(path: str, mtime: float) -> None:
 PRUNE_AFTER = 30 * 86400.0  # seconds unused before an older copy of this bundle is removed
 
 
+def _fs_path(path: str) -> str:
+    """Extended-length `\\\\?\\` path on Windows when approaching MAX_PATH (260 chars), so
+    unpacking and cleaning deep package trees work even when LongPathsEnabled is off."""
+    if os.name != "nt" or len(path) < 240 or path.startswith("\\\\?\\"):
+        return path
+    full = os.path.abspath(path)
+    if full.startswith("\\\\"):
+        return "\\\\?\\UNC\\" + full[2:]
+    return "\\\\?\\" + full
+
+
 def _rmtree(path: str) -> None:
     import shutil
 
+    target_root = _fs_path(path)
     retried = set()  # type: set[str]
 
     def _onerror(func: "Callable[[str], object]", p: str, _exc: "object") -> None:
-        for target in (os.path.dirname(p), p):
+        fp = _fs_path(p)
+        for target in (os.path.dirname(fp), fp):
             try:
                 if not os.path.islink(target):
                     os.chmod(target, 0o700)
@@ -619,15 +632,15 @@ def _rmtree(path: str) -> None:
                 pass
         try:
             if func in (os.open, os.listdir, getattr(os, "scandir", None)):
-                if p not in retried and os.path.isdir(p) and not os.path.islink(p):
-                    retried.add(p)
-                    shutil.rmtree(p, onerror=_onerror)
+                if fp not in retried and os.path.isdir(fp) and not os.path.islink(fp):
+                    retried.add(fp)
+                    shutil.rmtree(fp, onerror=_onerror)
             elif func in (os.unlink, os.remove, os.rmdir):
-                func(p)
+                func(fp)
         except (OSError, TypeError):
             pass
 
-    shutil.rmtree(path, onerror=_onerror)
+    shutil.rmtree(target_root, onerror=_onerror)
 
 
 def _prune(root: str) -> None:
@@ -868,14 +881,42 @@ def _write(
 ) -> None:
     parent = os.path.dirname(path)
     if parent not in made:
-        os.makedirs(parent, exist_ok=True)
+        os.makedirs(_fs_path(parent), exist_ok=True)
         made.add(parent)
-    with payload.open(member) as src, open(path, "wb") as out:
+    with payload.open(member) as src, open(_fs_path(path), "wb") as out:
         while True:
             chunk = src.read(1 << 20)
             if not chunk:
                 break
             out.write(chunk)
+
+
+def _rename_into_place(tmp: str, final: str) -> None:
+    """Rename `tmp` to `final`, retrying transient Windows access/sharing errors (`WinError 5` /
+    `WinError 32`) held briefly by real-time file scanners on newly unpacked `.pyd`/`.dll` files."""
+    import errno
+    import time
+
+    delays = (0.02, 0.05, 0.1, 0.2, 0.4) if os.name == "nt" else ()
+    src = _fs_path(tmp)
+    dst = _fs_path(final)
+    attempt = 0
+    while True:
+        try:
+            os.rename(src, dst)
+            return
+        except OSError as e:
+            if os.path.isdir(dst):
+                _rmtree(tmp)
+                return
+            winerr = getattr(e, "winerror", None)
+            transient = os.name == "nt" and (
+                e.errno in (errno.EACCES, errno.EPERM) or winerr in (5, 32)
+            )
+            if not transient or attempt >= len(delays):
+                raise
+            time.sleep(delays[attempt])
+            attempt += 1
 
 
 LOCK_TIMEOUT = 120.0  # seconds to wait for another process's unpack before doing our own
@@ -937,24 +978,24 @@ def _extract() -> str:
             problems.append("  %s: mounted noexec, so compiled modules can't load from it" % root)
             continue
         final = os.path.join(root, DIRNAME)
-        tmp = os.path.join(root, ".tmp-%s-%d-%s" % (DIRNAME, os.getpid(), os.urandom(4).hex()))
+        tmp_name = (
+            ".tmp-%d-%s" % (os.getpid(), os.urandom(4).hex())
+            if os.name == "nt"
+            else ".tmp-%s-%d-%s" % (DIRNAME, os.getpid(), os.urandom(4).hex())
+        )
+        tmp = os.path.join(root, tmp_name)
         try:
-            os.makedirs(root, mode=0o700, exist_ok=True)
+            os.makedirs(_fs_path(root), mode=0o700, exist_ok=True)
             if shared and not _private(root):
                 raise OSError("not private to this user")
-            if os.path.isdir(final):
+            if os.path.isdir(_fs_path(final)):
                 return final
             lock = _lock(root)
             try:
-                if os.path.isdir(final):  # another process unpacked it while we waited
+                if os.path.isdir(_fs_path(final)):  # another process unpacked it while we waited
                     return final
                 _unpack(tmp, final)
-                try:
-                    os.rename(tmp, final)
-                except OSError:
-                    if not os.path.isdir(final):
-                        raise
-                    _rmtree(tmp)
+                _rename_into_place(tmp, final)
             finally:
                 if lock is not None:
                     lock.close()  # releases the lock
@@ -962,23 +1003,23 @@ def _extract() -> str:
             return final
         except OSError as e:
             problems.append("  %s: %s" % (root, e.strerror or e))
-            if os.path.isdir(tmp):
+            if os.path.isdir(_fs_path(tmp)):
                 _rmtree(tmp)
         except KeyboardInterrupt:
             # Ctrl-C during the first run: no half-unpacked folder left behind (twelfth review
             # found 170 MB of them), and the exit status Ctrl-C gives, without a traceback.
-            if os.path.isdir(tmp):
+            if os.path.isdir(_fs_path(tmp)):
                 _rmtree(tmp)
             sys.exit(130)
         except _Replaced:
-            if os.path.isdir(tmp):
+            if os.path.isdir(_fs_path(tmp)):
                 _rmtree(tmp)
             _fail(
                 "%s was replaced by another version while it started. Run it again."
                 % os.path.basename(_ARCHIVE)
             )
         except Exception as e:
-            if os.path.isdir(tmp):
+            if os.path.isdir(_fs_path(tmp)):
                 _rmtree(tmp)
             _fail(
                 "%s is damaged and couldn't be unpacked (%s: %s). Get a fresh copy of it."

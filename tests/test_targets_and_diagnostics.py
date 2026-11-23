@@ -506,3 +506,139 @@ def test_provenance_size_breakdown_split_deliverables_and_rebuild_diff(
     assert doc["result"]["deliverables"][0].endswith("prov.pyz")
     assert len(doc["result"]["payloads"]) == 2
     assert all("exclusive_bytes" in p and "unpacked_bytes" in p for p in doc["result"]["payloads"])
+
+
+def test_windows_scanner_rename_retries_and_long_paths(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from bundleup import _loader, _outputs
+
+    monkeypatch.setattr(_loader.os, "name", "nt")
+    monkeypatch.setattr(_outputs.os, "name", "nt")
+    monkeypatch.setattr("time.sleep", lambda _s: None)
+
+    short_path = "C:\\Users\\alice\\AppData\\Local\\bundleup\\Cache\\app"
+    assert _loader._fs_path(short_path) == short_path
+
+    deep_local = "C:\\Users\\alice\\" + ("nested_pkg\\" * 25) + "mod.py"
+    assert len(deep_local) >= 240
+    monkeypatch.setattr(_loader.os.path, "abspath", lambda p: p)
+    assert _loader._fs_path(deep_local) == "\\\\?\\" + deep_local
+
+    deep_unc = "\\\\fileserver\\share\\" + ("nested_pkg\\" * 25) + "mod.py"
+    assert _loader._fs_path(deep_unc) == "\\\\?\\UNC\\" + deep_unc[2:]
+
+    # 1. _loader._rename_into_place retries transient WinError 5 / EACCES locks then succeeds
+    src_dir = tmp_path / "tmp-stage"
+    dst_dir = tmp_path / "final-stage"
+    src_dir.mkdir()
+    (src_dir / "ext.pyd").write_bytes(b"binary")
+
+    real_rename = os.rename
+    calls = {"n": 0}
+
+    def flaky_rename(a: str, b: str) -> None:
+        calls["n"] += 1
+        if calls["n"] <= 3:
+            err = PermissionError(13, "Access is denied")
+            err.winerror = 5 if calls["n"] < 3 else 32  # type: ignore[attr-defined]
+            raise err
+        real_rename(a, b)
+
+    monkeypatch.setattr(_loader.os, "rename", flaky_rename)
+    _loader._rename_into_place(str(src_dir), str(dst_dir))
+    assert calls["n"] == 4
+    assert (dst_dir / "ext.pyd").read_bytes() == b"binary"
+    assert not src_dir.exists()
+
+    # 2. _outputs._replace_with_retry retries transient sharing violations during build writes
+    out_src = tmp_path / "out.tmp"
+    out_dst = tmp_path / "out.pyz"
+    out_src.write_bytes(b"pyz")
+    real_replace = Path.replace
+    rep_calls = {"n": 0}
+
+    def flaky_replace(self: Path, target: Path) -> Path:
+        rep_calls["n"] += 1
+        if rep_calls["n"] <= 2:
+            raise PermissionError(13, "The process cannot access the file")
+        return real_replace(self, target)
+
+    monkeypatch.setattr(Path, "replace", flaky_replace)
+    _outputs._replace_with_retry(out_src, out_dst)
+    assert rep_calls["n"] == 3
+    assert out_dst.read_bytes() == b"pyz"
+
+
+def test_wheelhouse_build_backend_proxy_407_no_proxy_and_index_flag_hints(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    # 1. Offline wheelhouse missing PEP 517 [build-system] package names hatchling + package=false
+    proj = tmp_path / "airgap"
+    proj.mkdir()
+    (proj / "pyproject.toml").write_text(
+        '[project]\nname = "airgap"\nversion = "0.1.0"\n'
+        '[build-system]\nrequires = ["hatchling>=1.20"]\nbuild-backend = "hatchling.build"\n'
+    )
+    backend_err = UvError(
+        "uv pip install failed",
+        detail="  x Failed to build `airgap @ file:///tmp/airgap`\n"
+        "  |-> No solution found when resolving build dependencies:\n"
+        "  `-> Because hatchling was not found in the cache and offline mode is enabled",
+    )
+    diag_be = _network.diagnose_uv_error(backend_err, workdir=proj, env={}, home=tmp_path)
+    assert "missing [build-system] package(s) (hatchling)" in diag_be.message
+    assert diag_be.hint is not None
+    assert "pip download --only-binary=:all: -d <wheelhouse> hatchling" in diag_be.hint
+    assert "package = false" in diag_be.hint
+
+    # 2. Proxy HTTP 407 and HTTP 502 with missing NO_PROXY for an internal host
+    err_407 = UvError(
+        "uv export failed",
+        detail="HTTP status client error (407 Proxy Authentication Required) "
+        "for url (https://registry.internal.local/simple/pkg/)",
+    )
+    diag_407 = _network.diagnose_uv_error(
+        err_407,
+        workdir=tmp_path,
+        env={"HTTPS_PROXY": "http://proxy.internal.local:8080"},
+        home=tmp_path,
+    )
+    assert "HTTP 407" in diag_407.message
+    assert diag_407.hint is not None and "NO_PROXY" in diag_407.hint
+
+    err_502 = UvError(
+        "uv pip install failed",
+        detail="HTTP status server error (502 Bad Gateway) "
+        "for url (https://registry.internal.local/packages/pkg-1.0-py3-none-any.whl)",
+    )
+    diag_502 = _network.diagnose_uv_error(
+        err_502,
+        workdir=tmp_path,
+        env={"HTTPS_PROXY": "http://proxy.internal.local:8080", "NO_PROXY": "localhost,127.0.0.1"},
+        home=tmp_path,
+    )
+    assert "HTTP 502" in diag_502.message
+    assert (
+        diag_502.hint is not None and "registry.internal.local isn't in NO_PROXY" in diag_502.hint
+    )
+
+    diag_502_covered = _network.diagnose_uv_error(
+        err_502,
+        workdir=tmp_path,
+        env={"HTTPS_PROXY": "http://proxy.internal.local:8080", "NO_PROXY": ".internal.local"},
+        home=tmp_path,
+    )
+    assert diag_502_covered.hint is None
+
+    # 3. CLI muscle-memory guidance for --index-url / --registry / --find-links / --cert
+    for flag, expected in (
+        ("--index-url", "UV_DEFAULT_INDEX"),
+        ("--registry", "UV_DEFAULT_INDEX"),
+        ("--find-links", "UV_FIND_LINKS"),
+        ("--cert", "SSL_CERT_FILE"),
+    ):
+        rc = _cli.main(["build", flag, "val"])
+        assert rc == 2
+        err_out = capsys.readouterr().err
+        assert expected in err_out, (flag, err_out)

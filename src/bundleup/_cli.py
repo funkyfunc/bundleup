@@ -892,6 +892,28 @@ _FLAG_ALIASES: dict[str, str] = {
     "--metafile": "bundleup check --json",
 }
 
+_INDEX_GUIDANCE = (
+    "set UV_DEFAULT_INDEX=<url>, or configure [[tool.uv.index]] in pyproject.toml / "
+    "~/.config/uv/uv.toml"
+)
+_FLAG_GUIDANCE: dict[str, str] = {
+    "--index-url": _INDEX_GUIDANCE,
+    "-i": _INDEX_GUIDANCE,
+    "--default-index": _INDEX_GUIDANCE,
+    "--index": _INDEX_GUIDANCE,
+    "--registry": _INDEX_GUIDANCE,
+    "--extra-index-url": (
+        "set UV_EXTRA_INDEX_URL=<url>, or configure [[tool.uv.index]] in pyproject.toml / "
+        "~/.config/uv/uv.toml"
+    ),
+    "--find-links": "set UV_FIND_LINKS=<dir> (and UV_NO_INDEX=1 for an offline wheelhouse)",
+    "-f": "set UV_FIND_LINKS=<dir> (and UV_NO_INDEX=1 for an offline wheelhouse)",
+    "--no-index": "set UV_NO_INDEX=1 (with UV_FIND_LINKS=<dir> for a local wheelhouse)",
+    "--offline": "set UV_OFFLINE=1 to forbid network access during the build",
+    "--cert": "set SSL_CERT_FILE=<ca-bundle.pem> or UV_NATIVE_TLS=1",
+    "--cacert": "set SSL_CERT_FILE=<ca-bundle.pem> or UV_NATIVE_TLS=1",
+}
+
 
 def _usage_error(message: str, argv: list[str]) -> ExitCode:
     all_parsers = parsers()
@@ -964,6 +986,8 @@ def _usage_error(message: str, argv: list[str]) -> ExitCode:
             verb = "try" if alias.startswith("bundleup ") else "did you mean"
             q = "" if alias.startswith("bundleup ") else "?"
             hint = f"{verb} `{alias}`{q} (see `{help_cmd}`)"
+        elif bad in _FLAG_GUIDANCE:
+            hint = _FLAG_GUIDANCE[bad]
         elif bad.startswith("-"):
             sub = all_parsers.get(sub_name) or all_parsers["bundleup"]
             other = [

@@ -161,6 +161,29 @@ def manifest(
     return json.dumps(document, indent=1, sort_keys=True).encode("utf-8") + b"\n"
 
 
+def _replace_with_retry(src: Path, dst: Path) -> None:
+    """Atomically move `src` to `dst`, retrying brief Windows sharing/access locks held by
+    real-time antivirus scanners on newly written archives or `.pyd`/`.dll` directories."""
+    import errno
+    import time
+
+    delays = (0.02, 0.05, 0.1, 0.2, 0.4) if os.name == "nt" else ()
+    attempt = 0
+    while True:
+        try:
+            src.replace(dst)
+            return
+        except OSError as e:
+            winerr = getattr(e, "winerror", None)
+            transient = os.name == "nt" and (
+                e.errno in (errno.EACCES, errno.EPERM) or winerr in (5, 32)
+            )
+            if not transient or attempt >= len(delays):
+                raise
+            time.sleep(delays[attempt])
+            attempt += 1
+
+
 @contextlib.contextmanager
 def atomic_output(output: Path) -> Iterator[Path]:
     """Yield a temporary file next to `output` and atomically replace `output` when the block
@@ -171,7 +194,7 @@ def atomic_output(output: Path) -> Iterator[Path]:
     wrote = False
     try:
         yield tmp
-        tmp.replace(output)
+        _replace_with_retry(tmp, output)
         wrote = True
     finally:
         if tmp.exists():
@@ -261,9 +284,9 @@ def _replace_parts(folder: Path, payloads: dict[str, Path] | None) -> None:
             for member, payload in payloads.items():
                 shutil.copyfile(payload, new / member)
         if folder.exists():
-            folder.rename(old)
+            _replace_with_retry(folder, old)
         if payloads is not None:
-            new.rename(folder)
+            _replace_with_retry(new, folder)
     finally:
         if new.exists():
             _loader._rmtree(str(new))
@@ -693,8 +716,8 @@ def write_dir(p: Prepared, output: Path, *, steps: Steps) -> None:
         shutil.copytree(p.site, tmp, symlinks=True)
         (tmp / DIR_MANIFEST).write_bytes(manifest_json)
         if output.exists():
-            output.rename(old)
-        tmp.rename(output)
+            _replace_with_retry(output, old)
+        _replace_with_retry(tmp, output)
         wrote = True
     finally:
         if tmp.exists():

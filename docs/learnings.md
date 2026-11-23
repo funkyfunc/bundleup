@@ -6,6 +6,24 @@ its evidence. If a lesson changes a decision, also write an ADR (see
 
 Format: `- **YYYY-MM-DD** · <area> · <lesson>. Evidence: <link>.`
 
+- **2026-11-22** · platforms · Cross-checking air-gapped and Windows endpoint failure modes across
+  `uv`, `pnpm`, `pex`, and `PyInstaller` surfaced four subtle runtime/build edges:
+  - On Windows, real-time file scanners hold short-lived handles on newly extracted `.pyd`/`.dll`
+    files, causing `os.rename(tmp, final)` to fail transiently with `PermissionError` (`WinError 5`
+    / `WinError 32`); retrying `os.rename` / `Path.replace` with short backoff on Windows avoids
+    spurious cold-start and build failures.
+  - Default Windows setups keep `LongPathsEnabled = 0` (`MAX_PATH = 260`); keeping Windows `.tmp-`
+    staging names short (`.tmp-<pid>-<hex>`) and prefixing paths `>= 240` chars with `\\?\` during
+    extraction and cleanup prevents `WinError 3` / `WinError 206` on deep package trees.
+  - Offline wheelhouse builds (`UV_FIND_LINKS` + `UV_NO_INDEX=1`) fail during PEP 517 isolated
+    wheel builds when `pip download -r requirements.txt` omitted `[build-system]` packages
+    (`hatchling`, `setuptools`); naming the missing build backend (and `[tool.uv] package = false`
+    for dependency-only bundles) avoids opaque offline resolution errors.
+  - Setting `HTTPS_PROXY` without listing internal mirror domains in `NO_PROXY` routes internal
+    registry requests through the external proxy (HTTP 407 / 502 / 504).
+
+  Evidence: `src/bundleup/_loader.py`, `src/bundleup/_network.py`,
+  `tests/test_targets_and_diagnostics.py`.
 - **2026-11-18** · build · Multi-Python `.pyz` targets, private index diagnostics, and multi-entry
   bundles uncovered five packaging subtleties:
   - Explicit `--python` targets (`--python 3.10-3.14`) should assemble compatible wheels on `.pyz`
