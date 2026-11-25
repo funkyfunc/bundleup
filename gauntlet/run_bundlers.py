@@ -24,7 +24,6 @@ import argparse
 import base64
 import concurrent.futures as cf
 import functools
-import getpass
 import io
 import json
 import os
@@ -152,11 +151,28 @@ def network_blocker() -> str | None:
     """How this machine can run a process without network: "sandbox-exec", "unshare" or None."""
     if sys.platform == "darwin" and shutil.which("sandbox-exec"):
         return "sandbox-exec"
-    if sys.platform.startswith("linux") and shutil.which("unshare") and shutil.which("sudo"):
+    if (
+        sys.platform == "linux"
+        and shutil.which("unshare")
+        and shutil.which("setpriv")
+        and shutil.which("sudo")
+    ):
         # Needs passwordless sudo (CI runners have it). A user-namespace `unshare -rn` would be
         # simpler, but its fake root can write to read-only directories, which defeats the
         # read-only hostile conditions.
-        if sh(["sudo", "-n", "unshare", "--net", "true"], timeout=30).returncode == 0:
+        probe = [
+            "sudo",
+            "-n",
+            "unshare",
+            "--net",
+            "setpriv",
+            f"--reuid={os.getuid()}",
+            f"--regid={os.getgid()}",
+            "--clear-groups",
+            "--",
+            "true",
+        ]
+        if sh(probe, timeout=30).returncode == 0:
             return "unshare"
     return None
 
@@ -166,9 +182,18 @@ def without_network(cmd: list[str], env: dict[str, str]) -> list[str]:
     blocker = network_blocker()
     if blocker == "sandbox-exec":
         return ["sandbox-exec", "-p", NO_NETWORK, *cmd]
-    if blocker == "unshare":
+    if blocker == "unshare" and sys.platform != "win32":
         # sudo resets the environment, so pass it explicitly to the dropped-back-to-us command.
-        user = ["sudo", "-n", "-u", getpass.getuser(), "--"]
+        # Drop privileges with setpriv rather than a second sudo: inside `--net` there is no DNS,
+        # and sudo writes "unable to resolve host" to stderr on runners whose hostname isn't in
+        # /etc/hosts (issue #228).
+        user = [
+            "setpriv",
+            f"--reuid={os.getuid()}",
+            f"--regid={os.getgid()}",
+            "--clear-groups",
+            "--",
+        ]
         return ["sudo", "-n", "unshare", "--net", "--", *user, "env", "-i",
                 *(f"{k}={v}" for k, v in env.items()), *cmd]  # fmt: skip
     return cmd
